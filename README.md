@@ -12,15 +12,10 @@ scope agreed on for this rewrite.
 
 ## Status
 
-v1 is implemented and unit-tested, but **not yet exercised against a real
-Discord export** — there's no sample HTML/media fixture in this repo, so the
-next step is a real end-to-end run with your own exported data.
+v1 is implemented, unit-tested, and has now been exercised end-to-end
+against a real Discord export (OCR pass, review screen, finalize).
 
 What's in scope for v1 (by design, agreed with the project owner):
-- Just the core transcription flow — no Google Doc integration, no
-  settings UI, no multi-project support, no driving the
-  `DiscordChatExporter.Cli.exe` export step (that stays a separate manual
-  step before this tool runs).
 - Tesseract is the only OCR backend, but it's called through a small
   swappable interface (`app/ocr.py`) so an EasyOCR backend could be added
   later without touching calling code.
@@ -39,10 +34,10 @@ What's in scope for v1 (by design, agreed with the project owner):
    starts checked and can always be toggled - if it's checked but no
    matching cache exists for the selected image folder, OCR just runs
    normally. An "Approved users" multi-line box lists which Discord users'
-   messages get kept, one per line in the form `123456789 - Alice` - only
-   the leading digits (the actual Discord user ID) are used for filtering,
-   the rest is just a human-readable label. It's pre-filled with whatever
-   was used last run; individual entries you've typed before are also
+   messages get kept, one per line in the form `123456789012345678 - Alice` 
+   - only the leading digits (the actual Discord user ID) are used for 
+   filtering, the rest is just a human-readable label. It's pre-filled with 
+   whatever was used last run; individual entries you've typed before are also
    remembered and can be re-added via the "Known users" dropdown next to it
    without retyping the ID. A "Transcribe messages from all users" checkbox
    bypasses the filter entirely (and greys out the users box, since it's
@@ -56,24 +51,40 @@ What's in scope for v1 (by design, agreed with the project owner):
    user, if "all users" was checked).
 4. **Review screen** — an infinite-scroll window listing every approved
    message in order, mirroring the original chatlog. Text-only messages are
-   shown for context; messages with an attached image show that image
-   (large — roughly two-thirds of the window's width) next to a single
-   freely-editable text box pre-filled with its OCR text (all paragraphs
-   joined together) — copy, paste, and arbitrary edits are all allowed,
-   nothing is parsed or restricted. Only a bounded window of rows (12 by
-   default) is ever built as actual widgets at once; scrolling near either
-   edge of that window pages the next/previous half-window in and tears the
-   opposite half down, so scrolling stays responsive no matter how long the
-   transcript is. Each page transition pins a surviving row's on-screen
-   position and compensates the scroll offset for whatever was added/removed
-   above it ("scroll anchoring") — without that compensation, paging in more
-   rows above the viewport made the next page-load trigger *more* likely
-   rather than less, causing a runaway cascade of transitions back toward
-   the start of the transcript. Edits survive a row being paged out and back
-   in, and the focused text box keeps focus across a transition if it's
-   still in the new window. Images within the materialized window are
-   additionally decoded/loaded lazily as you scroll near them (and unloaded
-   again once you scroll away). Nothing is written to disk while reviewing.
+   shown for context; messages with an attached image show that image next
+   to a single freely-editable text box pre-filled with its OCR text (all
+   paragraphs joined together) — copy, paste, and arbitrary edits are all
+   allowed, nothing is parsed or restricted. Only a bounded window of rows
+   (12 by default) is ever built as actual widgets at once; scrolling near
+   either edge of that window pages the next/previous half-window in and
+   tears the opposite half down, so scrolling stays responsive no matter how
+   long the transcript is. Each page transition pins a surviving row's
+   on-screen position and compensates the scroll offset for whatever was
+   added/removed above it ("scroll anchoring") — without that compensation,
+   paging in more rows above the viewport made the next page-load trigger
+   *more* likely rather than less, causing a runaway cascade of transitions
+   back toward the start of the transcript. Edits survive a row being paged
+   out and back in, and the focused text box keeps focus across a transition
+   if it's still in the new window. Images within the materialized window
+   are additionally decoded/loaded lazily as you scroll near them (and
+   unloaded again once you scroll away). Nothing is written to disk while
+   reviewing.
+
+   Every image column is the same fixed width (so the image/text-box pairs
+   line up into two neat columns), but each image's *height* is its own
+   aspect-preserving fit within that width — a wide (landscape) image, the
+   common case, ends up much shorter than a tall (portrait) one, rather than
+   every image being letterboxed inside a single fixed box-shaped slot. Each
+   editable text box is auto-sized to match: tall enough for its own current
+   text (plus a little headroom for more typing) and never shorter than its
+   paired image, but capped at roughly 70% of the screen's height even for a
+   very long message — past that cap it gets its own internal scrollbar
+   (appearing/disappearing automatically based on whether the text actually
+   overflows) instead of growing indefinitely. Scrolling the mouse wheel
+   while hovering over a text box that has its own scrollbar scrolls *that
+   box* until it hits the end of its content, then further scrolling in the
+   same direction falls through to scrolling the whole review window, same
+   as if the box weren't there.
 
    Keyboard shortcuts on the review screen: **Ctrl+Backspace** deletes the
    previous word; **Tab**/**Shift+Tab** move between text boxes in
@@ -130,6 +141,52 @@ gui_transcription/
   original_transcription_notes.md   # analysis + decisions behind this rewrite
 ```
 
+## Review screen internals
+
+The review screen (`app/gui/review_view.py`) is the most architecturally
+involved part of this app. Its module docstring is the canonical
+explanation and worth reading in full before changing it; the summary here
+is just enough to orient a new contributor:
+
+- **Row virtualization.** Only a small window of rows (around the visible
+  viewport) is ever built as real Tk widgets - `ReviewFrame._reconcile`
+  recomputes that window from scratch on every scroll tick as a pure
+  function of scroll position and each row's recorded height
+  (`self._row_heights`), and reconciling is idempotent (calling it twice
+  with no scroll movement is a no-op). That idempotency is deliberate - an
+  earlier, stateful "step the window forward/backward" design could fall
+  into a self-sustaining oscillation loop; see the module docstring for the
+  full story. Pure layout math lives in `app/gui/virtualization.py` so it's
+  testable without a display.
+- **Per-row image sizing.** Every row's image column is the same fixed
+  width (`THUMBNAIL_SIZE[0]` in `app/gui/image_loading.py`), but each
+  image's height is its own aspect-preserving fit within `THUMBNAIL_SIZE`
+  (`fitted_image_size`), not the full bounding box - otherwise a landscape
+  image (the common case) gets letterboxed inside a box-shaped slot. This
+  only reads the image file's header (cheap), separately from the actual
+  lazy pixel decode in `ImageLoader._load_image` once a row scrolls near
+  the viewport.
+- **Per-row text box sizing.** Each editable text box lives in its own
+  fixed-height container (`pack_propagate(False)`, same trick as the image
+  placeholder) so it doesn't stretch to fill the row via Tk's `fill="both"`
+  - `ReviewFrame._size_text_container` sizes it to the text's current
+  wrapped line count (via Tk's own `Text.count(..., "displaylines")`, not
+  an estimate) plus `TEXT_BOX_LEEWAY_LINES` of headroom, clamped between the
+  paired image's actual height (no benefit to a box shorter than its image)
+  and `TEXT_BOX_MAX_HEIGHT_FRACTION` of the screen. A box at that upper cap
+  gets an internal scrollbar that shows/hides itself automatically
+  (`_set_text_scrollbar`, driven by the box's own `yscrollcommand`) based on
+  whether its content actually overflows. `_on_text_modified` re-runs the
+  sizing live as you type, so a box grows to keep pace until it hits the
+  cap.
+- **Per-row scroll redirection.** The mouse wheel is bound globally
+  (`canvas.bind_all("<MouseWheel>", ...)`), but the bound callback still
+  receives the specific widget under the cursor as `event.widget` - so
+  hovering a text box that has its own scrollbar scrolls that box first
+  (`_scroll_text_widget`), only falling through to scrolling the whole
+  review window once the box is scrolled as far as it can go in that
+  direction (or has nothing to scroll at all).
+
 ## Running it
 
 Install it as an editable package (once), which registers the `app` package
@@ -181,14 +238,14 @@ counts), review-screen build/finalize events, and caught exceptions.
 
 ## Known gaps / next steps
 
-- No real-data end-to-end test yet (see Status above).
 - Other `config.py` constants (Tesseract path, skip-types, etc.) are still
   not editable from the UI (deferred, not an immediate priority) - only the
   approved-users list has been moved out of config.py so far.
-- The review screen is a single long scroll of stacked rows (image +
-  editable text box per message) rather than two independently-scrolling
-  columns; this was the simpler, more robust layout to keep image and text
-  vertically locked together while scrolling.
 - Paging back up to revisit an earlier page re-decodes its images from disk
   (no cross-page image cache); only the edited text itself is cached across
   a page being torn down and rebuilt.
+- A text box that's actively growing while you type (see "Review screen
+  internals" below) only updates its own row's recorded height immediately
+  - neighboring rows' positions are only corrected on the next scroll-driven
+  reconcile, not instantly, though this has no visible effect since the row
+  being typed in doesn't move on screen either way.

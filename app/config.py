@@ -19,10 +19,7 @@ TESSERACT_CMD = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 # never image attachments worth OCR'ing.
 SKIP_TYPES: tuple[str, ...] = (".svg", ".woff2", ".js", ".css")
 
-DEFAULT_APPROVED_USERS: tuple[str, ...] = (
-    "130636614807322624",
-    "567170431413387265",
-)
+DEFAULT_APPROVED_USERS: tuple[str, ...] = tuple()
 
 BREAK_MARKER = "[BREAK]"
 

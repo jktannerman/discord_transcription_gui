@@ -112,6 +112,14 @@ logger = logging_config.get_logger(__name__)
 # a little more doesn't immediately demand a resize/scrollbar.
 TEXT_BOX_LEEWAY_LINES = 3
 
+# A maxed-out text box is capped at this fraction of the canvas viewport
+# (see ReviewFrame._max_text_box_height_px), not the full viewport - a box
+# that exactly fills the viewport leaves no margin, so tabbing to it rarely
+# lands with it comfortably fully on-screen (Tk's "scroll just enough to
+# reveal the target" positioning doesn't line it up pixel-perfectly with the
+# viewport edge). Capping below 1.0 leaves room to spare instead.
+TEXT_BOX_MAX_HEIGHT_FRACTION = 0.7
+
 # How many extra viewport-heights worth of rows to keep loaded above and
 # below the visible area, so scrolling a little doesn't trigger a reload
 # and neighboring messages are visible for spacing context. Used both for
@@ -401,15 +409,15 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         return row
 
     def _max_text_box_height_px(self) -> int:
-        """Cap an editable text box's height at roughly one screen's worth
-        of pixels - the canvas viewport, falling back to the full screen if
-        it hasn't been laid out yet - so a very long message scrolls inside
+        """Cap an editable text box's height at TEXT_BOX_MAX_HEIGHT_FRACTION
+        of the canvas viewport - falling back to the full screen if it
+        hasn't been laid out yet - so a very long message scrolls inside
         its box (see _set_text_scrollbar) instead of growing taller than
-        what's actually visible at once."""
+        what comfortably fits on screen with some margin to spare."""
         viewport = self._canvas.winfo_height()
         if viewport <= 1:
             viewport = self.winfo_screenheight()
-        return viewport
+        return int(viewport * TEXT_BOX_MAX_HEIGHT_FRACTION)
 
     def _size_text_container(
         self, container: tk.Widget, text_widget: tk.Text, image_floor_px: int
