@@ -350,7 +350,7 @@ counts), review-screen build/finalize events, and caught exceptions.
   full history - a crash can still lose up to one autosave interval's
   worth of review edits (5 seconds, `AUTOSAVE_INTERVAL_MS`) if it happens
   between two autosaves, since the .bak only protects the *previous*
-  successful write, not the in-memory edits since then.
+  successful write, not the in-memory edits since then (low priority).
 - There's no UI for resetting a message's editable copy back to its
   original OCR/message text once edited (deferred, not an immediate
   priority, per the original feature request).
