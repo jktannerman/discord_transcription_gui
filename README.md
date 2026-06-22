@@ -128,12 +128,25 @@ gui_transcription/
 
 ## Running it
 
+Install it as an editable package (once), which registers the `app` package
+on Python's path globally and adds a console-script entry point:
+
 ```powershell
-py -3.13 -m pip install -r gui_transcription\requirements.txt
-py -3.13 -m gui_transcription.app.main
+py -3.13 -m pip install -e gui_transcription
 ```
 
-(Run from the directory containing `gui_transcription/`, i.e. the repo root.)
+Then, from any directory:
+
+```powershell
+discord-transcription-gui
+```
+
+Without installing, it can also be run directly from inside `gui_transcription/`:
+
+```powershell
+py -3.13 -m pip install -r requirements.txt
+py -3.13 -m app.main
+```
 
 ## Testing
 

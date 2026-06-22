@@ -14,7 +14,10 @@ from typing import Any
 
 from . import config
 
-LOGGER_NAME = "gui_transcription"
+# "app" is the package's one registered name (see pyproject.toml) - every
+# module's __name__ is "app.something", so this is always their common
+# ancestor logger.
+LOGGER_NAME = "app"
 
 _configured = False
 
@@ -39,8 +42,8 @@ class JsonFormatter(logging.Formatter):
 
 
 def setup_logging(level: int = logging.INFO) -> None:
-    """Configure the 'gui_transcription' logger tree. Safe to call more than
-    once - only the first call has any effect."""
+    """Configure the LOGGER_NAME logger tree. Safe to call more than once -
+    only the first call has any effect."""
     global _configured
     if _configured:
         return
@@ -66,13 +69,25 @@ def setup_logging(level: int = logging.INFO) -> None:
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Return a logger for a module under the 'gui_transcription' package.
+    """Return a logger for a module under the 'app' package.
 
     Pass the module's ``__name__`` - since every module already lives under
-    the ``gui_transcription`` package, its dotted name is already a child of
-    the ``LOGGER_NAME`` logger configured in setup_logging(), so no extra
+    the ``app`` package, its dotted name is already a child of the
+    ``LOGGER_NAME`` logger configured in setup_logging(), so no extra
     prefixing is needed (and would double it up).
+
+    The one exception is main.py: if it's run directly with
+    `python -m app.main` (rather than via the installed console-script entry
+    point, which imports it as a normal module), Python sets *that* one
+    module's ``__name__`` to ``"__main__"`` rather than ``"app.main"`` - a
+    logger built from it would have no relation to the 'app' logger tree
+    that setup_logging() attaches handlers to, and its records would
+    silently vanish into the unconfigured root logger instead of reaching
+    the file/console handlers. Fall back to LOGGER_NAME so it's still a
+    child of the configured logger.
     """
+    if name == "__main__":
+        return logging.getLogger(LOGGER_NAME)
     return logging.getLogger(name)
 
 

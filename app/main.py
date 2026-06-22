@@ -1,7 +1,11 @@
 """Entry point for the GUI transcription tool.
 
-Run with: py -3.13 -m gui_transcription.app.main
-(from the directory containing gui_transcription/).
+Run with the installed console script (works from any directory, since
+`pip install -e .` puts the `app` package on sys.path globally):
+    discord-transcription-gui
+
+Or, from inside gui_transcription/ without installing:
+    py -3.13 -m app.main
 """
 
 import logging
