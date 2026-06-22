@@ -6,7 +6,7 @@ the same way.
 """
 
 import tkinter as tk
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from PIL import Image, ImageTk
 
@@ -18,6 +18,38 @@ logger = logging_config.get_logger(__name__)
 # review window, per the project owner's request that images be large
 # enough to actually read while transcribing.
 THUMBNAIL_SIZE = (760, 950)
+
+
+def fitted_image_size(image_path, bounding_box: Tuple[int, int] = THUMBNAIL_SIZE) -> Tuple[int, int]:
+    """The on-screen size review rows actually display image_path at -
+    same fit-within-bounding_box-preserving-aspect-ratio logic as
+    Image.thumbnail() (used for the real photo in _load_image below), but
+    reading only the file's header (Image.open() doesn't decode pixel
+    data) so it's cheap enough to call for every row up front, not just
+    once an image is scrolled near.
+
+    Used to size a row's image placeholder/floor to the image's real
+    displayed height instead of the full bounding box - most images here
+    are landscape (wider than tall), so sizing the placeholder to the full
+    box would letterbox them, leaving large empty bands above and below
+    the actual photo."""
+    try:
+        with Image.open(image_path) as img:
+            original_size = img.size
+    except Exception:
+        logger.warning(
+            "could not read image size", extra=logging_config.extra(image_path=str(image_path))
+        )
+        return bounding_box
+
+    ow, oh = original_size
+    bw, bh = bounding_box
+    if ow <= 0 or oh <= 0:
+        return bounding_box
+    if ow <= bw and oh <= bh:
+        return ow, oh  # thumbnail() doesn't upscale past the original size
+    ratio = min(bw / ow, bh / oh)
+    return max(1, round(ow * ratio)), max(1, round(oh * ratio))
 
 
 class ImageSlot:

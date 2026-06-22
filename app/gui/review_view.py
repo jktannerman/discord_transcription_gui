@@ -101,7 +101,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from .. import logging_config
 from ..pipeline import ReviewItem
 from . import theme
-from .image_loading import THUMBNAIL_SIZE, ImageLoader
+from .image_loading import THUMBNAIL_SIZE, ImageLoader, fitted_image_size
 from .keyboard_nav import KeyboardNavMixin
 from .virtualization import compute_visible_range, estimate_row_height
 
@@ -148,6 +148,10 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         self._row_frames: Dict[int, tk.Widget] = {}
         self._text_widgets: Dict[int, tk.Text] = {}
         self._text_containers: Dict[int, tk.Widget] = {}
+        # Per-row text-box height floor (px) - the paired image's actual
+        # on-screen height (see fitted_image_size), not THUMBNAIL_SIZE's
+        # full bounding box. Only set for rows with an image.
+        self._image_floor_px: Dict[int, int] = {}
         self._images = ImageLoader()
         # Real per-line pixel height for the text box font, used to size an
         # editable text box's container in px to fit its content - see
@@ -212,7 +216,16 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         canvas.bind("<Configure>", _on_canvas_configure)
 
         def _on_mousewheel(e):
-            self._log_event("input_mousewheel", delta=e.delta)
+            self._log_event("input_mousewheel", delta=e.delta, widget=str(e.widget))
+            # e.widget is whichever widget the cursor is actually over when
+            # the wheel event fires (bind_all dispatches using the real
+            # target, not just focus) - so hovering a scrollable text box
+            # scrolls *it* first, and only once it's scrolled as far as it
+            # can go in that direction does the wheel fall through to
+            # scrolling the whole review window, same as if the box weren't
+            # there at all.
+            if isinstance(e.widget, tk.Text) and self._scroll_text_widget(e.widget, e.delta):
+                return
             canvas.yview_scroll(int(-e.delta / 120), "units")
             self._schedule_reconcile()
 
@@ -236,6 +249,22 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         self.bind("<Destroy>", _on_destroy)
 
         self.after_idle(self._reconcile)
+
+    def _scroll_text_widget(self, text_widget: tk.Text, delta: int) -> bool:
+        """Try to scroll an editable text box by one wheel notch in the
+        direction of `delta`. Returns False (does nothing) if the box is
+        already at its limit in that direction - e.g. a box with no
+        scrollbar (content fits already) is always "at its limit" in both
+        directions, so this is a no-op for it and the wheel event falls
+        through to scrolling the whole review window, exactly as before
+        this box-local-scroll feature existed."""
+        first, last = text_widget.yview()
+        scrolling_up = delta > 0
+        at_limit = first <= 0.0 if scrolling_up else last >= 1.0
+        if at_limit:
+            return False
+        text_widget.yview_scroll(int(-delta / 120), "units")
+        return True
 
     def _log_event(self, event: str, **fields) -> None:
         """Log one step of scroll/page/focus handling at DEBUG, stamped with
@@ -282,9 +311,17 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         left = ttk.Frame(row)
         left.pack(side="left", padx=6, fill="y")
 
-        # Fixed-size placeholder so loading/unloading the image doesn't
-        # change the row's layout (which would jump the scroll position).
-        container = ttk.Frame(left, width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1])
+        # Width is the global THUMBNAIL_SIZE[0] constant, same for every
+        # row, so images/text boxes still line up into two neat columns -
+        # only height is sized per image (to its actual aspect-preserving
+        # fit height, not the full bounding box) since most images here are
+        # landscape, and a box-shaped placeholder would letterbox them with
+        # large empty bands above/below the real photo. Fixed size (rather
+        # than left to the real loaded photo's size) so loading/unloading
+        # the image on scroll doesn't change the row's layout (which would
+        # jump the scroll position).
+        _, image_h = fitted_image_size(item.image_path)
+        container = ttk.Frame(left, width=THUMBNAIL_SIZE[0], height=image_h)
         container.pack_propagate(False)
         container.pack()
         image_label = ttk.Label(container, text="(scroll to load image)", anchor="center")
@@ -345,7 +382,8 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         text_widget.edit_reset()  # don't let the initial insert be undoable
         text_widget.edit_modified(False)  # don't count that insert as a user edit
 
-        self._size_text_container(text_container, text_widget)
+        self._image_floor_px[index] = image_h
+        self._size_text_container(text_container, text_widget, image_h)
 
         text_widget.bind("<Control-BackSpace>", self._delete_word_backward)
         text_widget.bind("<Tab>", self._on_tab)
@@ -373,19 +411,36 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
             viewport = self.winfo_screenheight()
         return viewport
 
-    def _size_text_container(self, container: tk.Widget, text_widget: tk.Text) -> int:
+    def _size_text_container(
+        self, container: tk.Widget, text_widget: tk.Text, image_floor_px: int
+    ) -> int:
         """Size an editable text box's container (px) to fit its current
         content plus TEXT_BOX_LEEWAY_LINES of headroom, never shrinking
-        below the paired image's height (there's no benefit to a text box
-        shorter than its image) and never growing past one screen's worth
-        of height (_max_text_box_height_px) - a longer message gets an
-        internal scrollbar instead. Returns the height applied."""
+        below image_floor_px - the paired image's actual on-screen height
+        (see fitted_image_size; there's no benefit to a text box shorter
+        than its image, but the image itself is often much shorter than
+        THUMBNAIL_SIZE's full bounding-box height for a landscape photo) -
+        and never growing past one screen's worth of height
+        (_max_text_box_height_px) - a longer message gets an internal
+        scrollbar instead. Returns the height applied."""
         container.update_idletasks()  # finalize the widget's real width before measuring wrap
         counted = text_widget.count("1.0", "end-1c", "displaylines")
         display_lines = counted[0] if counted else 1
         content_px = (display_lines + TEXT_BOX_LEEWAY_LINES) * self._text_line_height_px
-        target_px = max(THUMBNAIL_SIZE[1], min(content_px, self._max_text_box_height_px()))
+        max_px = self._max_text_box_height_px()
+        target_px = max(image_floor_px, min(content_px, max_px))
         container.configure(height=target_px)
+        logger.debug(
+            "size_text_container",
+            extra=logging_config.extra(
+                container_width=container.winfo_width(),
+                display_lines=display_lines,
+                content_px=content_px,
+                image_floor_px=image_floor_px,
+                max_px=max_px,
+                target_px=target_px,
+            ),
+        )
         return target_px
 
     def _set_text_scrollbar(
@@ -420,7 +475,7 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         rows, just triggered immediately for the row being edited rather
         than waiting for the next scroll-driven _reconcile."""
         text_widget.edit_modified(False)
-        self._size_text_container(container, text_widget)
+        self._size_text_container(container, text_widget, self._image_floor_px[index])
         row = self._row_frames.get(index)
         if row is None:
             return
@@ -443,6 +498,7 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         if text_widget is not None:
             self._saved_texts[index] = text_widget.get("1.0", "end-1c")
         self._text_containers.pop(index, None)
+        self._image_floor_px.pop(index, None)
         self._images.unregister(index)
         row.destroy()
 
