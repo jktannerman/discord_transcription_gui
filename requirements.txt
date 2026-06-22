@@ -1,0 +1,5 @@
+pytesseract
+pyperclip
+beautifulsoup4
+lxml
+Pillow
