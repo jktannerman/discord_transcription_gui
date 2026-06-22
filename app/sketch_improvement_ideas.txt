@@ -1,0 +1,12 @@
+fix date stuff
+keyboard shortcuts
+image size issues?
+item mode
+combat mode
+map mode
+personalised clipboard?
+undo/redo
+cache the common folder/output combinations
+change user tokens
+make it fullscreen bydefault
+dark mode

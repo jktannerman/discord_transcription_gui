@@ -40,16 +40,21 @@ What's in scope for v1 (by design, agreed with the project owner):
    (e.g. to redo just the correction pass) doesn't repeat OCR work.
 3. **HTML parsing** — parses the export, keeping only messages after the
    start date from the approved author IDs (the GM + dice-roller bot).
-4. **Review screen** — one long, scrollable window listing every approved
+4. **Review screen** — an infinite-scroll window listing every approved
    message in order, mirroring the original chatlog. Text-only messages are
    shown for context; messages with an attached image show that image
    (large — roughly two-thirds of the window's width) next to a single
    freely-editable text box pre-filled with its OCR text (all paragraphs
    joined together) — copy, paste, and arbitrary edits are all allowed,
-   nothing is parsed or restricted. Images are decoded/loaded lazily as you
-   scroll near them (and unloaded again once you scroll away), so scrolling
-   stays responsive regardless of how many messages there are. Nothing is
-   written to disk while reviewing.
+   nothing is parsed or restricted. Only a bounded window of rows (12 by
+   default) is ever built as actual widgets at once; scrolling near either
+   edge of that window pages the next/previous half-window in and tears the
+   opposite half down, so scrolling stays responsive no matter how long the
+   transcript is. Edits survive a row being paged out and back in, and the
+   focused text box keeps focus across a transition if it's still in the new
+   window. Images within the materialized window are additionally
+   decoded/loaded lazily as you scroll near them (and unloaded again once
+   you scroll away). Nothing is written to disk while reviewing.
 5. **Finalize** — a single button at the bottom of the review screen writes
    every message's final lines (edited text if you changed it, original OCR
    text otherwise) to the output file in one pass, then runs the original
@@ -121,3 +126,6 @@ counts), review-screen build/finalize events, and caught exceptions.
   editable text box per message) rather than two independently-scrolling
   columns; this was the simpler, more robust layout to keep image and text
   vertically locked together while scrolling.
+- Paging back up to revisit an earlier page re-decodes its images from disk
+  (no cross-page image cache); only the edited text itself is cached across
+  a page being torn down and rebuilt.
