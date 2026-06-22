@@ -25,6 +25,16 @@ _TEXT_ROW_LINE_HEIGHT = 18
 _TEXT_ROW_PADDING = 24
 
 
+def wrapped_line_count(text: str, chars_per_line: int) -> int:
+    """Number of soft-wrapped display lines `text` would occupy at
+    `chars_per_line` - shared by estimate_row_height below and the
+    editable text box's auto-sizing in review_view.py."""
+    line_count = 0
+    for line in text.splitlines() or [""]:
+        line_count += len(textwrap.wrap(line, chars_per_line)) or 1
+    return line_count
+
+
 def estimate_row_height(item: ReviewItem) -> int:
     """Cheap, approximate height (px) for an item's row before it's ever
     been built as real widgets - good enough for scrollbar proportion and
@@ -35,9 +45,7 @@ def estimate_row_height(item: ReviewItem) -> int:
         return _ESTIMATED_IMAGE_ROW_HEIGHT
 
     text = "\n".join(item.entry.text_lines).strip() or "(no text)"
-    line_count = 0
-    for line in text.splitlines():
-        line_count += len(textwrap.wrap(line, _TEXT_ROW_CHARS_PER_LINE)) or 1
+    line_count = wrapped_line_count(text, _TEXT_ROW_CHARS_PER_LINE)
     return line_count * _TEXT_ROW_LINE_HEIGHT + _TEXT_ROW_PADDING
 
 
