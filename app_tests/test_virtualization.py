@@ -9,22 +9,42 @@ def test_estimate_row_height_image_item_uses_fixed_estimate():
     item = ReviewItem(
         entry=MessageEntry(text_lines=[], image_name="card.png"),
         image_path=Path("card.png"),
-        initial_text="",
+        initial_message_text=None,
+        initial_ocr_text="",
     )
     assert estimate_row_height(item) > 0
 
 
 def test_estimate_row_height_text_only_scales_with_line_count():
-    short = ReviewItem(entry=MessageEntry(text_lines=["hi"], image_name=None), image_path=None, initial_text=None)
+    short = ReviewItem(
+        entry=MessageEntry(text_lines=["hi"], image_name=None),
+        image_path=None, initial_message_text="hi", initial_ocr_text=None,
+    )
     long = ReviewItem(
-        entry=MessageEntry(text_lines=["hi " * 200], image_name=None), image_path=None, initial_text=None
+        entry=MessageEntry(text_lines=["hi " * 200], image_name=None),
+        image_path=None, initial_message_text="hi " * 200, initial_ocr_text=None,
     )
     assert estimate_row_height(long) > estimate_row_height(short)
 
 
 def test_estimate_row_height_empty_text_is_still_positive():
-    item = ReviewItem(entry=MessageEntry(text_lines=[], image_name=None), image_path=None, initial_text=None)
+    item = ReviewItem(
+        entry=MessageEntry(text_lines=[], image_name=None),
+        image_path=None, initial_message_text="", initial_ocr_text=None,
+    )
     assert estimate_row_height(item) > 0
+
+
+def test_estimate_row_height_image_with_caption_taller_than_image_alone():
+    image_only = ReviewItem(
+        entry=MessageEntry(text_lines=[], image_name="card.png"),
+        image_path=Path("card.png"), initial_message_text=None, initial_ocr_text="",
+    )
+    image_with_caption = ReviewItem(
+        entry=MessageEntry(text_lines=["a caption"], image_name="card.png"),
+        image_path=Path("card.png"), initial_message_text="a caption", initial_ocr_text="",
+    )
+    assert estimate_row_height(image_with_caption) > estimate_row_height(image_only)
 
 
 def test_compute_visible_range_empty_list_returns_empty_range():

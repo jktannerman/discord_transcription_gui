@@ -59,14 +59,16 @@ What's in scope for v1 (by design, agreed with the project owner):
    user, if "all users" was checked).
 4. **Review screen** — an infinite-scroll window listing every approved
    message in order, mirroring the original chatlog. Every row has the same
-   two-column shape: an immutable left column (the message's image, for an
-   image message, or its original text, for a text-only one) paired with
-   one freely-editable text box on the right — pre-filled with the image's
-   OCR text (all paragraphs joined together) for an image message, or a
-   copy of the message's own text for a text-only one, so its spacing can
-   be adjusted without touching the immutable original beside it. Copy,
-   paste, and arbitrary edits are all allowed in every text box, nothing is
-   parsed or restricted. Only a bounded window of rows (12 by default) is
+   two-column shape, both columns stacked text-above-image when a message
+   has both (matching Discord's own layout): an immutable left column (the
+   message's own original text, its image, or both) paired with the
+   matching editable box(es) on the right — a copy of the message's own
+   text whenever it has any, and/or a box pre-filled with its image's OCR
+   text (all paragraphs joined together) whenever it has an image,
+   independently editable, so a message with both a caption and an image
+   gets two separate boxes rather than one covering both. Copy, paste, and
+   arbitrary edits are all allowed in every text box, nothing is parsed or
+   restricted. Only a bounded window of rows (12 by default) is
    ever built as actual widgets at once; scrolling near either edge of that
    window pages the next/previous half-window in and tears the opposite
    half down, so scrolling stays responsive no matter how long the
@@ -85,29 +87,37 @@ What's in scope for v1 (by design, agreed with the project owner):
    mid-review leaves a session that can be resumed from the setup screen's
    prompt next launch (see "Setup screen" above).
 
-   Every image column is the same fixed width (so the image/text-box pairs
-   line up into two neat columns), but each image's *height* is its own
-   aspect-preserving fit within that width — a wide (landscape) image, the
-   common case, ends up much shorter than a tall (portrait) one, rather than
-   every image being letterboxed inside a single fixed box-shaped slot. Each
-   editable text box is auto-sized to match: tall enough for its own current
-   text (plus a little headroom for more typing) and never shorter than its
-   paired image, but capped at roughly 70% of the screen's height even for a
-   very long message — past that cap it gets its own internal scrollbar
-   (appearing/disappearing automatically based on whether the text actually
-   overflows) instead of growing indefinitely. Scrolling the mouse wheel
-   while hovering over a text box that has its own scrollbar scrolls *that
-   box* until it hits the end of its content, then further scrolling in the
-   same direction falls through to scrolling the whole review window, same
-   as if the box weren't there.
+   Every left column is the same fixed width (so the image/label and
+   text-box columns line up neatly across every row), but each image's
+   *height* is its own aspect-preserving fit within that width — a wide
+   (landscape) image, the common case, ends up much shorter than a tall
+   (portrait) one, rather than every image being letterboxed inside a
+   single fixed box-shaped slot. The immutable original-text label uses
+   the same font/size as the editable boxes (it used to be smaller, before
+   every message got an editable copy of its own text) — its background is
+   left at the plain default, matching the image column's own background,
+   so it still reads as visually distinct from the editable copy beside
+   it. Each editable text box is auto-sized to match its paired immutable
+   element: tall enough for its own current text (plus a little headroom
+   for more typing) and never shorter than that pairing, but capped at
+   roughly 70% of the screen's height even for a very long message — past
+   that cap it gets its own internal scrollbar (appearing/disappearing
+   automatically based on whether the text actually overflows) instead of
+   growing indefinitely. Scrolling the mouse wheel while hovering over a
+   text box that has its own scrollbar scrolls *that box* until it hits the
+   end of its content, then further scrolling in the same direction falls
+   through to scrolling the whole review window, same as if the box
+   weren't there.
 
    Keyboard shortcuts on the review screen: **Ctrl+Backspace** deletes the
    previous word; **Tab**/**Shift+Tab** move between text boxes in
-   transcript order (paging the window in if needed), landing on the
-   Finalize button once there's no further text box; **Page Up**/**Page
-   Down** scroll the whole window, overriding Tk's default of scrolling
-   within whichever text box has focus; **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo
-   within a single text box.
+   transcript order (a message with both a message-text and an OCR box
+   visits the message-text one first, matching their top-to-bottom order
+   on screen; paging the window in if needed), landing on the Finalize
+   button once there's no further box; **Page Up**/**Page Down** scroll
+   the whole window, overriding Tk's default of scrolling within whichever
+   text box has focus; **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo within a
+   single text box.
 5. **Finalize** — a single button at the bottom of the review screen writes
    every message's final lines (edited text if you changed it, original OCR/
    message text otherwise) to the output file in one pass, then runs the
@@ -175,28 +185,45 @@ is just enough to orient a new contributor:
   into a self-sustaining oscillation loop; see the module docstring for the
   full story. Pure layout math lives in `app/gui/virtualization.py` so it's
   testable without a display.
+- **Slot-addressed boxes.** Since a row can now have a "message" box (a
+  copy of the message's own text), an "ocr" box (an image's OCR text), or
+  both, a single item index is no longer enough to identify one box.
+  Every per-box dict in `ReviewFrame` (`_text_widgets`, `_text_containers`,
+  `_box_floor_px`, `_saved_texts`) is keyed by `(item_index, role)` instead,
+  and `self._slots` is the flat, transcript-ordered list of every
+  `(item_index, role)` pair that exists across all items - built once in
+  `__init__` from each item's `initial_message_text`/`image_path` (a
+  "message" slot whenever the former isn't None, an "ocr" slot whenever
+  the latter isn't), message before ocr. This is what Tab/Shift-Tab
+  navigate (`keyboard_nav.py`'s `_move_focus`, stepping through
+  `self._slots` by `self._slot_positions[slot]`) and what session
+  resume's saved focus position addresses a box by (see "Setup screen"
+  above) - a plain item index couldn't disambiguate which of a row's two
+  boxes to refocus.
 - **Per-row left-column sizing.** Every row's left column is the same fixed
   width (`THUMBNAIL_SIZE[0]` in `app/gui/image_loading.py`), whether it
-  holds an image (image messages) or the immutable original-text label
-  (text-only messages) - so every row's image/text-box (or label/text-box)
-  pair lines up into two neat columns. An image's height is its own
-  aspect-preserving fit within `THUMBNAIL_SIZE` (`fitted_image_size`), not
-  the full bounding box - otherwise a landscape image (the common case)
-  gets letterboxed inside a box-shaped slot; this only reads the image
-  file's header (cheap), separately from the actual lazy pixel decode in
-  `ImageLoader._load_image` once a row scrolls near the viewport. A
-  text-only row's label height isn't known until the label exists, so
-  `_build_row` measures it with the container's `pack_propagate` left on
-  before pinning both dimensions, rather than computing it upfront the way
+  holds an image, the immutable original-text label, or both stacked
+  text-above-image - so every row's column pairs line up neatly across the
+  whole transcript. An image's height is its own aspect-preserving fit
+  within `THUMBNAIL_SIZE` (`fitted_image_size`), not the full bounding box
+  - otherwise a landscape image (the common case) gets letterboxed inside
+  a box-shaped slot; this only reads the image file's header (cheap),
+  separately from the actual lazy pixel decode in `ImageLoader._load_image`
+  once a row scrolls near the viewport. The immutable label's height isn't
+  known until the label exists, so `_build_immutable_message_label`
+  measures it with the container's `pack_propagate` left on before pinning
+  both dimensions, rather than computing it upfront the way
   `fitted_image_size` does for images.
-- **Per-row text box sizing.** Each editable text box lives in its own
-  fixed-height container (`pack_propagate(False)`, same trick as the image
-  placeholder) so it doesn't stretch to fill the row via Tk's `fill="both"`
-  - `ReviewFrame._size_text_container` sizes it to the text's current
-  wrapped line count (via Tk's own `Text.count(..., "displaylines")`, not
-  an estimate) plus `TEXT_BOX_LEEWAY_LINES` of headroom, clamped between the
-  paired image's actual height (no benefit to a box shorter than its image)
-  and `TEXT_BOX_MAX_HEIGHT_FRACTION` of the screen. A box at that upper cap
+- **Per-box text box sizing.** Each editable text box lives in its own
+  fixed-height container (`pack_propagate(False)`, same trick as the left
+  column's placeholders) so it doesn't stretch to fill whatever space is
+  left via Tk's `fill="both"` - `ReviewFrame._size_text_container` sizes it
+  to the text's current wrapped line count (via Tk's own
+  `Text.count(..., "displaylines")`, not an estimate) plus
+  `TEXT_BOX_LEEWAY_LINES` of headroom, clamped between its paired immutable
+  element's actual height (no benefit to a box shorter than that - the
+  image's height for an "ocr" box, the label's for a "message" box) and
+  `TEXT_BOX_MAX_HEIGHT_FRACTION` of the screen. A box at that upper cap
   gets an internal scrollbar that shows/hides itself automatically
   (`_set_text_scrollbar`, driven by the box's own `yscrollcommand`) based on
   whether its content actually overflows. `_on_text_modified` re-runs the
@@ -238,22 +265,25 @@ py -3.13 -m app.main
 py -3.13 -m pytest gui_transcription\app_tests -v
 ```
 
-81 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
+90 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
 splitting and backend dispatch, the JSON log formatter, JSON state
 persistence (run dates, OCR cache, recent-path history, in-progress session
 save/resume), start-date validation, review-item building/output-writing
 (including a text-only message's editable spacing copy standing in for its
-immutable original when written out), the OCR batch runner/cache
-short-circuit and the finalize pass (cleanup + run-date + clipboard +
-BREAK-marker bookmarking), the review screen's keyboard-nav text-box
-lookup, and its row-height estimation/visible-range math
-(`app/gui/virtualization.py`, the part of the windowing logic that's pure
-enough to unit-test without a display). The GUI itself only has a manual
-smoke test (window construction, the review screen with synthetic image
-and text-only items, an edit-then-finalize pass against a temp output
-file, and a resumed session's saved edits/focus restoring correctly) —
-there's no automated test driving real Tk button clicks or a live
-Tesseract install.
+immutable original when written out, and a message with both a caption
+and an image getting two independently-edited text blocks), the OCR batch
+runner/cache short-circuit and the finalize pass (cleanup + run-date +
+clipboard + BREAK-marker bookmarking), the review screen's slot-based
+keyboard navigation (`_move_focus` stepping through `(item_index, role)`
+slots in transcript order, message-before-ocr for a row with both), and
+its row-height estimation/visible-range math (`app/gui/virtualization.py`,
+the part of the windowing logic that's pure enough to unit-test without a
+display). The GUI itself only has a manual smoke test (window
+construction, the review screen with synthetic text-only/image-only/
+image-with-caption items, an edit-then-finalize pass against a temp
+output file, and a resumed session's saved edits/focus restoring
+correctly) — there's no automated test driving real Tk button clicks or a
+live Tesseract install.
 
 ## Logging
 

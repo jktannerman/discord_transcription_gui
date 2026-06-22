@@ -5,15 +5,15 @@ Split into pieces the GUI can drive explicitly:
 - ``parse_start_date`` / ``run_ocr_batch`` run before any user interaction
   (the latter on a background thread, reporting progress via callback).
 - ``build_review_items`` turns the approved messages + OCR'd paragraphs into
-  a flat list the review screen displays all at once: each item pairs its
-  message with an editable text box, initialized to that image's OCR text
-  (image messages) or the message's own original text (text-only messages,
-  so spacing can be adjusted without touching the immutable original shown
-  alongside it). Nothing is written to disk until the user reviews
-  everything and clicks Finalize.
+  a flat list the review screen displays all at once: each item gets an
+  editable text box for its own message text (whenever it has any) and a
+  separate one for its image's OCR text (whenever it has an image) - a
+  message with both gets both boxes, independently editable, mirroring
+  Discord's own text-above-image layout. Nothing is written to disk until
+  the user reviews everything and clicks Finalize.
 - ``write_all_items`` writes every message's final lines (using whatever the
-  user edited, or the original OCR text if they left it alone) once, in
-  order, when Finalize is clicked.
+  user edited, or the original message/OCR text if they left it alone)
+  once, in order, when Finalize is clicked.
 - ``finalize_run`` performs the regex cleanup pass, records the new run
   date, and bookmarks the output file with a fresh BREAK marker.
 """
@@ -174,16 +174,20 @@ def write_message_lines(output_path: Path, lines_to_write: list[str]) -> None:
 
 @dataclass
 class ReviewItem:
-    """One row of the review screen: a message, paired with an editable
-    text box initialized from either that image's OCR paragraphs (joined
-    with blank lines), for an image message, or the message's own original
-    text, for a text-only message - the latter exists purely so the user
-    can adjust spacing without touching the immutable original shown
-    alongside it (entry.text_lines)."""
+    """One row of the review screen: a message, paired with up to two
+    independently-editable text boxes - one initialized from the message's
+    own original text (``initial_message_text``), one from its image's OCR
+    paragraphs joined with blank lines (``initial_ocr_text``). Either can
+    be None, but never both: ``initial_message_text`` is None only for an
+    image message with no caption (nothing to edit there), and
+    ``initial_ocr_text`` is None only for a text-only message (no image to
+    OCR) - see build_review_items. A message with both a caption and an
+    image gets both boxes."""
 
     entry: MessageEntry
     image_path: Optional[Path]
-    initial_text: str
+    initial_message_text: Optional[str]
+    initial_ocr_text: Optional[str]
 
 
 def build_review_items(
@@ -191,27 +195,33 @@ def build_review_items(
     file_info: dict[str, list[str]],
     image_folder: Path,
 ) -> list[ReviewItem]:
-    """Pair each approved message with its image (if any) and an editable
-    text block: that image's OCR text for an image message, or the
-    message's own original text (unstripped, so deliberate spacing carries
-    over) for a text-only message."""
+    """Pair each approved message with its image (if any) and its editable
+    text box(es): a copy of the message's own original text (unstripped, so
+    deliberate spacing carries over) whenever it has any, and/or that
+    image's joined OCR text whenever it has an image - independently, so a
+    message with both gets both."""
     items: list[ReviewItem] = []
     for entry in entries:
         if entry.image_name is None:
             items.append(
                 ReviewItem(
-                    entry=entry, image_path=None, initial_text="\n".join(entry.text_lines)
+                    entry=entry,
+                    image_path=None,
+                    initial_message_text="\n".join(entry.text_lines),
+                    initial_ocr_text=None,
                 )
             )
             continue
 
         paragraphs = file_info.get(entry.image_name, [])
-        initial_text = "\n\n".join(para.strip() for para in paragraphs)
+        initial_ocr_text = "\n\n".join(para.strip() for para in paragraphs)
+        initial_message_text = "\n".join(entry.text_lines) if entry.text_lines else None
         items.append(
             ReviewItem(
                 entry=entry,
                 image_path=image_folder / entry.image_name,
-                initial_text=initial_text,
+                initial_message_text=initial_message_text,
+                initial_ocr_text=initial_ocr_text,
             )
         )
 
@@ -223,35 +233,43 @@ def build_review_items(
     return items
 
 
-def lines_for_item(item: ReviewItem, edited_text: Optional[str] = None) -> list[str]:
-    """Build the final lines to write for one review item, using edited_text
-    in place of the original text if the user changed it. For an image
-    message, the immutable caption (entry.text_lines) is written first,
-    followed by the edited/OCR text block; for a text-only message, only
-    the edited/original text block is written - the editable copy stands
-    in for entry.text_lines entirely, rather than being appended alongside
-    it, since this exists for the user to (de)duplicate that text."""
-    text = edited_text if edited_text is not None else item.initial_text
+def lines_for_item(
+    item: ReviewItem,
+    edited_message_text: Optional[str] = None,
+    edited_ocr_text: Optional[str] = None,
+) -> list[str]:
+    """Build the final lines to write for one review item, using each
+    edited_* value in place of the corresponding original text if the user
+    changed it. The message-text block (if this item has one) is written
+    first, then the OCR block (if it has one) - text above image, mirroring
+    both Discord's own layout and the review screen's box order."""
+    lines: list[str] = []
 
-    if item.image_path is None:
-        return [line + "\n" for line in text.split("\n")] if text else []
+    if item.initial_message_text is not None:
+        text = edited_message_text if edited_message_text is not None else item.initial_message_text
+        if text:
+            lines.extend(line + "\n" for line in text.split("\n"))
 
-    lines = [line + "\n" for line in item.entry.text_lines]
-    if text:
-        lines.append(text + "\n")
+    if item.image_path is not None:
+        ocr_text = edited_ocr_text if edited_ocr_text is not None else item.initial_ocr_text
+        if ocr_text:
+            lines.append(ocr_text + "\n")
+
     return lines
 
 
 def write_all_items(
     output_path: Path,
     items: list[ReviewItem],
-    edited_texts: list[Optional[str]],
+    edited_texts: list[tuple[Optional[str], Optional[str]]],
 ) -> None:
-    """Write every review item's final lines, in order, in one pass."""
+    """Write every review item's final lines, in order, in one pass.
+    edited_texts is one (edited_message_text, edited_ocr_text) pair per
+    item, matching ReviewFrame.collect_edited_texts."""
     logger.info("finalizing: writing all review items", extra=logging_config.extra(item_count=len(items)))
-    edited_count = sum(1 for text in edited_texts if text is not None)
-    for item, edited_text in zip(items, edited_texts):
-        write_message_lines(output_path, lines_for_item(item, edited_text))
+    edited_count = sum(1 for m, o in edited_texts if m is not None or o is not None)
+    for item, (edited_message_text, edited_ocr_text) in zip(items, edited_texts):
+        write_message_lines(output_path, lines_for_item(item, edited_message_text, edited_ocr_text))
     logger.info(
         "finished writing all review items",
         extra=logging_config.extra(item_count=len(items), edited_count=edited_count),

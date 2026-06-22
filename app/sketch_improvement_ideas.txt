@@ -4,35 +4,26 @@ claude should ignore this file for now
 fix date stuff - done?
 basic keyboard shortcuts - done
 
-Please now add basic keyboard shortcuts. 
+Please now add basic keyboard shortcuts. - done
 
 - The most vital is Ctrl-Backspace, deleting a whole word. 
 - Also very useful would be Tab/Shift-Tab, which should go forward/backward one text input box, or to/from the finalisation button if at the very bottom. I do not expect to need to use the actual tab character much.
 - Page Up and Page Down would be nice to have.
 
-undo/redo in a given text input window
 
-image size issues? add zoom?	
 
 
 cache the common folder/output combinations - done
 dark mode - done
-
 
 Please have the dialog where the user inputs the input HTML file, folder and output file path cache previously selected options. There should be a dropdown for each. 
 
 Simultaneously, please implement a dark mode scheme. For both these changes, reference `./song_folder_player` as a model.
 
 
-item mode
-combat mode
-map mode
-
-personalised clipboard?
 
 
 change user tokens - done
-
 
 The current task: instead of being hardcoded, as they currently are, the users whose messages should be picked by the filter are also selected upon startup. These should be cached and selectable in a similar way to the other startup inputs. For ease of use, the program should accept and display user ids that are of the form: "123456789 - Alice", but use only the leading digits for the actual HTML filter.
 
@@ -41,9 +32,9 @@ I am not certain whether it would be better to have all relevant users entered i
 There should also be a mode in which *all* user ids are accepted and all messages are transcribed. I am not sure what the best way to represent this for the user would be; please give some suggestions here too.
 
 
-make it fullscreen by default
+make it fullscreen by default - done
 
-make the text parts editable
+make the text parts editable - done
 
 make it possible to open a given image in browser?
 
@@ -58,14 +49,13 @@ more comprehensive tests?
 more comprehensive logging?
 
 
+- done 
 There is currently a severe pagination problem. Upon scrolling up or down and switching pages, it is common for an infinite loop to begin, where the window repeatedly switches between the top of one page and the bottom of another. Think carefully about why this happens; a fix was already attempted once, using scroll anchoring, but it appears to be insufficient. Consider several approaches and describe the pros and cons of each, unless there is a clear winning option.
 
 
-A very minor bug: the window bar does not appear black on startup. This is fixed on resizing the window or alt-tabbing. A bugfix was already attempted once, but it seems to have been insufficient.
 
 
-save load
-
+save load - done?
 
 For long chatlogs, the ability to stop transcribing and resume later would be useful. Ideally, every 5 seconds, the current state would be saved. Each image-containing message would have two associated strings: the original machine-transcribed output, and the saved user-edited text. Upon resuming a prior session, the user's previous position and focus should be restored.
 
@@ -73,21 +63,50 @@ Relatedly, it would be useful for the user to be able to edit a copy of pure tex
 
 
 
-
-This project has now seen several updates and revisions. Please consider its current overall structure. Is it still natural? Are there any obvious problems or potential improvements? Are there any design decisions which feel likely to lead to problems down the line?
-
-
-
+- done
 Many images seem to have corresponding textboxes that are so large that tabbing/shift-tabbing to them does not have the cursor (or any actual text) on screen; they are mostly empty. This is not very useful. Where possible, text input boxes should be at most the height of the screen, or less; perhaps even as small as possible while still containing the current text (plus some leeway if the user adds new lines). Note that there is no benefit to making a textbox shorter than the corresponding image, however. If an image truly has more text associated with it than can fit on one screen, the textbox should have an internal scrollbar. If possible, a scrollbar should be created dynamically if the user adds enough lines to overflow the current height.
 
 Is it the case that all the textboxes currently have the same height, to prevent pagination issues or suchlike? If so, is there a way to have textboxes of varied height while still preventing any pagination problems?
 
 
-
 Somewhat relatedly, many images are much shorter than their textboxes. It might be useful to have 
+
+
+
+- done 
+However, the maximum height of a textbox is still too tall, just enough that it usually doesn't all comfortably fit on one screen, even if it technically would with perfect positioning. Please adjust it so that there will be a reasonable margin upon tabbing to the next textbox.
+
+
+- done
+Please make it so that messages containing both text and images are displayed such that the text is above the image in the element, as this is how it works in Discord.
+
+
+
+undo/redo in a given text input window
+
+
+A very minor bug: the window bar does not appear black on startup. This is fixed on resizing the window or alt-tabbing. A bugfix was already attempted once, but it seems to have been insufficient.
+
+
+image size issues? add zoom?	
+
+item mode
+combat mode
+map mode
+
+personalised clipboard?
+
+
+ctrl-f?? with regex?
+
+
+future-proofing: what happens if a message has multiple images attached to it? need to test
+
+
+write spec for exact line spacing rules
 
 
 Are the logs useful? Should they be split up further?
 
 
-However, the maximum height of a textbox is still too tall, just enough that it usually doesn't all comfortably fit on one screen, even if it technically would with perfect positioning. Please adjust it so that there will be a reasonable margin upon tabbing to the next textbox.
+This project has now seen several updates and revisions. Please consider its current overall structure. Is it still natural? Are there any obvious problems or potential improvements?

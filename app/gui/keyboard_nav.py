@@ -3,15 +3,20 @@ boxes: Tab/Shift-Tab move between boxes in transcript order, Page Up/Down
 scroll the whole window, Ctrl+Backspace deletes the previous word, and
 Ctrl+Z/Ctrl+Shift+Z undo/redo within a box. Mixed into ReviewFrame rather
 than taken as a standalone object, since every method here reaches into
-ReviewFrame's row/widget bookkeeping (self._text_widgets, self._row_heights,
-self._ensure_materialized, self._canvas, self._finalize_button) - threading
-all of that through as constructor args would just relocate the coupling,
-not remove it.
+ReviewFrame's row/widget bookkeeping (self._text_widgets, self._slots,
+self._row_heights, self._ensure_materialized, self._canvas,
+self._finalize_button) - threading all of that through as constructor
+args would just relocate the coupling, not remove it.
+
+"Transcript order" navigates self._slots, the flat (item_index, role) list
+built once in ReviewFrame.__init__ - a row can now have a "message" box, an
+"ocr" box, or both (message first, since text sits above image), so a
+single item index is no longer enough to address one box.
 """
 
 import re
 import tkinter as tk
-from typing import Optional
+from typing import Optional, Tuple
 
 _TRAILING_WORD_RE = re.compile(r"\S+\s*$")
 
@@ -66,13 +71,13 @@ class KeyboardNavMixin:
     def _on_shift_tab(self, event: tk.Event) -> str:
         return self._move_focus(-1)
 
-    def _focused_text_index(self) -> Optional[int]:
+    def _focused_slot(self) -> Optional[Tuple[int, str]]:
         focused = self.focus_get()
         if focused is None:
             return None
-        for idx, widget in self._text_widgets.items():
+        for key, widget in self._text_widgets.items():
             if widget is focused:
-                return idx
+                return key
         return None
 
     def _scroll_into_view(self, index: int) -> None:
@@ -114,34 +119,23 @@ class KeyboardNavMixin:
             action=action,
         )
 
-    def _focus_text_box(self, index: int) -> None:
-        """Focus items[index]'s text box, scroll its row into view on the
-        review canvas, and make sure the box's own internal view shows its
-        cursor - the box may have been built (or last left) scrolled to
-        wherever its cursor happened to be, which isn't necessarily the
-        start of its text."""
-        self._log_event("focus_text_box", index=index)
-        widget = self._text_widgets[index]
+    def _focus_text_box(self, index: int, role: str) -> None:
+        """Focus items[index]'s `role` text box, scroll its row into view
+        on the review canvas, and make sure the box's own internal view
+        shows its cursor - the box may have been built (or last left)
+        scrolled to wherever its cursor happened to be, which isn't
+        necessarily the start of its text."""
+        self._log_event("focus_text_box", index=index, role=role)
+        widget = self._text_widgets[(index, role)]
         widget.focus_set()
         widget.see("insert")
         self._scroll_into_view(index)
 
-    def _find_text_index(self, start: int, step: int) -> Optional[int]:
-        """Return `start` if it's a valid item index, else None - every row
-        has an editable text box now (image messages get the OCR text box,
-        text-only messages get the spacing-editable copy), so there's
-        nothing left to skip past; this just clamps to the valid range, the
-        same contract _move_focus relies on when stepping by one index at a
-        time."""
-        if 0 <= start < len(self._items):
-            return start
-        return None
-
     def _move_focus(self, delta: int) -> str:
-        """Move focus to the next/previous text box in transcript order (or
-        to/from the Finalize button at either end), materializing the
-        target row first via _ensure_materialized if it isn't currently
-        built."""
+        """Move focus to the next/previous box in self._slots (or to/from
+        the Finalize button at either end), materializing the target row
+        first via _ensure_materialized if it isn't currently built."""
+        slots = self._slots
         self._log_event(
             "move_focus_start",
             delta=delta,
@@ -150,31 +144,31 @@ class KeyboardNavMixin:
         step = 1 if delta > 0 else -1
 
         if self.focus_get() is self._finalize_button:
-            if delta < 0:
-                target = self._find_text_index(len(self._items) - 1, -1)
-                if target is not None:
-                    self._ensure_materialized(target)
-                    self._focus_text_box(target)
+            if delta < 0 and slots:
+                self._goto_slot(slots[-1])
             return "break"
 
-        current_index = self._focused_text_index()
-        if current_index is None:
-            start = 0 if delta > 0 else len(self._items) - 1
-            target = self._find_text_index(start, step)
-            if target is not None:
-                self._ensure_materialized(target)
-                self._focus_text_box(target)
+        current = self._focused_slot()
+        if current is None:
+            if not slots:
+                return "break"
+            pos = 0 if delta > 0 else len(slots) - 1
+            self._goto_slot(slots[pos])
             return "break"
 
-        target = self._find_text_index(current_index + step, step)
-        if target is None:
-            if delta > 0:
-                self._log_event("move_focus_to_finalize_button")
-                self._finalize_button.focus_set()
-            # delta < 0 off the top edge: already at the first text box,
-            # nowhere to go.
+        pos = self._slot_positions[current] + step
+        if pos < 0:
+            # Already at the first box, nowhere to go.
+            return "break"
+        if pos >= len(slots):
+            self._log_event("move_focus_to_finalize_button")
+            self._finalize_button.focus_set()
             return "break"
 
-        self._ensure_materialized(target)
-        self._focus_text_box(target)
+        self._goto_slot(slots[pos])
         return "break"
+
+    def _goto_slot(self, slot: Tuple[int, str]) -> None:
+        index, role = slot
+        self._ensure_materialized(index)
+        self._focus_text_box(index, role)

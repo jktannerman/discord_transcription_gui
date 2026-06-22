@@ -39,18 +39,29 @@ def wrapped_line_count(text: str, chars_per_line: int) -> int:
     return line_count
 
 
+def _estimate_message_text_height(item: ReviewItem) -> int:
+    text = item.initial_message_text or "(no text)"
+    line_count = wrapped_line_count(text, _TEXT_ROW_CHARS_PER_LINE)
+    return line_count * _TEXT_ROW_LINE_HEIGHT + _TEXT_ROW_PADDING
+
+
 def estimate_row_height(item: ReviewItem) -> int:
     """Cheap, approximate height (px) for an item's row before it's ever
     been built as real widgets - good enough for scrollbar proportion and
     decoding which rows are near the viewport, not for actual layout. Once
     a row is materialized, ReviewFrame replaces this estimate with the
-    row's real winfo_height()."""
-    if item.image_path is not None:
-        return _ESTIMATED_IMAGE_ROW_HEIGHT
+    row's real winfo_height().
 
-    text = "\n".join(item.entry.text_lines).strip() or "(no text)"
-    line_count = wrapped_line_count(text, _TEXT_ROW_CHARS_PER_LINE)
-    return line_count * _TEXT_ROW_LINE_HEIGHT + _TEXT_ROW_PADDING
+    A message with both a caption and an image (its message-text box
+    stacked above its OCR/image box - see review_view.py) gets both
+    estimates added together, since its row now needs room for both."""
+    if item.image_path is None:
+        return _estimate_message_text_height(item)
+
+    height = _ESTIMATED_IMAGE_ROW_HEIGHT
+    if item.initial_message_text is not None:
+        height += _estimate_message_text_height(item)
+    return height
 
 
 def compute_visible_range(

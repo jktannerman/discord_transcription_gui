@@ -63,10 +63,11 @@ def test_build_review_items_text_only_message():
 
     assert len(items) == 1
     assert items[0].image_path is None
-    # initial_text is the editable copy a text-only message now gets too,
+    # initial_message_text is the editable copy a text-only message gets,
     # initialized from (not stripped of) its own original lines so the
     # user can adjust spacing freely without losing it up front.
-    assert items[0].initial_text == "hello\nworld"
+    assert items[0].initial_message_text == "hello\nworld"
+    assert items[0].initial_ocr_text is None
     assert items[0].entry.text_lines == ["hello", "world"]
 
 
@@ -77,14 +78,26 @@ def test_build_review_items_image_message_joins_paragraphs():
 
     assert len(items) == 1
     assert items[0].image_path == Path("/images/card.png")
-    assert items[0].initial_text == "first paragraph\n\nsecond paragraph"
+    assert items[0].initial_ocr_text == "first paragraph\n\nsecond paragraph"
+    # No caption on this message, so there's nothing to give a message-text
+    # box to.
+    assert items[0].initial_message_text is None
+
+
+def test_build_review_items_image_with_caption_gets_both_boxes():
+    entries = [MessageEntry(text_lines=["look at this"], image_name="card.png")]
+    file_info = {"card.png": ["ocr text"]}
+    items = build_review_items(entries, file_info, image_folder=Path("/images"))
+
+    assert items[0].initial_message_text == "look at this"
+    assert items[0].initial_ocr_text == "ocr text"
 
 
 def test_build_review_items_image_missing_from_cache_uses_empty_text():
     entries = [MessageEntry(text_lines=[], image_name="missing.png")]
     items = build_review_items(entries, file_info={}, image_folder=Path("/images"))
 
-    assert items[0].initial_text == ""
+    assert items[0].initial_ocr_text == ""
 
 
 def test_lines_for_item_uses_initial_text_by_default():
@@ -97,21 +110,33 @@ def test_lines_for_item_uses_initial_text_by_default():
     assert lines == ["caption\n", "the ocr text\n"]
 
 
-def test_lines_for_item_uses_edited_text_when_given():
+def test_lines_for_item_uses_edited_ocr_text_when_given():
     entries = [MessageEntry(text_lines=[], image_name="card.png")]
     items = build_review_items(
         entries, {"card.png": ["original"]}, image_folder=Path("/images")
     )
 
-    lines = lines_for_item(items[0], edited_text="user-corrected text")
+    lines = lines_for_item(items[0], edited_ocr_text="user-corrected text")
     assert lines == ["user-corrected text\n"]
+
+
+def test_lines_for_item_image_with_caption_uses_both_edited_texts():
+    entries = [MessageEntry(text_lines=["original caption"], image_name="card.png")]
+    items = build_review_items(
+        entries, {"card.png": ["original ocr"]}, image_folder=Path("/images")
+    )
+
+    lines = lines_for_item(
+        items[0], edited_message_text="edited caption", edited_ocr_text="edited ocr"
+    )
+    assert lines == ["edited caption\n", "edited ocr\n"]
 
 
 def test_lines_for_item_text_only_message_uses_edited_text_when_given():
     entries = [MessageEntry(text_lines=["just text"], image_name=None)]
     items = build_review_items(entries, file_info={}, image_folder=Path("/images"))
 
-    lines = lines_for_item(items[0], edited_text="user-adjusted spacing")
+    lines = lines_for_item(items[0], edited_message_text="user-adjusted spacing")
     assert lines == ["user-adjusted spacing\n"]
 
 
@@ -135,7 +160,9 @@ def test_write_all_items_writes_each_message_in_order(tmp_path):
         entries, {"card.png": ["card text"]}, image_folder=tmp_path
     )
 
-    write_all_items(output_path, items, edited_texts=[None, "edited card text"])
+    write_all_items(
+        output_path, items, edited_texts=[(None, None), (None, "edited card text")]
+    )
 
     written = output_path.read_text(encoding="utf8")
     assert "first message" in written

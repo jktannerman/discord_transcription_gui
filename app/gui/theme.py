@@ -123,22 +123,6 @@ def apply_dark_theme(root: tk.Tk) -> ttk.Style:
     style.map("TScrollbar", background=[("active", "#6a6a6a"), ("pressed", "#7a7a7a")])
     style.configure("TProgressbar", background=DARK_ACCENT, troughcolor=DARK_BG_WIDGET)
 
-    # Message/transcript text content sits on the darkest background for
-    # better contrast against its foreground than the general UI palette,
-    # and uses a larger monospace font for readability. The Frame style is
-    # for the container the text label sits in - a label alone only paints
-    # the rectangle directly behind its (possibly wrapped, shrink-fit) text,
-    # leaving the surrounding container's lighter background showing
-    # through; wrapping it in a same-colored, width-filling frame closes
-    # that gap so the whole block reads as one dark element.
-    style.configure(
-        "MessageText.TLabel",
-        background=DARK_TEXT_BG,
-        foreground=DARK_FG,
-        font=(TEXT_FONT_FAMILY, TEXT_FONT_SIZE),
-    )
-    style.configure("MessageText.TFrame", background=DARK_TEXT_BG)
-
     # The combobox dropdown listbox is a plain tk.Listbox under the hood and
     # isn't covered by ttk styling - set its colors via the option database.
     root.option_add("*TCombobox*Listbox.background", DARK_BG_WIDGET)

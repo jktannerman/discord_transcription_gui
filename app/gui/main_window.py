@@ -374,6 +374,7 @@ class App:
         review leaves a resumable session behind."""
         frame = getattr(self, "_review_frame", None)
         if frame is not None and frame.winfo_exists():
+            focused_slot = frame.get_focused_slot()
             session = {
                 "html_path": str(self._html_path_for_run),
                 "image_folder": str(self._image_folder_for_run),
@@ -386,7 +387,7 @@ class App:
                 ),
                 "use_cache": self._use_cache_for_run,
                 "edited_texts": frame.collect_edited_texts(),
-                "focus_index": frame.get_focused_index(),
+                "focus_slot": list(focused_slot) if focused_slot is not None else None,
                 "scroll_fraction": frame.get_scroll_top_fraction(),
             }
             state.save_session(session)
@@ -420,13 +421,15 @@ class App:
         self._resume_payload = None
 
         initial_saved_texts = None
-        initial_focus_index = None
+        initial_focus_slot = None
         initial_scroll_fraction = None
         if resume is not None:
             saved_texts = resume.get("edited_texts")
             if isinstance(saved_texts, list) and len(saved_texts) == len(self._review_items):
                 initial_saved_texts = saved_texts
-                initial_focus_index = resume.get("focus_index")
+                focus_slot = resume.get("focus_slot")
+                if focus_slot is not None:
+                    initial_focus_slot = (focus_slot[0], focus_slot[1])
                 initial_scroll_fraction = resume.get("scroll_fraction")
             else:
                 logger.warning(
@@ -444,14 +447,14 @@ class App:
             self._review_items,
             self._on_finalize_clicked,
             initial_saved_texts=initial_saved_texts,
-            initial_focus_index=initial_focus_index,
+            initial_focus_slot=initial_focus_slot,
             initial_scroll_fraction=initial_scroll_fraction,
         )
         self._set_frame(frame)
         self._review_frame = frame
         self._start_autosave()
 
-    def _on_finalize_clicked(self, edited_texts: list[str | None]) -> None:
+    def _on_finalize_clicked(self, edited_texts: list[tuple[str | None, str | None]]) -> None:
         logger.info("finalize clicked")
         try:
             pipeline.write_all_items(self._output_path_for_run, self._review_items, edited_texts)
