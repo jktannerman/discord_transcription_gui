@@ -117,8 +117,12 @@ gui_transcription/
     gui/
       main_window.py      # setup screen + run orchestration on the Tk side
       progress_view.py    # OCR progress bar
-      review_view.py       # the full scrollable review screen + Finalize button
-                          # (lazy image loading, large thumbnails)
+      review_view.py       # the review screen: virtualized row window,
+                          # Finalize button (delegates layout/images/
+                          # keyboard nav to the three modules below)
+      virtualization.py    # pure row-height/visible-range math (no Tk)
+      image_loading.py     # lazy image load/unload for review rows
+      keyboard_nav.py      # Tab/Page Up-Down/undo keyboard shortcuts
       theme.py             # dark theme colors/fonts + ttk Style setup
   app_tests/              # pytest unit tests for all the non-GUI logic
   requirements.txt

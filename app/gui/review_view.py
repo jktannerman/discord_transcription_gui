@@ -8,119 +8,118 @@ restricted. Text-only messages are shown for context with no editable box.
 Nothing is written to disk until the Finalize button at the bottom is
 clicked, which writes every message's final lines in one pass.
 
-Only a bounded window of PAGE_SIZE rows is ever materialized as widgets at
-once (see _advance_forward/_advance_backward), rather than every message in
-the transcript - building hundreds of full-size image rows and 30-line Text
-widgets up front is what made the screen laggy, and that cost scaled with
-transcript length regardless of any per-row image lazy-loading. As the user
-scrolls near either edge of the current window, the next/previous half-page
-is loaded in and the opposite half-page is torn down, so the window slides
-along the transcript instead of growing. Edits made in a row are preserved
-in self._saved_texts before that row is torn down, and restored if the row
-is rebuilt later. The currently focused text box keeps focus across a
-transition if it's still in the new window; otherwise focus is simply lost,
-same as scrolling a focused widget off-screen.
+Only a bounded window of rows is ever materialized as widgets at once,
+rather than every message in the transcript - building hundreds of
+full-size image rows and 30-line Text widgets up front is what made the
+screen laggy, and that cost scaled with transcript length regardless of
+any per-row image lazy-loading. This is the standard "virtualized/windowed
+list" pattern (as used by react-window, Android RecyclerView, iOS
+UITableView, etc.): _reconcile() recomputes which item-index range should
+be materialized as a *pure function* of the canvas's current scroll
+position and each item's row height (estimated via estimate_row_height
+until a row is actually built and measured, then its real winfo_height()
+- see self._row_heights), via compute_visible_range (virtualization.py),
+and reconciles the actually-built rows to match. Crucially, this
+recomputation is idempotent: calling _reconcile() twice with no scroll
+movement in between always yields the same range and is a no-op the
+second time.
 
-Every transition runs through _transition_preserving_scroll, which pins a
-row that survives the transition and compensates the canvas's scroll offset
-by however many pixels were added/removed above it. This isn't just
-cosmetic: adding/removing rows above the viewport changes the scrollregion's
-total height while Tk's stored scroll offset is an absolute pixel value, not
-"the same row" - left uncompensated, the visible content would visibly jump
-on every transition. Pinning a surviving row's screen position keeps the
-visible content stable across the transition.
+That idempotency is the whole reason this design replaced an earlier one
+that tracked window_start/window_end as mutable state and stepped it
+forward/backward incrementally (_advance_forward/_advance_backward),
+preserving scroll position across each step by reverse-engineering a
+corrective fraction from how far a surviving "anchor" row moved on screen.
+Near the start/end of the item list, that fraction could fall outside
+[0,1]; Tk's yview_moveto silently clamped it, which deterministically left
+the viewport positioned so the *opposite* paging direction's trigger
+condition became true - and because every step also rescheduled the same
+debounced refresh that re-ran the trigger check, this became a
+self-sustaining oscillation between two windows that ran forever with no
+further user input. Representing scroll position as an absolute pixel
+offset (via self._row_heights) rather than a fraction of total height, and
+recomputing the materialized range from scratch on every tick rather than
+incrementally stepping it, makes that failure mode structurally
+impossible rather than just less likely: there's no separate "should I
+page forward" vs. "should I page backward" check that can disagree about
+the resting state, because there's only one range computation.
 
-Note that _maybe_advance_page deliberately does NOT decide whether to page
-based on the viewport's fraction of the total scrollregion. An earlier
-version did, and it produced an infinite loop: _transition_preserving_scroll
-keeps the same content on screen across a transition, so the fraction-based
-trigger that had just fired was usually still true immediately afterward,
-and the debounced image-visibility refresh scheduled by the transition
-itself would re-evaluate that unchanged condition and page again - with no
-further user input involved. Instead, the trigger compares the materialized
-window's edges (self._window_start/_window_end, via self._row_frames) to the
-viewport's edges: paging forward/backward adds/removes rows at that edge,
-which directly moves the trigger condition's inputs, so the condition
-reliably goes false once enough margin exists - independent of wherever the
-anchor leaves the scroll position.
+This windowing core (_reconcile/_sync_materialized_rows/
+_remeasure_built_rows/_offset_of/_ensure_materialized, plus _build_row/
+_destroy_row) is deliberately kept together in this one class rather than
+split further, since it's exactly the state that disagreed with itself in
+the bug above - splitting it across files/objects would relocate that risk,
+not remove it. Pure layout math that doesn't touch widget state lives in
+virtualization.py; image lazy-loading and keyboard navigation are
+self-contained enough to live in image_loading.py and keyboard_nav.py
+respectively.
 
-Images are additionally loaded/decoded lazily within the materialized
-window, only for rows within (or near) the visible viewport, and unloaded
-again once scrolled away.
+The materialized rows are still packed into a single child Frame
+(self._scroll_frame) so Tk handles their relative stacking for free, but
+that Frame is repositioned via canvas.coords() on every _reconcile to sit
+at its materialized range's true offset within the full virtual document
+- it is deliberately NOT left at canvas position (0, 0). The canvas's
+scrollregion is likewise set explicitly from self._row_heights (the full
+document height), not derived from this frame's own bbox (which would
+only ever reflect the small materialized subset).
 
-Keyboard shortcuts, bound per text box (and globally for Page Up/Down) since
-Tk's defaults either don't cover these or actively conflict with them:
-Ctrl+Backspace deletes the previous word; Tab/Shift-Tab move between text
-boxes in transcript order, advancing/paging the window if the target isn't
-materialized yet, landing on the Finalize button once there's no text box
-left to advance to; Page Up/Down scroll the whole window rather than (Tk's
-default) scrolling within whichever Text widget has focus; Ctrl+Z/Ctrl+Shift+Z
-undo/redo within a single text box, using Tk's built-in per-widget undo stack.
+Edits made in a row are preserved in self._saved_texts before that row is
+torn down, and restored if the row is rebuilt later. The currently focused
+text box keeps focus across a reconcile if it's still in the new
+materialized range; otherwise focus is simply lost, same as scrolling a
+focused widget off-screen.
 
-The load/unload pass (and the page-edge check) is debounced (see
-DEBOUNCE_MS): fast scrolling fires many wheel/scrollbar events in quick
-succession, and running the pass synchronously on every single one blocked
-the Tk event loop with back-to-back image decodes, which both caused lag and
-produced "ghost" partial images (a widget's image= being swapped again
-before Tk finished painting the previous swap). Debouncing collapses a burst
-of events into a single pass once scrolling actually pauses.
+Images are loaded/decoded lazily within the materialized window, only for
+rows within (or near) the visible viewport, and unloaded again once
+scrolled away (see image_loading.py).
+
+Keyboard shortcuts (see keyboard_nav.py), bound per text box (and globally
+for Page Up/Down) since Tk's defaults either don't cover these or actively
+conflict with them: Ctrl+Backspace deletes the previous word; Tab/Shift-Tab
+move between text boxes in transcript order, materializing the target row
+via _ensure_materialized if it isn't already, landing on the Finalize
+button once there's no text box left to advance to; Page Up/Down scroll the
+whole window rather than (Tk's default) scrolling within whichever Text
+widget has focus; Ctrl+Z/Ctrl+Shift+Z undo/redo within a single text box,
+using Tk's built-in per-widget undo stack.
+
+_reconcile is debounced (see DEBOUNCE_MS): fast scrolling fires many
+wheel/scrollbar events in quick succession, and running it synchronously
+on every single one blocked the Tk event loop with back-to-back row
+builds/image decodes, which both caused lag and produced "ghost" partial
+images (a widget's image= being swapped again before Tk finished painting
+the previous swap). Debouncing collapses a burst of events into a single
+pass once scrolling actually pauses - this is safe specifically because
+_reconcile is idempotent, so coalescing several scroll events into one
+pass changes only timing, never the result.
 """
 
-import re
 import tkinter as tk
 from tkinter import ttk
-from typing import Callable, Dict, List, Optional
-
-from PIL import Image, ImageTk
+from typing import Callable, Dict, List, Optional, Tuple
 
 from .. import logging_config
 from ..pipeline import ReviewItem
 from . import theme
+from .image_loading import THUMBNAIL_SIZE, ImageLoader
+from .keyboard_nav import KeyboardNavMixin
+from .virtualization import compute_visible_range, estimate_row_height
 
 logger = logging_config.get_logger(__name__)
 
-# Bounding box for the image preview - roughly two-thirds of a 1200px-wide
-# review window, per the project owner's request that images be large
-# enough to actually read while transcribing.
-THUMBNAIL_SIZE = (760, 950)
-
 # How many extra viewport-heights worth of rows to keep loaded above and
 # below the visible area, so scrolling a little doesn't trigger a reload
-# and neighboring messages are visible for spacing context.
+# and neighboring messages are visible for spacing context. Used both for
+# image load/unload and for how many rows beyond the viewport get
+# materialized as widgets - see compute_visible_range.
 SCROLL_BUFFER_VIEWPORTS = 1
 
 # How long to wait, after the most recent scroll event, before actually
-# loading/unloading images. Keeps a fast multi-event scroll burst from
-# triggering a decode on every single tick.
+# reconciling (see ReviewFrame._reconcile). Keeps a fast multi-event scroll
+# burst from triggering a row build/image decode on every single tick.
 DEBOUNCE_MS = 80
 
-# Rows kept materialized at once, and how many of them get replaced per
-# page transition. Rows are heavy (a full-size image placeholder plus a
-# 30-line Text widget), so this is sized by widget count, not pixel height -
-# each row is roughly a viewport-height tall on its own, so a 12-row window
-# already covers a large scroll buffer on either side of the visible area.
-PAGE_SIZE = 12
-PAGE_STEP = PAGE_SIZE // 2
 
-# Matches the word immediately before the cursor, plus any whitespace
-# trailing it up to the cursor - what Ctrl+Backspace deletes.
-_TRAILING_WORD_RE = re.compile(r"\S+\s*$")
-
-
-class _ImageSlot:
-    """Tracks one image row's load state for lazy loading/unloading."""
-
-    __slots__ = ("item", "row", "label", "loaded", "photo")
-
-    def __init__(self, item: ReviewItem, row: tk.Widget, label: tk.Widget):
-        self.item = item
-        self.row = row
-        self.label = label
-        self.loaded = False
-        self.photo: Optional[ImageTk.PhotoImage] = None
-
-
-class ReviewFrame(ttk.Frame):
+class ReviewFrame(KeyboardNavMixin, ttk.Frame):
     def __init__(
         self,
         master: tk.Widget,
@@ -131,12 +130,18 @@ class ReviewFrame(ttk.Frame):
         logger.info("building review screen", extra=logging_config.extra(item_count=len(items)))
         self._items = items
         self._on_finalize = on_finalize
-        # Only items in [_window_start, _window_end) currently have widgets.
-        self._window_start = 0
-        self._window_end = 0
+        # Per-item row height (px), seeded with cheap estimates and
+        # overwritten with the real winfo_height() once a row is built -
+        # the source of truth for the full virtual document's layout, used
+        # to compute which index range should be materialized and to set
+        # the canvas's scrollregion (see _reconcile). Only items in
+        # [_materialized_range[0], _materialized_range[1]] (inclusive)
+        # currently have widgets; None until the first _reconcile call.
+        self._row_heights: List[int] = [estimate_row_height(item) for item in items]
+        self._materialized_range: Optional[Tuple[int, int]] = None
         self._row_frames: Dict[int, tk.Widget] = {}
         self._text_widgets: Dict[int, tk.Text] = {}
-        self._image_slots: Dict[int, _ImageSlot] = {}
+        self._images = ImageLoader()
         # Text captured from a row's widget just before it's torn down, so
         # edits survive a row being paged out and back in. None means
         # "never edited/visited" - fall back to item.initial_text.
@@ -169,29 +174,33 @@ class ReviewFrame(ttk.Frame):
         def _on_scrollbar(*args):
             self._log_event("input_scrollbar", args=args)
             canvas.yview(*args)
-            self._schedule_update_visible_images()
+            self._schedule_reconcile()
 
         scrollbar.configure(command=_on_scrollbar)
         canvas.configure(yscrollcommand=scrollbar.set)
 
         self._scroll_frame = ttk.Frame(canvas)
-        canvas_window = canvas.create_window((0, 0), window=self._scroll_frame, anchor="nw")
-
-        self._scroll_frame.bind(
-            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
+        # Repositioned (via canvas.coords) on every _reconcile to sit at the
+        # materialized window's true offset within the full virtual
+        # document - NOT left at (0, 0). The scrollregion is likewise set
+        # explicitly from self._row_heights in _reconcile, not derived from
+        # this frame's own (materialized-only) bbox - using the automatic
+        # canvas.bbox("all")-on-<Configure> binding that used to be here
+        # would clobber that explicit full-document scrollregion back down
+        # to just the materialized subset on every row build/destroy.
+        self._canvas_window = canvas.create_window((0, 0), window=self._scroll_frame, anchor="nw")
 
         def _on_canvas_configure(e):
-            canvas.itemconfig(canvas_window, width=e.width)
+            canvas.itemconfig(self._canvas_window, width=e.width)
             self._log_event("input_canvas_configure", width=e.width, height=e.height)
-            self._schedule_update_visible_images()
+            self._schedule_reconcile()
 
         canvas.bind("<Configure>", _on_canvas_configure)
 
         def _on_mousewheel(e):
             self._log_event("input_mousewheel", delta=e.delta)
             canvas.yview_scroll(int(-e.delta / 120), "units")
-            self._schedule_update_visible_images()
+            self._schedule_reconcile()
 
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
         # Global fallback for Page Up/Down so they scroll the review window
@@ -212,11 +221,7 @@ class ReviewFrame(ttk.Frame):
 
         self.bind("<Destroy>", _on_destroy)
 
-        self._window_end = min(PAGE_SIZE, len(items))
-        for idx in range(self._window_start, self._window_end):
-            self._build_row(idx)
-
-        self.after_idle(self._update_visible_images)
+        self.after_idle(self._reconcile)
 
     def _log_event(self, event: str, **fields) -> None:
         """Log one step of scroll/page/focus handling at DEBUG, stamped with
@@ -229,8 +234,7 @@ class ReviewFrame(ttk.Frame):
             event,
             extra=logging_config.extra(
                 seq=self._event_seq,
-                window_start=self._window_start,
-                window_end=self._window_end,
+                materialized_range=self._materialized_range,
                 top_frac=round(top_frac, 4),
                 bottom_frac=round(bottom_frac, 4),
                 **fields,
@@ -272,7 +276,7 @@ class ReviewFrame(ttk.Frame):
         image_label = ttk.Label(container, text="(scroll to load image)", anchor="center")
         image_label.pack(fill="both", expand=True)
 
-        self._image_slots[index] = _ImageSlot(item=item, row=row, label=image_label)
+        self._images.register(index, item.image_path, image_label)
 
         if item.entry.text_lines:
             message_text = "\n".join(item.entry.text_lines).strip()
@@ -322,384 +326,169 @@ class ReviewFrame(ttk.Frame):
         text_widget = self._text_widgets.pop(index, None)
         if text_widget is not None:
             self._saved_texts[index] = text_widget.get("1.0", "end-1c")
-        self._image_slots.pop(index, None)
+        self._images.unregister(index)
         row.destroy()
 
-    def _focused_text_index(self) -> Optional[int]:
-        focused = self.focus_get()
-        if focused is None:
-            return None
-        for idx, widget in self._text_widgets.items():
-            if widget is focused:
-                return idx
-        return None
+    def _offset_of(self, index: int) -> int:
+        """Pixel offset of items[index]'s top within the full virtual
+        document, per self._row_heights."""
+        return sum(self._row_heights[:index])
 
-    def _restore_focus(self, index: Optional[int]) -> None:
-        if index is None:
+    def _ensure_materialized(self, index: int) -> None:
+        """Make sure items[index]'s row is built, jumping the scroll
+        position there first if it's nowhere near the current viewport
+        (e.g. a far-away Tab target). Cheap and safe to call even when the
+        row is already materialized, since _reconcile always recomputes
+        the materialized range from scratch rather than incrementally
+        stepping it - see the module docstring."""
+        if index in self._row_frames:
             return
-        widget = self._text_widgets.get(index)
-        if widget is not None:
-            widget.focus_set()
+        total_height = sum(self._row_heights)
+        if total_height > 0:
+            self._canvas.yview_moveto(self._offset_of(index) / total_height)
+        self._reconcile()
 
-    def _delete_word_backward(self, event: tk.Event) -> str:
-        """Ctrl+Backspace: delete the word before the cursor (plus any
-        whitespace trailing it), or just merge with the previous line if
-        the cursor is already at the start of a line."""
-        widget = event.widget
-        line_start = widget.index("insert linestart")
-        text_before = widget.get(line_start, "insert")
-        if not text_before:
-            if widget.index("insert") != "1.0":
-                widget.delete("insert -1c", "insert")
-            return "break"
-
-        match = _TRAILING_WORD_RE.search(text_before)
-        delete_from = f"{line_start}+{match.start()}c" if match else line_start
-        widget.delete(delete_from, "insert")
-        return "break"
-
-    def _undo_text(self, event: tk.Event) -> str:
-        try:
-            event.widget.edit_undo()
-        except tk.TclError:
-            pass  # nothing to undo
-        return "break"
-
-    def _redo_text(self, event: tk.Event) -> str:
-        try:
-            event.widget.edit_redo()
-        except tk.TclError:
-            pass  # nothing to redo
-        return "break"
-
-    def _on_page_up(self, event: Optional[tk.Event] = None) -> str:
-        self._log_event("input_page_up")
-        self._canvas.yview_scroll(-1, "pages")
-        self._schedule_update_visible_images()
-        return "break"
-
-    def _on_page_down(self, event: Optional[tk.Event] = None) -> str:
-        self._log_event("input_page_down")
-        self._canvas.yview_scroll(1, "pages")
-        self._schedule_update_visible_images()
-        return "break"
-
-    def _on_tab(self, event: tk.Event) -> str:
-        return self._move_focus(1)
-
-    def _on_shift_tab(self, event: tk.Event) -> str:
-        return self._move_focus(-1)
-
-    def _scroll_into_view(self, index: int) -> None:
-        """Adjust the canvas's scroll position only as much as needed to
-        bring items[index]'s row fully into the viewport, used after Tab
-        moves focus somewhere not currently visible."""
-        canvas = self._canvas
-        row = self._row_frames.get(index)
-        if row is None:
-            self._log_event("scroll_into_view_no_row", index=index)
-            return
-        canvas.update_idletasks()
-        bbox = canvas.bbox("all")
-        total_height = (bbox[3] - bbox[1]) if bbox else 0
-        if total_height <= 0:
-            return
-
-        viewport_height = canvas.winfo_height()
-        row_top = row.winfo_y()
-        row_bottom = row_top + row.winfo_height()
-        view_top = canvas.canvasy(0)
-        view_bottom = canvas.canvasy(viewport_height)
-
-        action = "none"
-        if row_top < view_top:
-            canvas.yview_moveto(row_top / total_height)
-            action = "scroll_up"
-        elif row_bottom > view_bottom:
-            canvas.yview_moveto((row_bottom - viewport_height) / total_height)
-            action = "scroll_down"
-
-        self._log_event(
-            "scroll_into_view",
-            index=index,
-            row_top=row_top,
-            row_bottom=row_bottom,
-            view_top=round(view_top, 1),
-            view_bottom=round(view_bottom, 1),
-            total_height=total_height,
-            action=action,
+    def _sync_materialized_rows(
+        self, old_range: Optional[Tuple[int, int]], new_range: Tuple[int, int]
+    ) -> List[int]:
+        """Destroy materialized rows outside new_range, build rows inside
+        it that aren't materialized yet, and return the indices that were
+        newly built this call. Falls back to a full destroy-then-rebuild
+        when the new range doesn't overlap the old one at all (e.g. a
+        far-away _ensure_materialized jump), since there's nothing to
+        incrementally patch in that case."""
+        new_first, new_last = new_range
+        overlap = (
+            old_range is not None
+            and old_range[0] <= new_last
+            and new_first <= old_range[1]
         )
 
-    def _focus_text_box(self, index: int) -> None:
-        """Focus items[index]'s text box, scroll its row into view on the
-        review canvas, and make sure the box's own internal view shows its
-        cursor - the box may have been built (or last left) scrolled to
-        wherever its cursor happened to be, which isn't necessarily the
-        start of its text."""
-        self._log_event("focus_text_box", index=index)
-        widget = self._text_widgets[index]
-        widget.focus_set()
-        widget.see("insert")
-        self._scroll_into_view(index)
-
-    def _move_focus(self, delta: int) -> str:
-        """Move focus to the next/previous text box in transcript order (or
-        to/from the Finalize button at either end), paging the window
-        forward/backward first if the target isn't materialized yet."""
-        self._log_event(
-            "move_focus_start",
-            delta=delta,
-            focus_is_finalize_button=self.focus_get() is self._finalize_button,
-        )
-        if self.focus_get() is self._finalize_button:
-            if delta < 0:
-                indices = sorted(self._text_widgets.keys())
-                if indices:
-                    self._focus_text_box(indices[-1])
-            return "break"
-
-        current_index = self._focused_text_index()
-        indices = sorted(self._text_widgets.keys())
-
-        if current_index is None:
-            if indices:
-                self._focus_text_box(indices[0] if delta > 0 else indices[-1])
-            return "break"
-
-        pos = indices.index(current_index)
-        new_pos = pos + delta
-        if 0 <= new_pos < len(indices):
-            self._focus_text_box(indices[new_pos])
-            return "break"
-
-        if delta > 0:
-            # Off the bottom edge of the materialized text boxes - page
-            # forward until either a further text box appears (some
-            # materialized rows may be text-only messages with no box) or
-            # there's nothing left, in which case the Finalize button is
-            # the natural next stop.
-            while True:
-                if self._window_end >= len(self._items):
-                    self._log_event("move_focus_to_finalize_button")
-                    self._finalize_button.focus_set()
-                    return "break"
-                self._log_event("move_focus_paging_forward", current_index=current_index)
-                self._advance_forward()
-                candidates = [i for i in self._text_widgets if i > current_index]
-                if candidates:
-                    self._focus_text_box(min(candidates))
-                    return "break"
-        else:
-            # Off the top edge - page backward the same way. If we're
-            # already at the very first text box, there's nowhere to go.
-            while True:
-                if self._window_start <= 0:
-                    return "break"
-                self._log_event("move_focus_paging_backward", current_index=current_index)
-                self._advance_backward()
-                candidates = [i for i in self._text_widgets if i < current_index]
-                if candidates:
-                    self._focus_text_box(max(candidates))
-                    return "break"
-
-    def _transition_preserving_scroll(self, anchor_index: int, mutate: Callable[[], None]) -> None:
-        """Run `mutate` (which adds/removes rows in the window) and keep the
-        row at anchor_index - which must survive the transition unmodified -
-        at the same screen position it was in before. Without this, the
-        canvas's scroll offset stays an unchanged absolute pixel value while
-        the scrollregion's height (and everything below the edit point)
-        shifts, which both looks like a jump and miscomputes the next
-        trigger fraction (see module docstring)."""
-        canvas = self._canvas
-        anchor_row = self._row_frames.get(anchor_index)
-        old_canvas_top = canvas.canvasy(0)
-        old_anchor_y = anchor_row.winfo_y() if anchor_row is not None else None
-        old_bbox = canvas.bbox("all")
-        old_total_height = (old_bbox[3] - old_bbox[1]) if old_bbox else 0
-
-        mutate()
-
-        # Force layout now instead of waiting for the scroll_frame's
-        # <Configure> binding to update the scrollregion on its own time,
-        # since we need accurate geometry immediately to compute delta.
-        canvas.update_idletasks()
-        canvas.configure(scrollregion=canvas.bbox("all"))
-
-        new_anchor_y = None
-        delta = None
-        new_total_height = None
-        new_top_frac = None
-        if anchor_row is not None and old_anchor_y is not None and anchor_row.winfo_exists():
-            new_anchor_y = anchor_row.winfo_y()
-            delta = new_anchor_y - old_anchor_y
-            if delta:
-                bbox = canvas.bbox("all")
-                new_total_height = (bbox[3] - bbox[1]) if bbox else 0
-                if new_total_height > 0:
-                    new_top_frac = (old_canvas_top + delta) / new_total_height
-                    canvas.yview_moveto(new_top_frac)
-
-        self._log_event(
-            "transition_preserving_scroll",
-            anchor_index=anchor_index,
-            anchor_row_existed=anchor_row is not None,
-            old_canvas_top=round(old_canvas_top, 1),
-            old_total_height=old_total_height,
-            old_anchor_y=old_anchor_y,
-            new_anchor_y=new_anchor_y,
-            delta=delta,
-            new_total_height=new_total_height,
-            new_top_frac=round(new_top_frac, 4) if new_top_frac is not None else None,
-        )
-
-    def _advance_forward(self) -> None:
-        """Page the window forward by PAGE_STEP items: drop rows leaving the
-        top, build rows entering at the bottom."""
-        total = len(self._items)
-        old_start, old_end = self._window_start, self._window_end
-        if old_end >= total:
-            self._log_event("advance_forward_noop", reason="at_end")
-            return
-        new_start = min(old_start + PAGE_STEP, total)
-        new_end = min(new_start + PAGE_SIZE, total)
-        if new_start == old_start and new_end == old_end:
-            self._log_event("advance_forward_noop", reason="window_unchanged")
-            return
-
-        focused_index = self._focused_text_index()
-        self._log_event(
-            "advance_forward_start",
-            old_start=old_start, old_end=old_end,
-            new_start=new_start, new_end=new_end,
-            focused_index=focused_index,
-        )
-
-        def mutate():
-            for idx in range(old_start, min(new_start, old_end)):
+        if not overlap:
+            for idx in list(self._row_frames):
                 self._destroy_row(idx)
-            for idx in range(old_end, new_end):
+            newly_built = list(range(new_first, new_last + 1))
+            for idx in newly_built:
                 self._build_row(idx)
+            return newly_built
 
-        # new_start survives this transition unmodified (it's the first row
-        # not dropped), so it's a stable anchor to pin on screen.
-        if new_start < old_end:
-            self._transition_preserving_scroll(new_start, mutate)
-        else:
-            mutate()
-
-        self._window_start, self._window_end = new_start, new_end
-        self._restore_focus(focused_index)
-        self._schedule_update_visible_images()
-        self._log_event("advance_forward_done")
-
-    def _advance_backward(self) -> None:
-        """Page the window backward by PAGE_STEP items: drop rows leaving the
-        bottom, build rows entering at the top."""
-        old_start, old_end = self._window_start, self._window_end
-        if old_start <= 0:
-            self._log_event("advance_backward_noop", reason="at_start")
-            return
-        new_end = max(old_end - PAGE_STEP, 0)
-        new_start = max(new_end - PAGE_SIZE, 0)
-        if new_start == old_start and new_end == old_end:
-            self._log_event("advance_backward_noop", reason="window_unchanged")
-            return
-
-        focused_index = self._focused_text_index()
-        self._log_event(
-            "advance_backward_start",
-            old_start=old_start, old_end=old_end,
-            new_start=new_start, new_end=new_end,
-            focused_index=focused_index,
-        )
-
-        def mutate():
-            for idx in range(new_end, old_end):
+        old_first, old_last = old_range
+        for idx in list(self._row_frames):
+            if idx < new_first or idx > new_last:
                 self._destroy_row(idx)
-            if new_start < old_start:
-                anchor = self._row_frames[old_start]
-                for idx in range(old_start - 1, new_start - 1, -1):
-                    anchor = self._build_row(idx, before=anchor)
 
-        # old_start survives this transition unmodified (only the bottom is
-        # dropped, and new rows are inserted above it), so it's a stable
-        # anchor to pin on screen.
-        self._transition_preserving_scroll(old_start, mutate)
+        newly_built: List[int] = []
+        # Growth below the old window, appended in index order at the end
+        # of the pack order - mirrors the old design's forward paging.
+        for idx in range(old_last + 1, new_last + 1):
+            self._build_row(idx)
+            newly_built.append(idx)
+        # Growth above the old window, inserted in descending index order
+        # immediately before the current first materialized row - pack()
+        # has no "insert at index" beyond before=/after= a sibling, so this
+        # has to go back-to-front, mirroring the old design's backward
+        # paging.
+        if new_first < old_first:
+            anchor = self._row_frames.get(old_first)
+            for idx in range(old_first - 1, new_first - 1, -1):
+                anchor = self._build_row(idx, before=anchor)
+                newly_built.append(idx)
+        return newly_built
 
-        self._window_start, self._window_end = new_start, new_end
-        self._restore_focus(focused_index)
-        self._schedule_update_visible_images()
-        self._log_event("advance_backward_done")
+    def _remeasure_built_rows(self, scroll_top: float, newly_built: List[int]) -> float:
+        """Overwrite self._row_heights for newly-built rows with their real
+        winfo_height(), and return the exact pixel delta that the canvas's
+        scroll offset must be corrected by (sum of real-minus-estimated
+        height, for rows whose pre-correction offset sits above
+        scroll_top) to keep the same content on screen. This delta is
+        exact and bounded - derived from the same trusted height table used
+        for the scrollregion - unlike the previous design's reverse-
+        engineered "anchor row moved by N px" math, so applying it can
+        never request an out-of-range scroll fraction (see module
+        docstring)."""
+        if not newly_built:
+            return 0.0
+        old_heights = list(self._row_heights)
+        delta = 0.0
+        for idx in newly_built:
+            real = self._row_frames[idx].winfo_height()
+            old = old_heights[idx]
+            if real and real != old:
+                row_offset = sum(old_heights[:idx])
+                if row_offset < scroll_top:
+                    delta += real - old
+                self._row_heights[idx] = real
+        return delta
 
-    def _maybe_advance_page(self) -> None:
-        """Page forward/backward once the materialized window's edge gets
-        too close to the viewport's edge - i.e. once there isn't much buffer
-        of already-built rows left between the viewport and the start/end of
-        what's currently materialized. See the module docstring for why this
-        is edge-relative rather than a fraction of the whole scrollregion."""
+    def _reconcile(self) -> None:
+        """Recompute which item indices should be materialized from the
+        canvas's current scroll position and self._row_heights, and
+        reconcile the actually-built rows to match - building/destroying
+        as needed, repositioning the materialized block, and fixing up the
+        scrollregion. Pure-function-driven and idempotent: calling this
+        twice with no scroll movement in between computes the same range
+        and is a no-op the second time. See compute_visible_range and the
+        module docstring for why that idempotency is what makes this
+        immune to the oscillation bug a previous, stateful step-forward/
+        step-backward design suffered from - there's no separate "should I
+        page forward" vs. "should I page backward" check that can disagree
+        about the resting state, because there's only one range
+        computation, not two opposing ones racing each other."""
         canvas = self._canvas
         viewport_height = canvas.winfo_height()
         if viewport_height <= 1:
             return
-        visible_top = canvas.canvasy(0)
-        visible_bottom = canvas.canvasy(viewport_height)
+        scroll_top = canvas.canvasy(0)
         buffer = viewport_height * SCROLL_BUFFER_VIEWPORTS
 
-        last_row = self._row_frames.get(self._window_end - 1)
-        last_row_margin = (
-            last_row.winfo_y() + last_row.winfo_height() - visible_bottom
-            if last_row is not None else None
+        first_idx, last_idx = compute_visible_range(
+            self._row_heights, scroll_top, viewport_height, buffer
         )
-        first_row = self._row_frames.get(self._window_start)
-        first_row_margin = (
-            visible_top - first_row.winfo_y() if first_row is not None else None
+
+        old_range = self._materialized_range
+        newly_built = self._sync_materialized_rows(old_range, (first_idx, last_idx))
+        self._materialized_range = (first_idx, last_idx)
+
+        canvas.update_idletasks()
+        delta = self._remeasure_built_rows(scroll_top, newly_built)
+
+        total_height = sum(self._row_heights)
+        if delta and total_height > 0:
+            canvas.yview_moveto(max(0.0, min(scroll_top + delta, total_height)) / total_height)
+
+        canvas_width = max(canvas.winfo_width(), 1)
+        canvas.configure(scrollregion=(0, 0, canvas_width, total_height))
+        canvas.coords(self._canvas_window, 0, self._offset_of(first_idx))
+
+        assert sorted(self._row_frames) == list(range(first_idx, last_idx + 1)), (
+            sorted(self._row_frames), first_idx, last_idx,
         )
+
+        self._update_visible_images()
         self._log_event(
-            "maybe_advance_page_check",
-            visible_top=round(visible_top, 1),
-            visible_bottom=round(visible_bottom, 1),
-            buffer=round(buffer, 1),
-            last_row_margin=round(last_row_margin, 1) if last_row_margin is not None else None,
-            first_row_margin=round(first_row_margin, 1) if first_row_margin is not None else None,
+            "reconcile", first_idx=first_idx, last_idx=last_idx, total_height=total_height
         )
 
-        if (
-            last_row_margin is not None
-            and self._window_end < len(self._items)
-            and last_row_margin < buffer
-        ):
-            self._log_event("maybe_advance_page_decision", direction="forward")
-            self._advance_forward()
-            return
-
-        if (
-            first_row_margin is not None
-            and self._window_start > 0
-            and first_row_margin < buffer
-        ):
-            self._log_event("maybe_advance_page_decision", direction="backward")
-            self._advance_backward()
-            return
-
-        self._log_event("maybe_advance_page_decision", direction="none")
-
-    def _schedule_update_visible_images(self) -> None:
-        """Coalesce a burst of scroll events into a single load/unload pass,
+    def _schedule_reconcile(self) -> None:
+        """Coalesce a burst of scroll events into a single _reconcile pass,
         run shortly after the most recent event rather than on every one."""
         had_pending = self._update_job is not None
         if self._update_job is not None:
             self.after_cancel(self._update_job)
         self._log_event("debounce_scheduled", had_pending=had_pending)
-        self._update_job = self.after(DEBOUNCE_MS, self._run_scheduled_update)
+        self._update_job = self.after(DEBOUNCE_MS, self._run_scheduled_reconcile)
 
-    def _run_scheduled_update(self) -> None:
+    def _run_scheduled_reconcile(self) -> None:
         self._update_job = None
         self._log_event("debounce_fired")
-        self._update_visible_images()
+        self._reconcile()
 
     def _update_visible_images(self) -> None:
         """Load images for rows within the (buffered) visible viewport and
-        unload images for rows outside it."""
+        unload images for rows outside it. Uses self._row_heights/_offset_of
+        (absolute canvas coordinates) rather than widget-relative geometry,
+        which is relative to the repositioned _scroll_frame block (see
+        _reconcile), not the canvas's coordinate space."""
         canvas = self._canvas
         canvas.update_idletasks()
         viewport_height = canvas.winfo_height()
@@ -711,40 +500,7 @@ class ReviewFrame(ttk.Frame):
         visible_top = canvas.canvasy(0) - buffer
         visible_bottom = canvas.canvasy(viewport_height) + buffer
 
-        for slot in self._image_slots.values():
-            row_top = slot.row.winfo_y()
-            row_bottom = row_top + slot.row.winfo_height()
-            should_be_loaded = row_bottom >= visible_top and row_top <= visible_bottom
-
-            if should_be_loaded and not slot.loaded:
-                self._load_image(slot)
-            elif not should_be_loaded and slot.loaded:
-                self._unload_image(slot)
-
-        self._maybe_advance_page()
-
-    def _load_image(self, slot: _ImageSlot) -> None:
-        try:
-            image = Image.open(slot.item.image_path)
-            image.thumbnail(THUMBNAIL_SIZE)
-            photo = ImageTk.PhotoImage(image)
-        except Exception:
-            logger.warning(
-                "could not load image preview",
-                extra=logging_config.extra(image_path=str(slot.item.image_path)),
-            )
-            slot.label.config(image="", text=f"(could not preview {slot.item.image_path.name})")
-            slot.loaded = True  # don't keep retrying a permanently-broken image every scroll
-            return
-
-        slot.photo = photo
-        slot.label.config(image=photo, text="")
-        slot.loaded = True
-
-    def _unload_image(self, slot: _ImageSlot) -> None:
-        slot.label.config(image="", text="(scroll to load image)")
-        slot.photo = None  # drop the reference so Tk/PIL can free the memory
-        slot.loaded = False
+        self._images.update_visible(self._offset_of, self._row_heights, visible_top, visible_bottom)
 
     def _on_finalize_clicked(self) -> None:
         logger.info("finalize button clicked on review screen")

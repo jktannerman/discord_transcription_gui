@@ -1,3 +1,6 @@
+claude should ignore this file for now
+
+
 fix date stuff - done?
 basic keyboard shortcuts - done
 
@@ -28,7 +31,7 @@ map mode
 personalised clipboard?
 
 
-change user tokens
+change user tokens - done
 
 
 The current task: instead of being hardcoded, as they currently are, the users whose messages should be picked by the filter are also selected upon startup. These should be cached and selectable in a similar way to the other startup inputs. For ease of use, the program should accept and display user ids that are of the form: "123456789 - Alice", but use only the leading digits for the actual HTML filter.
@@ -63,4 +66,12 @@ A very minor bug: the window bar does not appear black on startup. This is fixed
 
 save load
 
-For long chatlogs, the ability to stop transcribing and resume later would be good. 
+
+For long chatlogs, the ability to stop transcribing and resume later would be useful. Ideally, every 5 seconds, the current state would be saved. Each image-containing message would have two associated strings: the original machine-transcribed output, and the saved user-edited text. Upon resuming a prior session, the user's previous position and focus should be restored.
+
+Relatedly, it would be useful for the user to be able to edit a copy of pure text Discord messages as well, purely in order to control spacing as desired. These should be saved too.
+
+
+
+
+This project has now seen several updates and revisions. Please consider its current overall structure. Is it still natural? Are there any obvious problems or potential improvements? Are there any design decisions which feel likely to lead to problems down the line?
