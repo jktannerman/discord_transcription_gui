@@ -26,14 +26,23 @@ row that survives the transition and compensates the canvas's scroll offset
 by however many pixels were added/removed above it. This isn't just
 cosmetic: adding/removing rows above the viewport changes the scrollregion's
 total height while Tk's stored scroll offset is an absolute pixel value, not
-"the same row" - left uncompensated, that mismatch pushes the visible
-top/bottom fraction further past whatever threshold just triggered the
-transition (the math is monotonic: (a+H)/(b+H) > a/b for any H > 0), so one
-page load made the next one more likely rather than less, producing a
-runaway cascade of transitions ("stuck in a loop") instead of a single,
-settled one. Pinning a surviving row's screen position keeps the visible
-content - and therefore the trigger fractions - stable across the
-transition.
+"the same row" - left uncompensated, the visible content would visibly jump
+on every transition. Pinning a surviving row's screen position keeps the
+visible content stable across the transition.
+
+Note that _maybe_advance_page deliberately does NOT decide whether to page
+based on the viewport's fraction of the total scrollregion. An earlier
+version did, and it produced an infinite loop: _transition_preserving_scroll
+keeps the same content on screen across a transition, so the fraction-based
+trigger that had just fired was usually still true immediately afterward,
+and the debounced image-visibility refresh scheduled by the transition
+itself would re-evaluate that unchanged condition and page again - with no
+further user input involved. Instead, the trigger compares the materialized
+window's edges (self._window_start/_window_end, via self._row_frames) to the
+viewport's edges: paging forward/backward adds/removes rows at that edge,
+which directly moves the trigger condition's inputs, so the condition
+reliably goes false once enough margin exists - independent of wherever the
+anchor leaves the scroll position.
 
 Images are additionally loaded/decoded lazily within the materialized
 window, only for rows within (or near) the visible viewport, and unloaded
@@ -92,11 +101,6 @@ DEBOUNCE_MS = 80
 # already covers a large scroll buffer on either side of the visible area.
 PAGE_SIZE = 12
 PAGE_STEP = PAGE_SIZE // 2
-
-# Fraction of the canvas's scrollregion the visible viewport's far edge has
-# to cross before the next/previous half-page is loaded in.
-BOTTOM_TRIGGER_FRACTION = 0.7
-TOP_TRIGGER_FRACTION = 0.3
 
 # Matches the word immediately before the cursor, plus any whitespace
 # trailing it up to the cursor - what Ctrl+Backspace deletes.
@@ -263,6 +267,13 @@ class ReviewFrame(ttk.Frame):
         )
         saved = self._saved_texts[index]
         text_widget.insert("1.0", saved if saved is not None else (item.initial_text or ""))
+        # The "insert" mark has right gravity, so inserting at "1.0" (where
+        # it already sits on a fresh widget) leaves it at the *end* of the
+        # new text rather than the start - then Tab-focusing this box later
+        # would put the cursor (and the box's own auto-scroll-to-cursor) at
+        # the bottom, with the start of the text scrolled out of view.
+        text_widget.mark_set("insert", "1.0")
+        text_widget.see("1.0")
         text_widget.edit_reset()  # don't let the initial insert be undoable
         text_widget.pack(side="left", fill="both", expand=True, padx=6)
         text_widget.bind("<Control-BackSpace>", self._delete_word_backward)
@@ -375,6 +386,17 @@ class ReviewFrame(ttk.Frame):
         elif row_bottom > view_bottom:
             canvas.yview_moveto((row_bottom - viewport_height) / total_height)
 
+    def _focus_text_box(self, index: int) -> None:
+        """Focus items[index]'s text box, scroll its row into view on the
+        review canvas, and make sure the box's own internal view shows its
+        cursor - the box may have been built (or last left) scrolled to
+        wherever its cursor happened to be, which isn't necessarily the
+        start of its text."""
+        widget = self._text_widgets[index]
+        widget.focus_set()
+        widget.see("insert")
+        self._scroll_into_view(index)
+
     def _move_focus(self, delta: int) -> str:
         """Move focus to the next/previous text box in transcript order (or
         to/from the Finalize button at either end), paging the window
@@ -383,9 +405,7 @@ class ReviewFrame(ttk.Frame):
             if delta < 0:
                 indices = sorted(self._text_widgets.keys())
                 if indices:
-                    target = indices[-1]
-                    self._text_widgets[target].focus_set()
-                    self._scroll_into_view(target)
+                    self._focus_text_box(indices[-1])
             return "break"
 
         current_index = self._focused_text_index()
@@ -393,17 +413,13 @@ class ReviewFrame(ttk.Frame):
 
         if current_index is None:
             if indices:
-                target = indices[0] if delta > 0 else indices[-1]
-                self._text_widgets[target].focus_set()
-                self._scroll_into_view(target)
+                self._focus_text_box(indices[0] if delta > 0 else indices[-1])
             return "break"
 
         pos = indices.index(current_index)
         new_pos = pos + delta
         if 0 <= new_pos < len(indices):
-            target = indices[new_pos]
-            self._text_widgets[target].focus_set()
-            self._scroll_into_view(target)
+            self._focus_text_box(indices[new_pos])
             return "break"
 
         if delta > 0:
@@ -419,9 +435,7 @@ class ReviewFrame(ttk.Frame):
                 self._advance_forward()
                 candidates = [i for i in self._text_widgets if i > current_index]
                 if candidates:
-                    target = min(candidates)
-                    self._text_widgets[target].focus_set()
-                    self._scroll_into_view(target)
+                    self._focus_text_box(min(candidates))
                     return "break"
         else:
             # Off the top edge - page backward the same way. If we're
@@ -432,9 +446,7 @@ class ReviewFrame(ttk.Frame):
                 self._advance_backward()
                 candidates = [i for i in self._text_widgets if i < current_index]
                 if candidates:
-                    target = max(candidates)
-                    self._text_widgets[target].focus_set()
-                    self._scroll_into_view(target)
+                    self._focus_text_box(max(candidates))
                     return "break"
 
     def _transition_preserving_scroll(self, anchor_index: int, mutate: Callable[[], None]) -> None:
@@ -536,10 +548,34 @@ class ReviewFrame(ttk.Frame):
         )
 
     def _maybe_advance_page(self) -> None:
-        top_frac, bottom_frac = self._canvas.yview()
-        if bottom_frac > BOTTOM_TRIGGER_FRACTION and self._window_end < len(self._items):
+        """Page forward/backward once the materialized window's edge gets
+        too close to the viewport's edge - i.e. once there isn't much buffer
+        of already-built rows left between the viewport and the start/end of
+        what's currently materialized. See the module docstring for why this
+        is edge-relative rather than a fraction of the whole scrollregion."""
+        canvas = self._canvas
+        viewport_height = canvas.winfo_height()
+        if viewport_height <= 1:
+            return
+        visible_top = canvas.canvasy(0)
+        visible_bottom = canvas.canvasy(viewport_height)
+        buffer = viewport_height * SCROLL_BUFFER_VIEWPORTS
+
+        last_row = self._row_frames.get(self._window_end - 1)
+        if (
+            last_row is not None
+            and self._window_end < len(self._items)
+            and last_row.winfo_y() + last_row.winfo_height() - visible_bottom < buffer
+        ):
             self._advance_forward()
-        elif top_frac < TOP_TRIGGER_FRACTION and self._window_start > 0:
+            return
+
+        first_row = self._row_frames.get(self._window_start)
+        if (
+            first_row is not None
+            and self._window_start > 0
+            and visible_top - first_row.winfo_y() < buffer
+        ):
             self._advance_backward()
 
     def _schedule_update_visible_images(self) -> None:

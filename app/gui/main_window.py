@@ -23,6 +23,11 @@ logger = logging_config.get_logger(__name__)
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
+        # Stay hidden until everything (including the dark title bar) is
+        # set up, then show it all in one shot - see theme.enable_dark_title_bar's
+        # docstring for why showing the window before that is set is what
+        # caused the title bar to start out light.
+        self.root.withdraw()
         self.root.title("Discord Transcription Tool")
         self.root.geometry("700x500")
         self.root.state("zoomed")
@@ -41,11 +46,12 @@ class App:
         self._image_folder = tk.StringVar(value=_most_recent("image_folder"))
         self._output_path = tk.StringVar(value=_most_recent("output_path"))
         self._start_date = tk.StringVar(value=state.read_last_run_date() or "")
-        self._use_cache = tk.BooleanVar(value=False)
+        self._use_cache = tk.BooleanVar(value=True)
 
         self._review_items: list[pipeline.ReviewItem] | None = None
 
         self.show_setup()
+        self.root.deiconify()
 
     # -- frame management -------------------------------------------------
 
@@ -88,9 +94,6 @@ class App:
             frame, text="Use cached OCR data for this image folder", variable=self._use_cache
         )
         self._cache_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=4)
-        self._cache_check.state(["disabled"])
-        self._image_folder.trace_add("write", self._update_cache_checkbox)
-        self._update_cache_checkbox()  # sync to the prefilled image folder, if any
 
         self._error_label = ttk.Label(frame, text="", foreground="red")
         self._error_label.grid(row=5, column=0, columnspan=3, sticky="w", pady=4)
@@ -115,15 +118,6 @@ class App:
         )
         if path:
             self._output_path.set(path)
-
-    def _update_cache_checkbox(self, *_args) -> None:
-        folder = self._image_folder.get()
-        has_cache = bool(folder) and state.load_cache(folder) is not None
-        if has_cache:
-            self._cache_check.state(["!disabled"])
-        else:
-            self._use_cache.set(False)
-            self._cache_check.state(["disabled"])
 
     def _on_start(self) -> None:
         self._error_label.config(text="")

@@ -35,8 +35,9 @@ What's in scope for v1 (by design, agreed with the project owner):
    recently used value and offering your last several picks as a dropdown
    (cached to disk per field, most-recent-first). The start date field is
    pre-filled from the last recorded run; a "use cached OCR data" checkbox
-   is enabled only when a matching cache already exists for the selected
-   image folder. The window launches maximized.
+   starts checked and can always be toggled - if it's checked but no
+   matching cache exists for the selected image folder, OCR just runs
+   normally. The window launches maximized.
 2. **OCR pass** (background thread, progress bar) — walks the image folder,
    skips non-image files and anything older than the start date, and runs
    Tesseract on the rest. Results are cached to disk as JSON so a re-run

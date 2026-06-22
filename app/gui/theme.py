@@ -36,12 +36,22 @@ def enable_dark_title_bar(window: tk.Tk) -> None:
     which is what made it look like the dark theme "kicked in on resize".
     The SetWindowPos SWP_FRAMECHANGED call below forces that repaint
     immediately, without actually changing the window's size or position.
+
+    Must be called while the window is still withdrawn (see the
+    withdraw()/deiconify() pair in App.__init__) - i.e. before the window has
+    ever actually been shown on screen. Forcing a repaint *after* the
+    window's first real paint (whether synchronously during construction, or
+    deferred via root.after() to run once mainloop() starts - both were
+    tried) was unreliable, since the window can already have been mapped by
+    Tk before either point. Setting the attribute while still withdrawn and
+    only then showing the window means DWM picks up the dark theme on the
+    window's actual first paint, avoiding the race entirely.
     """
     if sys.platform != "win32":
         return
 
     try:
-        window.update()  # Ensure window is created
+        window.update_idletasks()
         hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
 
         # DWMWA_USE_IMMERSIVE_DARK_MODE = 20 (Windows 10 20H1+)
