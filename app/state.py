@@ -155,98 +155,115 @@ def save_approved_users_state(text: str, use_all_users: bool) -> None:
     )
 
 
-def load_session() -> Optional[dict]:
-    """Return the saved in-progress review session, or None if there isn't
-    one (no prior run, or the last run finished/was finalized normally)."""
-    session = _read_json_with_backup(config.SESSION_FILE)
+def load_session(html_path: str) -> Optional[dict]:
+    """Return the saved in-progress review session for html_path, or None if
+    there isn't one for that specific chatlog (no prior run for it, or its
+    last run finished/was finalized normally). Sessions saved for other
+    chatlogs, if any, are unaffected either way."""
+    sessions = _read_json_with_backup(config.SESSIONS_FILE)
+    if not isinstance(sessions, dict):
+        logger.info("no sessions file found")
+        return None
+
+    session = sessions.get(str(Path(html_path)))
     if session is None:
         return None
 
     logger.info(
         "loaded saved session",
-        extra=logging_config.extra(output_path=session.get("output_path")),
+        extra=logging_config.extra(html_path=html_path, output_path=session.get("output_path")),
     )
     return session
 
 
-def save_session(session: dict) -> None:
+def save_session(html_path: str, session: dict) -> None:
     """Persist the in-progress review session (run inputs, per-item edits,
-    focus/scroll position), overwriting any previously saved session - only
-    one session is ever kept, same as the OCR cache. This is the highest-
+    focus/scroll position) for html_path, overwriting only that chatlog's
+    previously saved session - sessions saved for other chatlogs are kept
+    alongside it indefinitely, so two different chatlogs can each be
+    partially transcribed and resumed independently. This is the highest-
     value target for crash safety in the whole app: it's autosaved every
     few seconds while reviewing a transcript that may represent hours of
     OCR + correction work, and the app can be closed (or crash) at any
     instant mid-write. _atomic_write_json's fsync + rename means that never
     corrupts the file in place, and the .bak rotation means even a write
     that completes but encodes a bad/incomplete in-memory session still
-    leaves the previous-known-good session recoverable on the next
+    leaves the previous-known-good sessions recoverable on the next
     resume-prompt rather than discarding all progress outright."""
-    _atomic_write_json(config.SESSION_FILE, session)
+    sessions = _read_json_with_backup(config.SESSIONS_FILE)
+    if not isinstance(sessions, dict):
+        sessions = {}
+    sessions[str(Path(html_path))] = session
+    _atomic_write_json(config.SESSIONS_FILE, sessions)
 
     logger.debug(
         "saved session",
         extra=logging_config.extra(
+            html_path=html_path,
             output_path=session.get("output_path"),
             item_count=len(session.get("edited_texts") or []),
         ),
     )
 
 
-def clear_session() -> None:
-    """Delete the saved in-progress session and its backup, if any - called
-    once a run is finalized, since there's nothing left to resume. The
-    backup must be removed too, not just the primary file - otherwise
-    load_session's backup fallback would resurrect a stale, already-
-    finalized session on the next launch."""
-    backup_path = config.SESSION_FILE.with_suffix(".bak")
-    deleted = False
-    if config.SESSION_FILE.exists():
-        config.SESSION_FILE.unlink()
-        deleted = True
-    if backup_path.exists():
-        backup_path.unlink()
-        deleted = True
+def clear_session(html_path: str) -> None:
+    """Remove the saved in-progress session for html_path only - called
+    once that chatlog's run is finalized, since there's nothing left to
+    resume for it. Sessions saved for other chatlogs are left in place."""
+    sessions = _read_json_with_backup(config.SESSIONS_FILE)
+    if not isinstance(sessions, dict):
+        return
 
-    if deleted:
-        logger.info("cleared saved session")
+    key = str(Path(html_path))
+    if key not in sessions:
+        return
+
+    del sessions[key]
+    _atomic_write_json(config.SESSIONS_FILE, sessions)
+
+    logger.info("cleared saved session", extra=logging_config.extra(html_path=html_path))
 
 
 def load_cache(folder_path: str) -> Optional[dict]:
     """Return the cached {image_name: [paragraphs]} dict for folder_path.
 
-    Returns None if there is no cache, or the cache was written for a
-    different image folder.
+    Returns None if there is no cache, or no cache was ever saved for that
+    specific image folder - caches for other folders, if any, don't affect
+    this lookup either way.
     """
     cache = _read_json_with_backup(config.OCR_CACHE_FILE)
-    if cache is None:
+    if not isinstance(cache, dict):
         logger.info("no ocr cache file found")
         return None
 
-    if cache.get("folder") != str(Path(folder_path)):
+    data = cache.get(str(Path(folder_path)))
+    if data is None:
         logger.info(
-            "ocr cache exists but is for a different folder",
-            extra=logging_config.extra(
-                requested_folder=str(Path(folder_path)), cached_folder=cache.get("folder")
-            ),
+            "no ocr cache for this folder",
+            extra=logging_config.extra(requested_folder=str(Path(folder_path))),
         )
         return None
 
-    data = cache.get("data")
     logger.info(
         "loaded ocr cache",
-        extra=logging_config.extra(folder=str(Path(folder_path)), image_count=len(data or {})),
+        extra=logging_config.extra(folder=str(Path(folder_path)), image_count=len(data)),
     )
     return data
 
 
 def save_cache(folder_path: str, data: dict) -> None:
-    """Persist the {image_name: [paragraphs]} dict for folder_path. This is
-    the other high-value target alongside the session file - it represents
+    """Persist the {image_name: [paragraphs]} dict for folder_path,
+    overwriting only that folder's previously cached entry - caches for
+    other folders are kept alongside it indefinitely, so OCR'ing a second
+    chatlog's images never forces a first chatlog's cache to be redone.
+    This is the other high-value target alongside sessions - it represents
     however long the Tesseract pass over the whole image folder took, and
     losing it forces redoing OCR from scratch on the next run - so it goes
-    through the same atomic write + backup rotation as the session."""
-    cache = {"folder": str(Path(folder_path)), "data": data}
-
+    through the same atomic write + backup rotation as sessions."""
+    cache = _read_json_with_backup(config.OCR_CACHE_FILE)
+    if not isinstance(cache, dict):
+        cache = {}
+    cache[str(Path(folder_path))] = data
     _atomic_write_json(config.OCR_CACHE_FILE, cache)
 
     logger.info(

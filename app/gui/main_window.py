@@ -9,11 +9,17 @@ finishing with a summary screen.
 Also owns session persistence: while the review screen is up, the current
 edits/focus/scroll position are autosaved every
 config.AUTOSAVE_INTERVAL_MS (see _start_autosave/_run_autosave) so closing
-the app mid-review doesn't lose progress. On the next launch, App.__init__
-checks for a saved session and offers to resume it (_offer_resume),
-rebuilding the same run from its saved inputs and re-applying the saved
-edits/position once OCR/parsing finish (_resume_session/_show_review). The
-saved session is cleared once a run is actually finalized.
+the app mid-review doesn't lose progress. Sessions are saved per HTML
+chatlog file (see state.save_session/load_session/clear_session), not as
+one global slot, so two different chatlogs can each be partially
+transcribed and resumed independently - one isn't evicted by starting the
+other. Rather than a launch-time global prompt, the check happens in
+_on_start once a specific HTML file has been chosen: if a saved session
+exists for that exact file, _on_start offers to resume it
+(_resume_session), rebuilding the same run from its saved inputs and
+re-applying the saved edits/position once OCR/parsing finish
+(_show_review). That chatlog's saved session is cleared once its run is
+actually finalized, or if the user declines to resume it.
 """
 
 import threading
@@ -71,13 +77,8 @@ class App:
         self._autosave_job: Optional[str] = None
         self._resume_payload: Optional[dict] = None
 
-        pending_session = state.load_session()
-
         self.show_setup()
         self.root.deiconify()
-
-        if pending_session is not None:
-            self.root.after(100, self._offer_resume, pending_session)
 
     # -- frame management -------------------------------------------------
 
@@ -221,6 +222,16 @@ class App:
             self._error_label.config(text="Please select the HTML file, image folder, and output file.")
             return
 
+        pending_session = state.load_session(html_path)
+        if pending_session is not None:
+            if messagebox.askyesno(
+                "Resume previous session",
+                "A saved in-progress review session exists for this chatlog. Resume it?",
+            ):
+                self._resume_session(html_path, pending_session)
+                return
+            state.clear_session(html_path)
+
         try:
             start_time = pipeline.parse_start_date(self._start_date.get())
         except ValueError as exc:
@@ -313,25 +324,15 @@ class App:
 
     # -- session resume ------------------------------------------------------
 
-    def _offer_resume(self, session: dict) -> None:
-        """Called shortly after launch if state.load_session() found a
-        saved in-progress session. Discards it outright if declined, since
-        there's nothing useful to do with a stale "no" - the user would
-        just be asked again next launch otherwise."""
-        if not messagebox.askyesno(
-            "Resume previous session",
-            "An in-progress review session was found. Resume it?",
-        ):
-            state.clear_session()
-            return
-        self._resume_session(session)
-
-    def _resume_session(self, session: dict) -> None:
+    def _resume_session(self, html_path_key: str, session: dict) -> None:
         """Re-run the saved session's inputs through the normal OCR/parse
         pipeline (use_cache forced from the saved value, so resuming
         doesn't necessarily redo OCR) - _show_review then re-applies the
         saved edits/focus/scroll position once that finishes, the same way
-        a fresh run's review items are built either way."""
+        a fresh run's review items are built either way. html_path_key is
+        the exact key this session was loaded under (the chatlog's HTML
+        path), used to clear the right chatlog's saved session if it turns
+        out to be malformed."""
         try:
             html_path = Path(session["html_path"])
             image_folder = Path(session["image_folder"])
@@ -345,7 +346,7 @@ class App:
                 "malformed saved session, discarding",
                 extra=logging_config.extra(error=str(exc)),
             )
-            state.clear_session()
+            state.clear_session(html_path_key)
             return
 
         self._image_folder.set(str(image_folder))
@@ -390,7 +391,7 @@ class App:
                 "focus_slot": list(focused_slot) if focused_slot is not None else None,
                 "scroll_fraction": frame.get_scroll_top_fraction(),
             }
-            state.save_session(session)
+            state.save_session(str(self._html_path_for_run), session)
         self._autosave_job = self.root.after(config.AUTOSAVE_INTERVAL_MS, self._run_autosave)
 
     def _on_ocr_done(
@@ -473,7 +474,7 @@ class App:
             return
 
         self._cancel_autosave()
-        state.clear_session()
+        state.clear_session(str(self._html_path_for_run))
 
         frame = ttk.Frame(self.container)
         ttk.Label(frame, text="Done! The new content has been copied to your clipboard.", padding=12).pack()

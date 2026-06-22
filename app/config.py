@@ -25,10 +25,17 @@ BREAK_MARKER = "[BREAK]"
 
 APP_DATA_DIR = Path.home() / ".discord_transcription_gui"
 RUN_DATE_FILE = APP_DATA_DIR / "run_dates.json"
+# {image_folder: {image_name: [paragraphs]}} - one entry per image folder,
+# kept indefinitely so OCR'ing one chatlog's images never evicts another
+# chatlog's already-OCR'd cache.
 OCR_CACHE_FILE = APP_DATA_DIR / "ocr_cache.json"
 RECENT_PATHS_FILE = APP_DATA_DIR / "recent_paths.json"
 APPROVED_USERS_STATE_FILE = APP_DATA_DIR / "approved_users.json"
-SESSION_FILE = APP_DATA_DIR / "session.json"
+# {html_path: session_dict} - one in-progress review session per chatlog,
+# kept indefinitely until that specific chatlog's run is finalized, so two
+# different chatlogs can each be partially transcribed and resumed
+# independently of one another.
+SESSIONS_FILE = APP_DATA_DIR / "sessions.json"
 LOG_FILE = APP_DATA_DIR / "app.log"
 
 # How many previously-used values to keep, per setup-screen field, for the
@@ -36,7 +43,7 @@ LOG_FILE = APP_DATA_DIR / "app.log"
 MAX_RECENT_PATHS = 8
 
 # How often the review screen's in-progress edits/scroll position/focus are
-# autosaved to SESSION_FILE, so a session can be resumed after closing the
+# autosaved to SESSIONS_FILE, so a session can be resumed after closing the
 # app mid-review.
 AUTOSAVE_INTERVAL_MS = 5000
 

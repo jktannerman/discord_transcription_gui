@@ -43,13 +43,18 @@ What's in scope for v1 (by design, agreed with the project owner):
    bypasses the filter entirely (and greys out the users box, since it's
    moot while checked). The window launches maximized.
 
-   If an in-progress review session was left over from last time (closing
-   the app mid-review, rather than clicking Finalize), a prompt appears
-   before the setup screen offering to resume it - accepting skips the
-   setup screen entirely and re-runs that session's saved inputs (OCR
-   cache permitting) straight through to the review screen, with every
-   saved edit, the focused text box, and the scroll position all restored.
-   Declining discards the saved session outright.
+   In-progress review sessions are saved per chatlog HTML file, indefinitely,
+   not as a single global slot - so two different chatlogs can each be left
+   mid-review (closing the app rather than clicking Finalize) and later
+   resumed independently, without one evicting the other. The OCR cache is
+   likewise kept per image folder rather than for only the most recent one,
+   so switching between chatlogs never forces a re-OCR of a folder already
+   done. Clicking Start checks whether the chosen HTML file has a saved
+   session and, if so, prompts to resume it - accepting re-runs that
+   session's saved inputs (OCR cache permitting) straight through to the
+   review screen, with every saved edit, the focused text box, and the
+   scroll position all restored. Declining discards that chatlog's saved
+   session outright (other chatlogs' saved sessions are unaffected).
 2. **OCR pass** (background thread, progress bar) — walks the image folder,
    skips non-image files and anything older than the start date, and runs
    Tesseract on the rest. Results are cached to disk as JSON so a re-run
@@ -292,10 +297,11 @@ py -3.13 -m app.main
 py -3.13 -m pytest gui_transcription\app_tests -v
 ```
 
-95 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
+97 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
 splitting and backend dispatch, the JSON log formatter, JSON state
-persistence (run dates, OCR cache, recent-path history, in-progress session
-save/resume), start-date validation, review-item building/output-writing
+persistence (run dates, OCR cache and in-progress sessions both kept
+per-chatlog/per-folder indefinitely rather than as a single global slot,
+recent-path history), start-date validation, review-item building/output-writing
 (including a text-only message's editable spacing copy standing in for its
 immutable original when written out, and a message with both a caption
 and an image getting two independently-edited text blocks), the OCR batch

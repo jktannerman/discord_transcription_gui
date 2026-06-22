@@ -39,6 +39,22 @@ def test_cache_returns_none_for_different_folder(tmp_path, monkeypatch):
     assert state.load_cache(str(tmp_path / "images_b")) is None
 
 
+def test_cache_keeps_multiple_folders_indefinitely(tmp_path, monkeypatch):
+    """Caching a second chatlog's image folder must not evict the first's -
+    each folder gets its own indefinitely-kept entry."""
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "OCR_CACHE_FILE", tmp_path / "ocr_cache.json")
+
+    folder_a = str(tmp_path / "images_a")
+    folder_b = str(tmp_path / "images_b")
+
+    state.save_cache(folder_a, {"a.png": ["text a"]})
+    state.save_cache(folder_b, {"b.png": ["text b"]})
+
+    assert state.load_cache(folder_a) == {"a.png": ["text a"]}
+    assert state.load_cache(folder_b) == {"b.png": ["text b"]}
+
+
 def test_load_recent_paths_returns_empty_when_no_file(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
     monkeypatch.setattr(config, "RECENT_PATHS_FILE", tmp_path / "recent_paths.json")
@@ -108,14 +124,14 @@ def test_approved_users_state_round_trip(tmp_path, monkeypatch):
 
 def test_load_session_returns_none_when_no_file(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "SESSION_FILE", tmp_path / "session.json")
+    monkeypatch.setattr(config, "SESSIONS_FILE", tmp_path / "sessions.json")
 
-    assert state.load_session() is None
+    assert state.load_session("chat.html") is None
 
 
 def test_session_round_trip(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "SESSION_FILE", tmp_path / "session.json")
+    monkeypatch.setattr(config, "SESSIONS_FILE", tmp_path / "sessions.json")
 
     session = {
         "html_path": "chat.html",
@@ -129,65 +145,80 @@ def test_session_round_trip(tmp_path, monkeypatch):
         "scroll_fraction": 0.5,
     }
 
-    state.save_session(session)
+    state.save_session("chat.html", session)
 
-    assert state.load_session() == session
+    assert state.load_session("chat.html") == session
 
 
-def test_save_session_overwrites_previous_session(tmp_path, monkeypatch):
+def test_save_session_overwrites_previous_session_for_same_html_path(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "SESSION_FILE", tmp_path / "session.json")
+    monkeypatch.setattr(config, "SESSIONS_FILE", tmp_path / "sessions.json")
 
-    state.save_session({"output_path": "first.txt", "edited_texts": []})
-    state.save_session({"output_path": "second.txt", "edited_texts": []})
+    state.save_session("chat.html", {"output_path": "first.txt", "edited_texts": []})
+    state.save_session("chat.html", {"output_path": "second.txt", "edited_texts": []})
 
-    assert state.load_session()["output_path"] == "second.txt"
+    assert state.load_session("chat.html")["output_path"] == "second.txt"
 
 
-def test_clear_session_removes_file(tmp_path, monkeypatch):
+def test_sessions_for_different_html_paths_kept_independently(tmp_path, monkeypatch):
+    """Saving a session for one chatlog must not evict another chatlog's
+    saved session - both should remain resumable independently."""
     monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "SESSION_FILE", tmp_path / "session.json")
+    monkeypatch.setattr(config, "SESSIONS_FILE", tmp_path / "sessions.json")
 
-    state.save_session({"output_path": "out.txt", "edited_texts": []})
-    state.clear_session()
+    state.save_session("chat_a.html", {"output_path": "a.txt", "edited_texts": []})
+    state.save_session("chat_b.html", {"output_path": "b.txt", "edited_texts": []})
 
-    assert state.load_session() is None
+    assert state.load_session("chat_a.html")["output_path"] == "a.txt"
+    assert state.load_session("chat_b.html")["output_path"] == "b.txt"
+
+
+def test_clear_session_removes_only_that_html_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "SESSIONS_FILE", tmp_path / "sessions.json")
+
+    state.save_session("chat_a.html", {"output_path": "a.txt", "edited_texts": []})
+    state.save_session("chat_b.html", {"output_path": "b.txt", "edited_texts": []})
+    state.clear_session("chat_a.html")
+
+    assert state.load_session("chat_a.html") is None
+    assert state.load_session("chat_b.html")["output_path"] == "b.txt"
 
 
 def test_clear_session_is_a_noop_when_no_file(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "SESSION_FILE", tmp_path / "session.json")
+    monkeypatch.setattr(config, "SESSIONS_FILE", tmp_path / "sessions.json")
 
-    state.clear_session()  # should not raise
+    state.clear_session("chat.html")  # should not raise
 
 
 def test_session_backup_created_on_second_save(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    session_file = tmp_path / "session.json"
-    monkeypatch.setattr(config, "SESSION_FILE", session_file)
-    backup_file = session_file.with_suffix(".bak")
+    sessions_file = tmp_path / "sessions.json"
+    monkeypatch.setattr(config, "SESSIONS_FILE", sessions_file)
+    backup_file = sessions_file.with_suffix(".bak")
 
-    state.save_session({"output_path": "first.txt", "edited_texts": []})
+    state.save_session("chat.html", {"output_path": "first.txt", "edited_texts": []})
     assert not backup_file.exists()
 
-    state.save_session({"output_path": "second.txt", "edited_texts": []})
+    state.save_session("chat.html", {"output_path": "second.txt", "edited_texts": []})
     assert backup_file.exists()
-    assert json.loads(backup_file.read_text(encoding="utf8"))["output_path"] == "first.txt"
+    assert json.loads(backup_file.read_text(encoding="utf8"))["chat.html"]["output_path"] == "first.txt"
 
 
 def test_session_recovers_from_backup_when_primary_corrupt(tmp_path, monkeypatch):
-    """Mimics a crash mid-write: session.json left empty/truncated, but the
-    previous good session survives in session.bak."""
+    """Mimics a crash mid-write: sessions.json left empty/truncated, but the
+    previous good sessions survive in sessions.bak."""
     monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    session_file = tmp_path / "session.json"
-    monkeypatch.setattr(config, "SESSION_FILE", session_file)
-    backup_file = session_file.with_suffix(".bak")
+    sessions_file = tmp_path / "sessions.json"
+    monkeypatch.setattr(config, "SESSIONS_FILE", sessions_file)
+    backup_file = sessions_file.with_suffix(".bak")
 
-    state.save_session({"output_path": "good.txt", "edited_texts": []})
-    state.save_session({"output_path": "overwritten.txt", "edited_texts": []})
-    session_file.write_text("", encoding="utf8")
+    state.save_session("chat.html", {"output_path": "good.txt", "edited_texts": []})
+    state.save_session("chat.html", {"output_path": "overwritten.txt", "edited_texts": []})
+    sessions_file.write_text("", encoding="utf8")
 
-    assert state.load_session()["output_path"] == "good.txt"
+    assert state.load_session("chat.html")["output_path"] == "good.txt"
     assert backup_file.exists()
 
 
@@ -195,29 +226,29 @@ def test_clear_session_removes_backup_too(tmp_path, monkeypatch):
     """A stale backup must not resurrect a session that was already
     finalized and explicitly cleared."""
     monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    session_file = tmp_path / "session.json"
-    monkeypatch.setattr(config, "SESSION_FILE", session_file)
-    backup_file = session_file.with_suffix(".bak")
+    sessions_file = tmp_path / "sessions.json"
+    monkeypatch.setattr(config, "SESSIONS_FILE", sessions_file)
+    backup_file = sessions_file.with_suffix(".bak")
 
-    state.save_session({"output_path": "first.txt", "edited_texts": []})
-    state.save_session({"output_path": "second.txt", "edited_texts": []})
+    state.save_session("chat.html", {"output_path": "first.txt", "edited_texts": []})
+    state.save_session("chat.html", {"output_path": "second.txt", "edited_texts": []})
     assert backup_file.exists()
 
-    state.clear_session()
+    state.clear_session("chat.html")
 
-    assert not session_file.exists()
-    assert not backup_file.exists()
-    assert state.load_session() is None
+    assert state.load_session("chat.html") is None
+    assert backup_file.exists()
+    assert json.loads(backup_file.read_text(encoding="utf8"))["chat.html"]["output_path"] == "second.txt"
 
 
 def test_no_session_temp_files_left_after_save(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "SESSION_FILE", tmp_path / "session.json")
+    monkeypatch.setattr(config, "SESSIONS_FILE", tmp_path / "sessions.json")
 
-    state.save_session({"output_path": "first.txt", "edited_texts": []})
-    state.save_session({"output_path": "second.txt", "edited_texts": []})
+    state.save_session("chat.html", {"output_path": "first.txt", "edited_texts": []})
+    state.save_session("chat.html", {"output_path": "second.txt", "edited_texts": []})
 
-    assert list(tmp_path.glob("session_*.tmp")) == []
+    assert list(tmp_path.glob("sessions_*.tmp")) == []
 
 
 def test_cache_recovers_from_backup_when_primary_corrupt(tmp_path, monkeypatch):
