@@ -13,6 +13,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from .. import chatlog, logging_config, pipeline, state
+from . import theme
 from .progress_view import ProgressFrame
 from .review_view import ReviewFrame
 
@@ -24,6 +25,7 @@ class App:
         self.root = root
         self.root.title("Discord Transcription Tool")
         self.root.geometry("700x500")
+        theme.apply_dark_theme(self.root)
 
         self.container = ttk.Frame(self.root, padding=12)
         self.container.pack(fill="both", expand=True)
@@ -55,15 +57,24 @@ class App:
         frame = ttk.Frame(self.container)
 
         ttk.Label(frame, text="Chatlog HTML file:").grid(row=0, column=0, sticky="w", pady=4)
-        ttk.Entry(frame, textvariable=self._html_path, width=60).grid(row=0, column=1, pady=4)
+        ttk.Combobox(
+            frame, textvariable=self._html_path, width=58,
+            values=state.load_recent_paths("html_path"),
+        ).grid(row=0, column=1, pady=4)
         ttk.Button(frame, text="Browse...", command=self._pick_html).grid(row=0, column=2, padx=4)
 
         ttk.Label(frame, text="Image folder:").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Entry(frame, textvariable=self._image_folder, width=60).grid(row=1, column=1, pady=4)
+        ttk.Combobox(
+            frame, textvariable=self._image_folder, width=58,
+            values=state.load_recent_paths("image_folder"),
+        ).grid(row=1, column=1, pady=4)
         ttk.Button(frame, text="Browse...", command=self._pick_image_folder).grid(row=1, column=2, padx=4)
 
         ttk.Label(frame, text="Output .txt file:").grid(row=2, column=0, sticky="w", pady=4)
-        ttk.Entry(frame, textvariable=self._output_path, width=60).grid(row=2, column=1, pady=4)
+        ttk.Combobox(
+            frame, textvariable=self._output_path, width=58,
+            values=state.load_recent_paths("output_path"),
+        ).grid(row=2, column=1, pady=4)
         ttk.Button(frame, text="Browse...", command=self._pick_output).grid(row=2, column=2, padx=4)
 
         ttk.Label(frame, text="Start date (YYYY-MM-DD):").grid(row=3, column=0, sticky="w", pady=4)
@@ -125,6 +136,10 @@ class App:
         except ValueError as exc:
             self._error_label.config(text=str(exc))
             return
+
+        state.add_recent_path("html_path", html_path)
+        state.add_recent_path("image_folder", image_folder)
+        state.add_recent_path("output_path", output_path)
 
         logger.info(
             "starting run",

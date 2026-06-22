@@ -51,6 +51,42 @@ def append_run_date(date_str: str) -> None:
     logger.info("appended run date", extra=logging_config.extra(date=date_str))
 
 
+def load_recent_paths(field: str) -> list:
+    """Return the cached recent values for a setup-screen field (e.g.
+    "html_path"), most-recently-used first. Empty list if none recorded yet."""
+    if not config.RECENT_PATHS_FILE.exists():
+        return []
+
+    with open(config.RECENT_PATHS_FILE, "r", encoding="utf8") as f:
+        data = json.load(f)
+
+    return data.get(field, [])
+
+
+def add_recent_path(field: str, value: str) -> None:
+    """Record value as the most-recently-used entry for field, deduping
+    against earlier entries and capping the history length."""
+    if not value:
+        return
+    _ensure_data_dir()
+
+    data = {}
+    if config.RECENT_PATHS_FILE.exists():
+        with open(config.RECENT_PATHS_FILE, "r", encoding="utf8") as f:
+            data = json.load(f)
+
+    paths = data.get(field, [])
+    if value in paths:
+        paths.remove(value)
+    paths.insert(0, value)
+    data[field] = paths[: config.MAX_RECENT_PATHS]
+
+    with open(config.RECENT_PATHS_FILE, "w", encoding="utf8") as f:
+        json.dump(data, f, indent=2)
+
+    logger.info("recorded recent path", extra=logging_config.extra(field=field, value=value))
+
+
 def load_cache(folder_path: str) -> Optional[dict]:
     """Return the cached {image_name: [paragraphs]} dict for folder_path.
 

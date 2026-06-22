@@ -42,6 +42,7 @@ from PIL import Image, ImageTk
 
 from .. import logging_config
 from ..pipeline import ReviewItem
+from . import theme
 
 logger = logging_config.get_logger(__name__)
 
@@ -122,7 +123,7 @@ class ReviewFrame(ttk.Frame):
         scrollbar = ttk.Scrollbar(self, orient="vertical")
         scrollbar.pack(side="right", fill="y")
 
-        canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0)
+        canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0, bg=theme.DARK_BG_ALT)
         canvas.pack(side="left", fill="both", expand=True)
         self._canvas = canvas
 
@@ -206,7 +207,11 @@ class ReviewFrame(ttk.Frame):
                     left, text=message_text, wraplength=THUMBNAIL_SIZE[0], justify="left"
                 ).pack(pady=4)
 
-        text_widget = tk.Text(row, width=40, height=30, wrap="word")
+        text_widget = tk.Text(
+            row, width=40, height=30, wrap="word",
+            bg=theme.DARK_BG_WIDGET, fg=theme.DARK_FG, insertbackground=theme.DARK_FG,
+            selectbackground=theme.DARK_ACCENT, selectforeground="white",
+        )
         saved = self._saved_texts[index]
         text_widget.insert("1.0", saved if saved is not None else (item.initial_text or ""))
         text_widget.pack(side="left", fill="both", expand=True, padx=6)

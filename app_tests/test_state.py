@@ -35,3 +35,54 @@ def test_cache_returns_none_for_different_folder(tmp_path, monkeypatch):
 
     state.save_cache(str(tmp_path / "images_a"), {"x.png": ["p"]})
     assert state.load_cache(str(tmp_path / "images_b")) is None
+
+
+def test_load_recent_paths_returns_empty_when_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "RECENT_PATHS_FILE", tmp_path / "recent_paths.json")
+
+    assert state.load_recent_paths("html_path") == []
+
+
+def test_add_recent_path_orders_most_recent_first(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "RECENT_PATHS_FILE", tmp_path / "recent_paths.json")
+
+    state.add_recent_path("html_path", "a.html")
+    state.add_recent_path("html_path", "b.html")
+
+    assert state.load_recent_paths("html_path") == ["b.html", "a.html"]
+
+
+def test_add_recent_path_dedupes_and_moves_to_front(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "RECENT_PATHS_FILE", tmp_path / "recent_paths.json")
+
+    state.add_recent_path("html_path", "a.html")
+    state.add_recent_path("html_path", "b.html")
+    state.add_recent_path("html_path", "a.html")
+
+    assert state.load_recent_paths("html_path") == ["a.html", "b.html"]
+
+
+def test_add_recent_path_caps_history_length(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "RECENT_PATHS_FILE", tmp_path / "recent_paths.json")
+    monkeypatch.setattr(config, "MAX_RECENT_PATHS", 2)
+
+    state.add_recent_path("html_path", "a.html")
+    state.add_recent_path("html_path", "b.html")
+    state.add_recent_path("html_path", "c.html")
+
+    assert state.load_recent_paths("html_path") == ["c.html", "b.html"]
+
+
+def test_add_recent_path_keeps_fields_separate(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "RECENT_PATHS_FILE", tmp_path / "recent_paths.json")
+
+    state.add_recent_path("html_path", "a.html")
+    state.add_recent_path("output_path", "out.txt")
+
+    assert state.load_recent_paths("html_path") == ["a.html"]
+    assert state.load_recent_paths("output_path") == ["out.txt"]

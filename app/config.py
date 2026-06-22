@@ -27,6 +27,11 @@ BREAK_MARKER = "[BREAK]"
 APP_DATA_DIR = Path.home() / ".discord_transcription_gui"
 RUN_DATE_FILE = APP_DATA_DIR / "run_dates.json"
 OCR_CACHE_FILE = APP_DATA_DIR / "ocr_cache.json"
+RECENT_PATHS_FILE = APP_DATA_DIR / "recent_paths.json"
 LOG_FILE = APP_DATA_DIR / "app.log"
+
+# How many previously-used values to keep, per setup-screen field, for the
+# dropdown history (most-recently-used first).
+MAX_RECENT_PATHS = 8
 
 TIMESTAMP_FORMAT = "%d/%m/%Y %H:%M"
