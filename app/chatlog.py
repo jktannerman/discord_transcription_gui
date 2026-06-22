@@ -14,7 +14,9 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
-from . import config
+from . import config, logging_config
+
+logger = logging_config.get_logger(__name__)
 
 
 @dataclass
@@ -28,10 +30,13 @@ def parse_message_groups(html_text: str, start_time: int) -> list[MessageEntry]:
     parsed_html = BeautifulSoup(html_text, features="lxml")
     groups = parsed_html.find_all(attrs={"class": "chatlog__message-group"})
 
+    skip_counts = {"no_date": 0, "too_early": 0, "no_author": 0, "unapproved_author": 0}
     entries: list[MessageEntry] = []
+
     for group in groups:
         date_element = group.find(attrs={"class": "chatlog__timestamp"})
         if date_element is None:
+            skip_counts["no_date"] += 1
             continue
 
         raw_message_time = datetime.datetime.strptime(
@@ -39,18 +44,27 @@ def parse_message_groups(html_text: str, start_time: int) -> list[MessageEntry]:
         )
         message_time = int(time.mktime(raw_message_time.timetuple()))
         if message_time < start_time:
+            skip_counts["too_early"] += 1
             continue
 
         author_element = group.find(attrs={"class": "chatlog__author"})
         if author_element is None:
+            skip_counts["no_author"] += 1
             continue
         if author_element.attrs.get("data-user-id") not in config.APPROVED_AUTHOR_IDS:
+            skip_counts["unapproved_author"] += 1
             continue
 
         messages = group.find_all(attrs={"class": "chatlog__message-primary"})
         for message in messages:
             entries.append(_parse_message(message))
 
+    logger.info(
+        "parsed chatlog HTML",
+        extra=logging_config.extra(
+            group_count=len(groups), entries_kept=len(entries), **skip_counts
+        ),
+    )
     return entries
 
 
@@ -64,4 +78,8 @@ def _parse_message(message) -> MessageEntry:
         file_name = image.attrs["src"]
         image_name = file_name.split("/")[-1]
 
+    logger.debug(
+        "parsed message",
+        extra=logging_config.extra(line_count=len(text_lines), image_name=image_name),
+    )
     return MessageEntry(text_lines=text_lines, image_name=image_name)

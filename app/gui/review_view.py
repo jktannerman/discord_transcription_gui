@@ -15,7 +15,10 @@ from typing import Callable, List, Optional
 
 from PIL import Image, ImageTk
 
+from .. import logging_config
 from ..pipeline import ReviewItem
+
+logger = logging_config.get_logger(__name__)
 
 THUMBNAIL_SIZE = (300, 400)
 
@@ -28,6 +31,7 @@ class ReviewFrame(ttk.Frame):
         on_finalize: Callable[[List[Optional[str]]], None],
     ):
         super().__init__(master)
+        logger.info("building review screen", extra=logging_config.extra(item_count=len(items)))
         self._items = items
         self._on_finalize = on_finalize
         self._text_widgets: List[Optional[tk.Text]] = []
@@ -85,6 +89,10 @@ class ReviewFrame(ttk.Frame):
             self._photos.append(photo)
             ttk.Label(left, image=photo).pack()
         except Exception:
+            logger.warning(
+                "could not load image preview",
+                extra=logging_config.extra(image_path=str(item.image_path)),
+            )
             ttk.Label(left, text=f"(could not preview {item.image_path.name})").pack()
 
         if item.entry.text_lines:
@@ -98,6 +106,7 @@ class ReviewFrame(ttk.Frame):
         self._text_widgets.append(text_widget)
 
     def _on_finalize_clicked(self) -> None:
+        logger.info("finalize button clicked on review screen")
         edited_texts = [
             widget.get("1.0", "end-1c") if widget is not None else None
             for widget in self._text_widgets

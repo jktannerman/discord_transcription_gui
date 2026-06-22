@@ -2,7 +2,9 @@
 
 import re
 
-from . import config
+from . import config, logging_config
+
+logger = logging_config.get_logger(__name__)
 
 
 def clean_transcript(text: str) -> str:
@@ -14,4 +16,9 @@ def clean_transcript(text: str) -> str:
     cleaned = re.sub(
         rf"({re.escape(config.BREAK_MARKER)}(\s|\r|\n)*)+\Z", "", cleaned
     )  # trailing BREAK markers
+
+    logger.info(
+        "cleaned transcript",
+        extra=logging_config.extra(input_chars=len(text), output_chars=len(cleaned)),
+    )
     return cleaned

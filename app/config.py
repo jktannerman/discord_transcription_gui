@@ -18,7 +18,7 @@ SKIP_TYPES: tuple[str, ...] = (".svg", ".woff2", ".js", ".css")
 # Discord user IDs whose messages are included in the transcript
 # (the GM and the dice-roller bot).
 APPROVED_AUTHOR_IDS: tuple[str, ...] = (
-    "194265523339395072",
+    "130636614807322624",
     "567170431413387265",
 )
 
@@ -27,5 +27,6 @@ BREAK_MARKER = "[BREAK]"
 APP_DATA_DIR = Path.home() / ".discord_transcription_gui"
 RUN_DATE_FILE = APP_DATA_DIR / "run_dates.json"
 OCR_CACHE_FILE = APP_DATA_DIR / "ocr_cache.json"
+LOG_FILE = APP_DATA_DIR / "app.log"
 
 TIMESTAMP_FORMAT = "%d/%m/%Y %H:%M"

@@ -8,7 +8,9 @@ added as a second entry without changing any calling code.
 
 import pytesseract
 
-from . import config
+from . import config, logging_config
+
+logger = logging_config.get_logger(__name__)
 
 pytesseract.pytesseract.tesseract_cmd = config.TESSERACT_CMD
 
@@ -26,7 +28,18 @@ DEFAULT_BACKEND = "tesseract"
 
 def transcribe_image(file_path: str, backend: str = DEFAULT_BACKEND) -> str:
     """Run OCR on file_path using the named backend and return raw text."""
-    return _BACKENDS[backend](file_path)
+    logger.debug("running OCR", extra=logging_config.extra(file_path=file_path, backend=backend))
+    try:
+        text = _BACKENDS[backend](file_path)
+    except Exception:
+        logger.exception(
+            "OCR failed", extra=logging_config.extra(file_path=file_path, backend=backend)
+        )
+        raise
+    logger.debug(
+        "OCR complete", extra=logging_config.extra(file_path=file_path, char_count=len(text))
+    )
+    return text
 
 
 def split_into_paragraphs(raw_text: str) -> list[str]:
@@ -35,9 +48,11 @@ def split_into_paragraphs(raw_text: str) -> list[str]:
     Blank lines (``\\n\\n``) separate paragraphs; single newlines within a
     paragraph are treated as wrapped text and collapsed to spaces.
     """
-    return (
+    paragraphs = (
         raw_text.replace("\n\n", " %10 %10")
         .replace("\n", " ")
         .replace("  ", " ")
         .split("%10 %10")
     )
+    logger.debug("split OCR text into paragraphs", extra=logging_config.extra(count=len(paragraphs)))
+    return paragraphs

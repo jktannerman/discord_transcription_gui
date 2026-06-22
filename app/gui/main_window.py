@@ -12,9 +12,11 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .. import chatlog, pipeline, state
+from .. import chatlog, logging_config, pipeline, state
 from .progress_view import ProgressFrame
 from .review_view import ReviewFrame
+
+logger = logging_config.get_logger(__name__)
 
 
 class App:
@@ -124,6 +126,15 @@ class App:
             self._error_label.config(text=str(exc))
             return
 
+        logger.info(
+            "starting run",
+            extra=logging_config.extra(
+                html_path=html_path,
+                image_folder=image_folder,
+                output_path=output_path,
+                use_cache=self._use_cache.get(),
+            ),
+        )
         self._begin_run(Path(html_path), Path(image_folder), Path(output_path), start_time)
 
     # -- run orchestration --------------------------------------------------
@@ -143,6 +154,7 @@ class App:
                     progress_callback=lambda frac: self.root.after(0, progress.set_progress, frac),
                 )
             except Exception as exc:  # surfaced to the user, not a crash
+                logger.exception("OCR batch failed")
                 self.root.after(0, self._on_run_error, str(exc))
                 return
 
@@ -151,6 +163,7 @@ class App:
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_run_error(self, message: str) -> None:
+        logger.error("run failed", extra=logging_config.extra(error=message))
         messagebox.showerror("Error", message)
         self.show_setup()
 
@@ -167,6 +180,7 @@ class App:
         )
         self._html_path_for_run = html_path
         self._output_path_for_run = output_path
+        logger.info("OCR done, showing review screen", extra=logging_config.extra(item_count=len(self._review_items)))
         self._show_review()
 
     def _show_review(self) -> None:
@@ -175,10 +189,12 @@ class App:
         self._set_frame(frame)
 
     def _on_finalize_clicked(self, edited_texts: list[str | None]) -> None:
+        logger.info("finalize clicked")
         try:
             pipeline.write_all_items(self._output_path_for_run, self._review_items, edited_texts)
             just_added = pipeline.finalize_run(self._output_path_for_run, self._html_path_for_run)
         except Exception as exc:
+            logger.exception("finalize failed")
             self._on_run_error(f"Failed to write output: {exc}")
             return
 

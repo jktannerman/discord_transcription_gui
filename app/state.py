@@ -11,7 +11,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from . import config
+from . import config, logging_config
+
+logger = logging_config.get_logger(__name__)
 
 
 def _ensure_data_dir() -> None:
@@ -21,12 +23,15 @@ def _ensure_data_dir() -> None:
 def read_last_run_date() -> Optional[str]:
     """Return the most recent recorded end date, or None if none recorded yet."""
     if not config.RUN_DATE_FILE.exists():
+        logger.info("no run-date file found, no previous run date")
         return None
 
     with open(config.RUN_DATE_FILE, "r", encoding="utf8") as f:
         dates = json.load(f)
 
-    return dates[-1] if dates else None
+    last_date = dates[-1] if dates else None
+    logger.info("read last run date", extra=logging_config.extra(last_date=last_date))
+    return last_date
 
 
 def append_run_date(date_str: str) -> None:
@@ -43,6 +48,8 @@ def append_run_date(date_str: str) -> None:
     with open(config.RUN_DATE_FILE, "w", encoding="utf8") as f:
         json.dump(dates, f, indent=2)
 
+    logger.info("appended run date", extra=logging_config.extra(date=date_str))
+
 
 def load_cache(folder_path: str) -> Optional[dict]:
     """Return the cached {image_name: [paragraphs]} dict for folder_path.
@@ -51,15 +58,27 @@ def load_cache(folder_path: str) -> Optional[dict]:
     different image folder.
     """
     if not config.OCR_CACHE_FILE.exists():
+        logger.info("no ocr cache file found")
         return None
 
     with open(config.OCR_CACHE_FILE, "r", encoding="utf8") as f:
         cache = json.load(f)
 
     if cache.get("folder") != str(Path(folder_path)):
+        logger.info(
+            "ocr cache exists but is for a different folder",
+            extra=logging_config.extra(
+                requested_folder=str(Path(folder_path)), cached_folder=cache.get("folder")
+            ),
+        )
         return None
 
-    return cache.get("data")
+    data = cache.get("data")
+    logger.info(
+        "loaded ocr cache",
+        extra=logging_config.extra(folder=str(Path(folder_path)), image_count=len(data or {})),
+    )
+    return data
 
 
 def save_cache(folder_path: str, data: dict) -> None:
@@ -70,3 +89,8 @@ def save_cache(folder_path: str, data: dict) -> None:
 
     with open(config.OCR_CACHE_FILE, "w", encoding="utf8") as f:
         json.dump(cache, f, indent=2)
+
+    logger.info(
+        "saved ocr cache",
+        extra=logging_config.extra(folder=str(Path(folder_path)), image_count=len(data)),
+    )

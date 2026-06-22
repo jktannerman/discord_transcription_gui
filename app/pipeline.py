@@ -25,8 +25,10 @@ from typing import Callable, Optional
 
 import pyperclip
 
-from . import cleanup, config, ocr, state
+from . import cleanup, config, logging_config, ocr, state
 from .chatlog import MessageEntry
+
+logger = logging_config.get_logger(__name__)
 
 
 def parse_start_date(date_str: str) -> int:
@@ -39,11 +41,13 @@ def parse_start_date(date_str: str) -> int:
     try:
         numeric_parts = tuple(int(p) for p in parts)
     except ValueError:
+        logger.warning("invalid start date input", extra=logging_config.extra(date_str=date_str))
         raise ValueError(
             f"Could not parse date {date_str!r} - expected numbers separated by '-'."
         )
 
     if not 3 <= len(numeric_parts) <= 6:
+        logger.warning("invalid start date input", extra=logging_config.extra(date_str=date_str))
         raise ValueError(
             f"Could not parse date {date_str!r} - expected 3 to 6 '-'-separated "
             "numbers (year-month-day[-hour-minute-second])."
@@ -52,9 +56,12 @@ def parse_start_date(date_str: str) -> int:
     try:
         date = datetime.datetime(*numeric_parts)
     except ValueError as exc:
+        logger.warning("invalid start date input", extra=logging_config.extra(date_str=date_str))
         raise ValueError(f"Could not parse date {date_str!r}: {exc}")
 
-    return int(time.mktime(date.timetuple()))
+    timestamp = int(time.mktime(date.timetuple()))
+    logger.info("parsed start date", extra=logging_config.extra(date_str=date_str, timestamp=timestamp))
+    return timestamp
 
 
 def run_ocr_batch(
@@ -68,14 +75,22 @@ def run_ocr_batch(
     If use_cache is True and a matching cache exists for image_folder, the
     cache is returned directly and no OCR is run.
     """
+    logger.info(
+        "starting OCR batch",
+        extra=logging_config.extra(image_folder=image_folder, start_time=start_time, use_cache=use_cache),
+    )
+
     if use_cache:
         cached = state.load_cache(image_folder)
         if cached is not None:
+            logger.info("using cached OCR data, skipping OCR batch")
             return cached
 
     file_info: dict[str, list[str]] = {}
     image_names = os.listdir(image_folder)
     total = len(image_names)
+    skipped_type = 0
+    skipped_old = 0
 
     for i, image_name in enumerate(image_names):
         if "." in image_name and not any(
@@ -87,9 +102,23 @@ def run_ocr_batch(
             if creation_time >= start_time:
                 raw_string = ocr.transcribe_image(image_path)
                 file_info[image_name] = ocr.split_into_paragraphs(raw_string)
+            else:
+                skipped_old += 1
+        else:
+            skipped_type += 1
 
         if progress_callback and total:
             progress_callback((i + 1) / total)
+
+    logger.info(
+        "OCR batch complete",
+        extra=logging_config.extra(
+            total_files=total,
+            transcribed=len(file_info),
+            skipped_non_image_type=skipped_type,
+            skipped_too_old=skipped_old,
+        ),
+    )
 
     state.save_cache(image_folder, file_info)
     return file_info
@@ -108,6 +137,8 @@ def write_message_lines(output_path: Path, lines_to_write: list[str]) -> None:
 
         if lines_to_write:
             f.write("\n\n")
+
+    logger.debug("wrote message lines", extra=logging_config.extra(line_count=len(lines_to_write)))
 
 
 @dataclass
@@ -143,6 +174,12 @@ def build_review_items(
                 initial_text=initial_text,
             )
         )
+
+    image_items = sum(1 for item in items if item.image_path is not None)
+    logger.info(
+        "built review items",
+        extra=logging_config.extra(total_items=len(items), image_items=image_items),
+    )
     return items
 
 
@@ -165,14 +202,22 @@ def write_all_items(
     edited_texts: list[Optional[str]],
 ) -> None:
     """Write every review item's final lines, in order, in one pass."""
+    logger.info("finalizing: writing all review items", extra=logging_config.extra(item_count=len(items)))
+    edited_count = sum(1 for text in edited_texts if text is not None)
     for item, edited_text in zip(items, edited_texts):
         write_message_lines(output_path, lines_for_item(item, edited_text))
+    logger.info(
+        "finished writing all review items",
+        extra=logging_config.extra(item_count=len(items), edited_count=edited_count),
+    )
 
 
 def finalize_run(output_path: Path, html_file_path: Path) -> str:
     """Clean up the output file, record the new run date, and bookmark it
     with a fresh BREAK marker. Returns the text added during this run
     (also copied to the clipboard)."""
+    logger.info("finalizing run", extra=logging_config.extra(output_path=str(output_path)))
+
     with open(output_path, "r", encoding="utf8") as f:
         raw = f.read()
 
@@ -194,4 +239,8 @@ def finalize_run(output_path: Path, html_file_path: Path) -> str:
     with open(output_path, "a", encoding="utf8") as f:
         f.write(f"\n\n\n{config.BREAK_MARKER}\n\n\n")
 
+    logger.info(
+        "run finalized",
+        extra=logging_config.extra(added_chars=len(just_added), added_lines=len(just_added.splitlines())),
+    )
     return just_added
