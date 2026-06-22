@@ -214,7 +214,16 @@ def build_review_items(
             continue
 
         paragraphs = file_info.get(entry.image_name, [])
-        initial_ocr_text = "\n\n".join(para.strip() for para in paragraphs)
+        # Tesseract output routinely ends with a blank line, which
+        # split_into_paragraphs turns into a trailing empty-after-strip
+        # paragraph - join naively and that becomes a literal "\n\n" tail on
+        # initial_ocr_text, which then carries through to the final output
+        # unless the user happens to manually trim it. Dropping empty
+        # paragraphs (wherever they fall, not just at the end) avoids that
+        # without changing how real paragraph breaks are rendered.
+        initial_ocr_text = "\n\n".join(
+            stripped for para in paragraphs if (stripped := para.strip())
+        )
         initial_message_text = "\n".join(entry.text_lines) if entry.text_lines else None
         items.append(
             ReviewItem(

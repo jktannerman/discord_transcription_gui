@@ -114,8 +114,20 @@ logger = logging_config.get_logger(__name__)
 
 # Extra lines of headroom an editable text box is given beyond its current
 # content when auto-sized (see ReviewFrame._size_text_container), so typing
-# a little more doesn't immediately demand a resize/scrollbar.
-TEXT_BOX_LEEWAY_LINES = 3
+# a little more doesn't immediately demand a resize/scrollbar. Also covers
+# the ~2 trailing blank lines that pipeline.build_review_items used to leave
+# at the end of initial_ocr_text (a Tesseract-output artifact) and now
+# strips instead - this keeps a fresh box roughly the same height as before
+# that stripping, without re-inserting characters that would end up in the
+# final transcript.
+TEXT_BOX_LEEWAY_LINES = 5
+
+# Inner horizontal padding for an editable text box's own content (applied
+# symmetrically by Tk's Text.padx), so wrapped/long lines don't run right up
+# against the box's edge - it previously had none, which read as cramped
+# against the right edge in particular since text there is ragged (wrapped
+# at arbitrary word boundaries) rather than flush like the left edge.
+TEXT_BOX_INNER_PADX = 6
 
 # A maxed-out text box is capped at this fraction of the canvas viewport
 # (see ReviewFrame._max_text_box_height_px), not the full viewport - a box
@@ -519,6 +531,7 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
             selectbackground=theme.DARK_ACCENT, selectforeground="white",
             highlightthickness=1, highlightbackground=theme.DARK_BG_ALT,
             highlightcolor=theme.DARK_FOCUS_HIGHLIGHT,
+            padx=TEXT_BOX_INNER_PADX, pady=4,
         )
         # Set after construction (rather than passed as a kwarg) since the
         # callback needs to close over text_widget itself.
@@ -636,7 +649,15 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         self._row_heights accurate so the canvas scrollregion doesn't drift
         out of sync. Mirrors what _remeasure_built_rows does for newly-built
         rows, just triggered immediately for the row being edited rather
-        than waiting for the next scroll-driven _reconcile."""
+        than waiting for the next scroll-driven _reconcile.
+
+        Also scrolls the row back into view: focus alone doesn't keep a box
+        on screen, since the mouse wheel/scrollbar can move the viewport
+        without touching focus at all, and Tk happily keeps delivering
+        keystrokes to a focused-but-off-screen widget - typing was the
+        easiest visible signal that the user is "at" this box and would
+        want to see it, without needing a separate scroll-position watcher
+        for an otherwise-rare case."""
         index = key[0]
         text_widget.edit_modified(False)
         self._size_text_container(container, text_widget, self._box_floor_px[key])
@@ -651,6 +672,7 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
             canvas.configure(
                 scrollregion=(0, 0, max(canvas.winfo_width(), 1), sum(self._row_heights))
             )
+        self._scroll_into_view(index)
 
     def _destroy_row(self, index: int) -> None:
         """Tear down the row widget(s) for items[index], saving any edited
@@ -679,12 +701,23 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         (e.g. a far-away Tab target). Cheap and safe to call even when the
         row is already materialized, since _reconcile always recomputes
         the materialized range from scratch rather than incrementally
-        stepping it - see the module docstring."""
+        stepping it - see the module docstring.
+
+        The scrollregion has to be set here, before yview_moveto, rather
+        than left to _reconcile - on the very first call (before any
+        reconcile has ever run, e.g. restoring a resumed session's focus
+        straight out of __init__), the canvas has no scrollregion at all
+        yet, so yview_moveto(fraction) has nothing to scroll within and is
+        silently a no-op: the view stays at the top, _reconcile then
+        materializes from index 0 as usual, and the target index is never
+        actually built - which is exactly the bug this fixes."""
         if index in self._row_frames:
             return
         total_height = sum(self._row_heights)
         if total_height > 0:
-            self._canvas.yview_moveto(self._offset_of(index) / total_height)
+            canvas = self._canvas
+            canvas.configure(scrollregion=(0, 0, max(canvas.winfo_width(), 1), total_height))
+            canvas.yview_moveto(self._offset_of(index) / total_height)
         self._reconcile()
 
     def _sync_materialized_rows(
