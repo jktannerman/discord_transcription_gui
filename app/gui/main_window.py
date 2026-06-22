@@ -425,7 +425,15 @@ class App:
         initial_scroll_fraction = None
         if resume is not None:
             saved_texts = resume.get("edited_texts")
-            if isinstance(saved_texts, list) and len(saved_texts) == len(self._review_items):
+            valid_shape = (
+                isinstance(saved_texts, list)
+                and len(saved_texts) == len(self._review_items)
+                and all(
+                    isinstance(entry, (list, tuple)) and len(entry) == 2
+                    for entry in saved_texts
+                )
+            )
+            if valid_shape:
                 initial_saved_texts = saved_texts
                 focus_slot = resume.get("focus_slot")
                 if focus_slot is not None:
@@ -433,7 +441,7 @@ class App:
                 initial_scroll_fraction = resume.get("scroll_fraction")
             else:
                 logger.warning(
-                    "saved session item count mismatch, discarding saved edits",
+                    "saved session item count/shape mismatch, discarding saved edits",
                     extra=logging_config.extra(current_item_count=len(self._review_items)),
                 )
                 messagebox.showwarning(
