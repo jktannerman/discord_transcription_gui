@@ -64,7 +64,10 @@ What's in scope for v1 (by design, agreed with the project owner):
    message's own original text, its image, or both) paired with the
    matching editable box(es) on the right — a copy of the message's own
    text whenever it has any, and/or a box pre-filled with its image's OCR
-   text (all paragraphs joined together) whenever it has an image,
+   text (all paragraphs joined together, with empty paragraphs - including
+   the trailing blank line Tesseract routinely leaves at the end of a
+   page - dropped rather than left as stray blank lines in the box and the
+   eventual output) whenever it has an image,
    independently editable, so a message with both a caption and an image
    gets two separate boxes rather than one covering both. Copy, paste, and
    arbitrary edits are all allowed in every text box, nothing is parsed or
@@ -79,7 +82,11 @@ What's in scope for v1 (by design, agreed with the project owner):
    *more* likely rather than less, causing a runaway cascade of transitions
    back toward the start of the transcript. Edits survive a row being paged
    out and back in, and the focused text box keeps focus across a transition
-   if it's still in the new window. Images within the materialized window
+   if it's still in the new window. Typing into a box that's still focused
+   but has been scrolled off-screen (the mouse wheel/scrollbar can move the
+   viewport without touching focus at all) scrolls its row back into view
+   automatically, rather than leaving keystrokes landing somewhere the user
+   can't see. Images within the materialized window
    are additionally decoded/loaded lazily as you scroll near them (and
    unloaded again once you scroll away). Nothing is written to disk while
    reviewing - but every edit, the focused text box, and the scroll position
@@ -118,8 +125,12 @@ What's in scope for v1 (by design, agreed with the project owner):
    the whole window, overriding Tk's default of scrolling within whichever
    text box has focus; **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo within a
    single text box.
-5. **Finalize** — a single button at the bottom of the review screen writes
-   every message's final lines (edited text if you changed it, original OCR/
+5. **Finalize** — a button that floats over the bottom of the review
+   screen, but only once you've scrolled all the way to the end of the
+   transcript (or the whole transcript fits on screen with nothing to
+   scroll past) - it stays out of the way the rest of the time instead of
+   permanently occupying its own strip below the review area. Clicking it
+   writes every message's final lines (edited text if you changed it, original OCR/
    message text otherwise) to the output file in one pass, then runs the
    original regex cleanup pass, records the new run-end date, copies the
    newly-added text to the clipboard, appends a fresh `[BREAK]` marker as a
@@ -239,6 +250,19 @@ is just enough to orient a new contributor:
   (`_scroll_text_widget`), only falling through to scrolling the whole
   review window once the box is scrolled as far as it can go in that
   direction (or has nothing to scroll at all).
+- **Floating Finalize button.** Unlike every other widget here, the
+  Finalize button's container is never packed/gridded into the frame's own
+  layout - it's positioned with `place(relx=0.5, rely=1.0, anchor="s")`
+  relative to `self` (the static window), not the canvas's scrolling
+  document, so it floats pinned to the bottom of the viewport without ever
+  claiming a permanent slice of vertical space the way a packed row would.
+  `_update_finalize_button_visibility` calls `place()`/`place_forget()` to
+  show it only once `canvas.yview()`'s bottom fraction reaches `1.0` (the
+  true end of the scrollregion, or trivially true for a transcript that
+  fits on screen with nothing to scroll past) - called from `_reconcile`
+  on every scroll-driven update and from `_scroll_into_view` so Tab'ing to
+  the last box reveals it immediately rather than waiting on the next
+  scroll event.
 
 ## Running it
 

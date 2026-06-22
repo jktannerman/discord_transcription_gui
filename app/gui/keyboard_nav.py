@@ -118,6 +118,7 @@ class KeyboardNavMixin:
             total_height=total_height,
             action=action,
         )
+        self._update_finalize_button_visibility()
 
     def _focus_text_box(self, index: int, role: str) -> None:
         """Focus items[index]'s `role` text box, scroll its row into view

@@ -81,11 +81,24 @@ However, the maximum height of a textbox is still too tall, just enough that it 
 Please make it so that messages containing both text and images are displayed such that the text is above the image in the element, as this is how it works in Discord.
 
 
+- done
+With very long transcripts, loss of cached data could mean a lot of work lost, if eg. the device crashed while in the middle of writing to the save file. Please mimic the way the `./song_folder_player` project addresses this issue, and comment on whether any additional measures may be appropriate here.
+
 
 undo/redo in a given text input window
 
 
 A very minor bug: the window bar does not appear black on startup. This is fixed on resizing the window or alt-tabbing. A bugfix was already attempted once, but it seems to have been insufficient.
+
+- done
+Some minor complaints:
+- The text in a text input box is sometimes uncomfortably close to the right edge. Please leave a slightly more generous margin.
+- If a text input box is focused, typing in it should bring the user there immediately, even if they have scrolled away.
+- It seems that there are two newline characters at the end of each text input box by default. These may adversely affect the final output; would it be possible to remove these, but have the textbox initially be roughly the same size as if they were there anyway?
+- It does not appear that resuming a session actually restores focus to the textbox that was being edited when the program was closed.
+
+
+Please add an option to restore the last session, even if it was finalised and written to an output file, in order to be able to redo something overlooked.
 
 
 image size issues? add zoom?	
@@ -106,7 +119,8 @@ future-proofing: what happens if a message has multiple images attached to it? n
 write spec for exact line spacing rules
 
 
-Are the logs useful? Should they be split up further?
+Are the logs as useful as they could be?
 
 
 This project has now seen several updates and revisions. Please consider its current overall structure. Is it still natural? Are there any obvious problems or potential improvements?
+

@@ -237,17 +237,13 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         # scroll/page/focus events that leads into a pagination loop.
         self._event_seq = 0
 
-        # Pack the fixed-size widgets (button row, scrollbar) before the
-        # expanding canvas - packing the expanding widget first starves the
-        # others of space and squashes the scrollbar into a sliver.
-        button_row = ttk.Frame(self)
-        button_row.pack(side="bottom", fill="x", pady=8)
-        self._finalize_button = ttk.Button(
-            button_row, text="Finalize and write to file", command=self._on_finalize_clicked
-        )
-        self._finalize_button.pack(pady=6)
-        self._finalize_button.bind("<Shift-Tab>", self._on_shift_tab)
-
+        # Scrollbar + canvas fill the whole frame - the Finalize button used
+        # to live in a row permanently packed below them, which cost every
+        # screenful of review the same slice of vertical space whether or
+        # not the button was ever relevant yet. It's built further below as
+        # a place()'d overlay instead, shown only once scrolled to the very
+        # end of the transcript (see _update_finalize_button_visibility),
+        # so the canvas gets the full frame height the rest of the time.
         scrollbar = ttk.Scrollbar(self, orient="vertical")
         scrollbar.pack(side="right", fill="y")
 
@@ -316,6 +312,22 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
                 self._initial_position_job = None
 
         self.bind("<Destroy>", _on_destroy)
+
+        # Floating Finalize button - place()'d (not packed/gridded) so it
+        # overlays the canvas rather than claiming a permanent slice of the
+        # frame's own layout, and positioned relative to `self` (the static
+        # window, not the scrolling document) so it stays pinned to the
+        # bottom of the viewport regardless of scroll position. Hidden by
+        # default; _update_finalize_button_visibility shows it only once
+        # scrolled to the very end of the transcript - see that method.
+        button_row = ttk.Frame(self, relief="raised", borderwidth=1, padding=(16, 8))
+        self._finalize_button = ttk.Button(
+            button_row, text="Finalize and write to file", command=self._on_finalize_clicked
+        )
+        self._finalize_button.pack()
+        self._finalize_button.bind("<Shift-Tab>", self._on_shift_tab)
+        self._finalize_button_row = button_row
+        self._finalize_button_visible = False
 
         self.after_idle(self._apply_initial_position)
 
@@ -837,9 +849,33 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         )
 
         self._update_visible_images()
+        self._update_finalize_button_visibility()
         self._log_event(
             "reconcile", first_idx=first_idx, last_idx=last_idx, total_height=total_height
         )
+
+    def _update_finalize_button_visibility(self) -> None:
+        """Show the floating Finalize button only once the canvas is
+        scrolled all the way to the end of the transcript, hiding it the
+        rest of the time so it doesn't permanently eat space the way the
+        old always-packed button row did. Driven by yview()'s bottom
+        fraction rather than comparing pixel offsets directly - Tk clamps
+        that fraction to exactly 1.0 once the view reaches the true end of
+        the scrollregion (and a transcript short enough to fit on screen
+        with no scrolling at all reports (0.0, 1.0) from the start, which
+        correctly counts as "at the bottom" too - there's nothing to scroll
+        past). place()/place_forget() rather than pack()/pack_forget() -
+        this floats over the canvas instead of claiming its own slice of
+        the frame, which is what lets the canvas keep the full frame height
+        while the button is hidden."""
+        _, bottom_frac = self._canvas.yview()
+        at_bottom = bottom_frac >= 0.999
+        if at_bottom and not self._finalize_button_visible:
+            self._finalize_button_row.place(relx=0.5, rely=1.0, anchor="s", y=-10)
+            self._finalize_button_visible = True
+        elif not at_bottom and self._finalize_button_visible:
+            self._finalize_button_row.place_forget()
+            self._finalize_button_visible = False
 
     def _schedule_reconcile(self) -> None:
         """Coalesce a burst of scroll events into a single _reconcile pass,
