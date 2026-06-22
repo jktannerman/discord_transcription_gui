@@ -42,11 +42,14 @@ What's in scope for v1 (by design, agreed with the project owner):
    start date from the approved author IDs (the GM + dice-roller bot).
 4. **Review screen** — one long, scrollable window listing every approved
    message in order, mirroring the original chatlog. Text-only messages are
-   shown for context; messages with an attached image show that image next
-   to a single freely-editable text box pre-filled with its OCR text (all
-   paragraphs joined together) — copy, paste, and arbitrary edits are all
-   allowed, nothing is parsed or restricted. Nothing is written to disk
-   while reviewing.
+   shown for context; messages with an attached image show that image
+   (large — roughly two-thirds of the window's width) next to a single
+   freely-editable text box pre-filled with its OCR text (all paragraphs
+   joined together) — copy, paste, and arbitrary edits are all allowed,
+   nothing is parsed or restricted. Images are decoded/loaded lazily as you
+   scroll near them (and unloaded again once you scroll away), so scrolling
+   stays responsive regardless of how many messages there are. Nothing is
+   written to disk while reviewing.
 5. **Finalize** — a single button at the bottom of the review screen writes
    every message's final lines (edited text if you changed it, original OCR
    text otherwise) to the output file in one pass, then runs the original
@@ -67,10 +70,12 @@ gui_transcription/
     cleanup.py            # post-run regex cleanup pass
     pipeline.py           # OCR batch runner, review-item building,
                           # bulk output writing, finalization
+    logging_config.py     # JSON file + console logging setup
     gui/
       main_window.py      # setup screen + run orchestration on the Tk side
       progress_view.py    # OCR progress bar
       review_view.py       # the full scrollable review screen + Finalize button
+                          # (lazy image loading, large thumbnails)
   app_tests/              # pytest unit tests for all the non-GUI logic
   requirements.txt
   original_transcription_program/   # the original CLI script, kept as reference
@@ -98,6 +103,14 @@ building/output-writing. The GUI itself only has a manual smoke test (window
 construction, the review screen with synthetic data, an edit-then-finalize
 pass against a temp output file) — there's no automated test driving real
 Tk button clicks or a live Tesseract install.
+
+## Logging
+
+Every module logs through `app/logging_config.py`, which writes single-line
+JSON records to both the console and a rotating log file at
+`~/.discord_transcription_gui/app.log` (2MB x 3 backups). Covers run
+start/exit, OCR batch progress, HTML parsing summaries (with skip-reason
+counts), review-screen build/finalize events, and caught exceptions.
 
 ## Known gaps / next steps
 
