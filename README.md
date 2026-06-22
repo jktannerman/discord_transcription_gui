@@ -40,17 +40,19 @@ What's in scope for v1 (by design, agreed with the project owner):
    (e.g. to redo just the correction pass) doesn't repeat OCR work.
 3. **HTML parsing** — parses the export, keeping only messages after the
    start date from the approved author IDs (the GM + dice-roller bot).
-4. **Correction screen** — for each approved message with an attached image,
-   shows the image alongside an editable text box, one OCR paragraph at a
-   time, with buttons for: Accept, Back, Retry, Accept-all-remaining,
-   Skip-rest-of-image, Skip-this-paragraph, and Accept-&-stop. These map
-   directly onto the original script's `bbb/ccc/ddd/eee/fff/ggg` terminal
-   codes. Each message's lines are appended to the output file as soon as
-   it's resolved (no separate "save" step).
-5. **Finishing up** — runs the original regex cleanup pass over the whole
-   output file, records the new run-end date, copies the newly-added text
-   to the clipboard, and appends a fresh `[BREAK]` marker as a bookmark for
-   the next run.
+4. **Review screen** — one long, scrollable window listing every approved
+   message in order, mirroring the original chatlog. Text-only messages are
+   shown for context; messages with an attached image show that image next
+   to a single freely-editable text box pre-filled with its OCR text (all
+   paragraphs joined together) — copy, paste, and arbitrary edits are all
+   allowed, nothing is parsed or restricted. Nothing is written to disk
+   while reviewing.
+5. **Finalize** — a single button at the bottom of the review screen writes
+   every message's final lines (edited text if you changed it, original OCR
+   text otherwise) to the output file in one pass, then runs the original
+   regex cleanup pass, records the new run-end date, copies the newly-added
+   text to the clipboard, and appends a fresh `[BREAK]` marker as a bookmark
+   for the next run.
 
 ## Project layout
 
@@ -63,12 +65,12 @@ gui_transcription/
     ocr.py                # Tesseract OCR behind a swappable backend interface
     chatlog.py            # HTML parsing + date/author filtering
     cleanup.py            # post-run regex cleanup pass
-    pipeline.py           # OCR batch runner, correction state machine,
-                          # run orchestration, finalization
+    pipeline.py           # OCR batch runner, review-item building,
+                          # bulk output writing, finalization
     gui/
       main_window.py      # setup screen + run orchestration on the Tk side
       progress_view.py    # OCR progress bar
-      correction_view.py  # one-paragraph-at-a-time correction screen
+      review_view.py       # the full scrollable review screen + Finalize button
   app_tests/              # pytest unit tests for all the non-GUI logic
   requirements.txt
   original_transcription_program/   # the original CLI script, kept as reference
@@ -90,17 +92,19 @@ py -3.13 -m gui_transcription.app.main
 py -3.13 -m pytest gui_transcription\app_tests -v
 ```
 
-27 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
-splitting, JSON state persistence, start-date validation, and the full
-paragraph-correction state machine. The GUI itself only has a manual smoke
-test (window construction, validation paths) — there's no automated test
-driving real Tk button clicks or a live Tesseract install.
+28 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
+splitting, JSON state persistence, start-date validation, and review-item
+building/output-writing. The GUI itself only has a manual smoke test (window
+construction, the review screen with synthetic data, an edit-then-finalize
+pass against a temp output file) — there's no automated test driving real
+Tk button clicks or a live Tesseract install.
 
 ## Known gaps / next steps
 
 - No real-data end-to-end test yet (see Status above).
 - Author allow-list and other `config.py` constants are not yet editable
   from the UI (deferred, not an immediate priority).
-- No "undo across messages" — once a message is submitted, only the
-  in-progress message's paragraphs can be revisited (via Back), matching
-  the original script's per-message-append behavior.
+- The review screen is a single long scroll of stacked rows (image +
+  editable text box per message) rather than two independently-scrolling
+  columns; this was the simpler, more robust layout to keep image and text
+  vertically locked together while scrolling.

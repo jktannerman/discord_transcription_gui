@@ -2,7 +2,8 @@
 
 Manages the setup screen (file/folder pickers, start date, cache checkbox),
 runs the OCR batch on a background thread while showing a progress screen,
-then walks the approved messages one at a time via the correction screen,
+then shows the full review screen (every approved message, images paired
+with editable OCR text) and writes everything out once Finalize is clicked,
 finishing with a summary screen.
 """
 
@@ -12,8 +13,8 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from .. import chatlog, pipeline, state
-from .correction_view import CorrectionFrame
 from .progress_view import ProgressFrame
+from .review_view import ReviewFrame
 
 
 class App:
@@ -33,7 +34,7 @@ class App:
         self._start_date = tk.StringVar(value=state.read_last_run_date() or "")
         self._use_cache = tk.BooleanVar(value=False)
 
-        self._run_controller: pipeline.RunController | None = None
+        self._review_items: list[pipeline.ReviewItem] | None = None
 
         self.show_setup()
 
@@ -48,6 +49,7 @@ class App:
     # -- setup screen -------------------------------------------------------
 
     def show_setup(self) -> None:
+        self.root.geometry("700x500")
         frame = ttk.Frame(self.container)
 
         ttk.Label(frame, text="Chatlog HTML file:").grid(row=0, column=0, sticky="w", pady=4)
@@ -160,42 +162,24 @@ class App:
             return
 
         entries = chatlog.parse_message_groups(html_text, start_time)
-        self._run_controller = pipeline.RunController(entries, file_info, output_path)
+        self._review_items = pipeline.build_review_items(
+            entries, file_info, Path(self._image_folder.get())
+        )
         self._html_path_for_run = html_path
         self._output_path_for_run = output_path
-        self._advance_run()
+        self._show_review()
 
-    def _advance_run(self) -> None:
-        controller = self._run_controller
-        assert controller is not None
-
-        if controller.done:
-            self._finish_run()
-            return
-
-        entry = controller.current_entry()
-        paragraphs = controller.paragraphs_for_current()
-
-        if not paragraphs:
-            controller.submit_current([])
-            self._advance_run()
-            return
-
-        image_path = Path(self._image_folder.get()) / entry.image_name
-        para_controller = pipeline.ParagraphCorrectionController(paragraphs)
-
-        def on_message_done():
-            controller.submit_current(para_controller.lines)
-            self._advance_run()
-
-        frame = CorrectionFrame(self.container, image_path, para_controller, on_message_done)
+    def _show_review(self) -> None:
+        self.root.geometry("1200x800")
+        frame = ReviewFrame(self.container, self._review_items, self._on_finalize_clicked)
         self._set_frame(frame)
 
-    def _finish_run(self) -> None:
+    def _on_finalize_clicked(self, edited_texts: list[str | None]) -> None:
         try:
+            pipeline.write_all_items(self._output_path_for_run, self._review_items, edited_texts)
             just_added = pipeline.finalize_run(self._output_path_for_run, self._html_path_for_run)
         except Exception as exc:
-            self._on_run_error(f"Run completed but finishing steps failed: {exc}")
+            self._on_run_error(f"Failed to write output: {exc}")
             return
 
         frame = ttk.Frame(self.container)

@@ -4,10 +4,14 @@ Split into pieces the GUI can drive explicitly:
 
 - ``parse_start_date`` / ``run_ocr_batch`` run before any user interaction
   (the latter on a background thread, reporting progress via callback).
-- ``RunController`` walks the approved messages one at a time; for messages
-  with an attached image, the GUI hands its paragraphs to a
-  ``ParagraphCorrectionController`` for the one-paragraph-at-a-time
-  correction screen, then calls ``submit_current`` with the resulting lines.
+- ``build_review_items`` turns the approved messages + OCR'd paragraphs into
+  a flat list the review screen displays all at once (image on one side,
+  one freely-editable text box with that image's OCR text on the other).
+  Nothing is written to disk until the user reviews everything and clicks
+  Finalize.
+- ``write_all_items`` writes every message's final lines (using whatever the
+  user edited, or the original OCR text if they left it alone) once, in
+  order, when Finalize is clicked.
 - ``finalize_run`` performs the regex cleanup pass, records the new run
   date, and bookmarks the output file with a fresh BREAK marker.
 """
@@ -106,111 +110,63 @@ def write_message_lines(output_path: Path, lines_to_write: list[str]) -> None:
             f.write("\n\n")
 
 
-class ParagraphCorrectionController:
-    """Walks one image's OCR paragraphs, mirroring the original script's
-    bbb/ccc/ddd/eee/fff/ggg suffix-code loop via explicit method calls
-    instead of parsed text suffixes."""
-
-    def __init__(self, paragraphs: list[str]):
-        self._paragraphs = paragraphs
-        self._index = 0
-        self._lines: list[str] = []
-        self._accept_all_remaining = False
-        self._stopped = False
-
-    @property
-    def done(self) -> bool:
-        return self._stopped or self._index >= len(self._paragraphs)
-
-    @property
-    def current_paragraph(self) -> Optional[str]:
-        return None if self.done else self._paragraphs[self._index]
-
-    @property
-    def progress(self) -> tuple[int, int]:
-        return self._index, len(self._paragraphs)
-
-    @property
-    def lines(self) -> list[str]:
-        return list(self._lines)
-
-    def accept(self, text: Optional[str] = None) -> None:
-        """Accept the current paragraph (Enter / ddd-without-suffix semantics)."""
-        if self.done:
-            return
-        para = self._paragraphs[self._index]
-        self._lines.append(text if text is not None else para + "\\n\\n")
-        self._index += 1
-        self._fill_remaining_if_flagged()
-
-    def go_back(self) -> None:
-        """bbb: undo the last accepted paragraph and re-show it."""
-        if self._index == 0:
-            return
-        self._lines.pop()
-        self._index -= 1
-
-    def accept_all_remaining(self, text: Optional[str] = None) -> None:
-        """ddd: accept the current paragraph, then auto-accept all that follow."""
-        self._accept_all_remaining = True
-        self.accept(text)
-
-    def skip_rest(self) -> None:
-        """eee: drop the current and all following paragraphs."""
-        self._stopped = True
-
-    def skip_this_only(self) -> None:
-        """fff: drop only the current paragraph, continue to the next."""
-        if not self.done:
-            self._index += 1
-
-    def accept_and_stop(self, text: Optional[str] = None) -> None:
-        """ggg: accept the current paragraph, then stop processing further ones."""
-        if self.done:
-            return
-        para = self._paragraphs[self._index]
-        self._lines.append(text if text is not None else para + "\\n\\n")
-        self._stopped = True
-
-    def _fill_remaining_if_flagged(self) -> None:
-        if not self._accept_all_remaining:
-            return
-        while not self.done:
-            para = self._paragraphs[self._index]
-            self._lines.append(para + "\\n\\n")
-            self._index += 1
-
-
 @dataclass
-class RunController:
-    """Walks the approved message list, writing each one's lines once it
-    (and any attached image's paragraphs) has been resolved."""
+class ReviewItem:
+    """One row of the review screen: a message, optionally paired with an
+    image and the editable text initialized from that image's OCR
+    paragraphs (joined with blank lines)."""
 
-    entries: list[MessageEntry]
-    file_info: dict[str, list[str]]
-    output_path: Path
-    _entry_index: int = 0
+    entry: MessageEntry
+    image_path: Optional[Path]
+    initial_text: Optional[str]
 
-    @property
-    def done(self) -> bool:
-        return self._entry_index >= len(self.entries)
 
-    def current_entry(self) -> Optional[MessageEntry]:
-        return None if self.done else self.entries[self._entry_index]
+def build_review_items(
+    entries: list[MessageEntry],
+    file_info: dict[str, list[str]],
+    image_folder: Path,
+) -> list[ReviewItem]:
+    """Pair each approved message with its image (if any) and that image's
+    OCR text pre-joined into one editable block."""
+    items: list[ReviewItem] = []
+    for entry in entries:
+        if entry.image_name is None:
+            items.append(ReviewItem(entry=entry, image_path=None, initial_text=None))
+            continue
 
-    def paragraphs_for_current(self) -> list[str]:
-        entry = self.current_entry()
-        if entry is None or entry.image_name is None:
-            return []
-        return self.file_info.get(entry.image_name, [])
+        paragraphs = file_info.get(entry.image_name, [])
+        initial_text = "\n\n".join(para.strip() for para in paragraphs)
+        items.append(
+            ReviewItem(
+                entry=entry,
+                image_path=image_folder / entry.image_name,
+                initial_text=initial_text,
+            )
+        )
+    return items
 
-    def submit_current(self, image_lines: list[str]) -> None:
-        """Write the current message (text lines + corrected image lines)
-        and advance to the next one."""
-        entry = self.entries[self._entry_index]
-        lines_to_write = [line + "\n" for line in entry.text_lines] + image_lines
-        write_message_lines(self.output_path, lines_to_write)
-        self._entry_index += 1
+
+def lines_for_item(item: ReviewItem, edited_text: Optional[str] = None) -> list[str]:
+    """Build the final lines to write for one review item, using edited_text
+    in place of the original OCR text if the user changed it."""
+    lines = [line + "\n" for line in item.entry.text_lines]
+
+    if item.initial_text is not None:
+        text = edited_text if edited_text is not None else item.initial_text
+        if text:
+            lines.append(text + "\n")
+
+    return lines
+
+
+def write_all_items(
+    output_path: Path,
+    items: list[ReviewItem],
+    edited_texts: list[Optional[str]],
+) -> None:
+    """Write every review item's final lines, in order, in one pass."""
+    for item, edited_text in zip(items, edited_texts):
+        write_message_lines(output_path, lines_for_item(item, edited_text))
 
 
 def finalize_run(output_path: Path, html_file_path: Path) -> str:
