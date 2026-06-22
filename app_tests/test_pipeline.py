@@ -6,6 +6,7 @@ from gui_transcription.app.chatlog import MessageEntry
 from gui_transcription.app.pipeline import (
     build_review_items,
     lines_for_item,
+    parse_approved_user_ids,
     parse_start_date,
     write_all_items,
     write_message_lines,
@@ -30,6 +31,30 @@ def test_parse_start_date_invalid_raises():
 def test_parse_start_date_wrong_field_count_raises():
     with pytest.raises(ValueError):
         parse_start_date("2024")
+
+
+def test_parse_approved_user_ids_extracts_leading_digits():
+    ids = parse_approved_user_ids("123456789 - Alice\n987654321 - Bob")
+    assert ids == {"123456789", "987654321"}
+
+
+def test_parse_approved_user_ids_ignores_blank_lines():
+    ids = parse_approved_user_ids("123456789 - Alice\n\n   \n987654321 - Bob\n")
+    assert ids == {"123456789", "987654321"}
+
+
+def test_parse_approved_user_ids_dedupes():
+    ids = parse_approved_user_ids("123456789 - Alice\n123456789 - Alice again")
+    assert ids == {"123456789"}
+
+
+def test_parse_approved_user_ids_no_leading_digits_raises():
+    with pytest.raises(ValueError):
+        parse_approved_user_ids("Alice - 123456789")
+
+
+def test_parse_approved_user_ids_empty_text_returns_empty_set():
+    assert parse_approved_user_ids("") == set()
 
 
 def test_build_review_items_text_only_message():

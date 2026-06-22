@@ -11,8 +11,9 @@ import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from typing import Optional
 
-from .. import chatlog, logging_config, pipeline, state
+from .. import chatlog, config, logging_config, pipeline, state
 from . import theme
 from .progress_view import ProgressFrame
 from .review_view import ReviewFrame
@@ -47,6 +48,15 @@ class App:
         self._output_path = tk.StringVar(value=_most_recent("output_path"))
         self._start_date = tk.StringVar(value=state.read_last_run_date() or "")
         self._use_cache = tk.BooleanVar(value=True)
+
+        approved_users_state = state.read_approved_users_state()
+        if approved_users_state is None:
+            self._initial_approved_users_text = "\n".join(config.DEFAULT_APPROVED_USERS)
+            self._use_all_users = tk.BooleanVar(value=False)
+        else:
+            self._initial_approved_users_text = approved_users_state["text"]
+            self._use_all_users = tk.BooleanVar(value=approved_users_state["use_all_users"])
+        self._known_user_pick = tk.StringVar()
 
         self._review_items: list[pipeline.ReviewItem] | None = None
 
@@ -95,10 +105,55 @@ class App:
         )
         self._cache_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=4)
 
-        self._error_label = ttk.Label(frame, text="", foreground="red")
-        self._error_label.grid(row=5, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Checkbutton(
+            frame, text="Transcribe messages from all users", variable=self._use_all_users,
+            command=self._update_approved_users_enabled,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=4)
 
-        ttk.Button(frame, text="Start", command=self._on_start).grid(row=6, column=1, pady=12)
+        approved_frame = ttk.Frame(frame)
+        approved_frame.grid(row=6, column=0, columnspan=3, sticky="w", pady=4)
+
+        ttk.Label(
+            approved_frame, text='Approved users (one per line, e.g. "123456789 - Alice"):'
+        ).pack(anchor="w")
+
+        text_container = ttk.Frame(approved_frame)
+        text_container.pack(anchor="w")
+        self._approved_users_text = tk.Text(
+            text_container, width=60, height=5, wrap="none", undo=True,
+            font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE - 2),
+            bg=theme.DARK_TEXT_BG, fg=theme.DARK_FG, insertbackground=theme.DARK_INSERT,
+            selectbackground=theme.DARK_ACCENT, selectforeground="white",
+            highlightthickness=1, highlightbackground=theme.DARK_BG_ALT,
+            highlightcolor=theme.DARK_FOCUS_HIGHLIGHT,
+        )
+        self._approved_users_text.insert("1.0", self._initial_approved_users_text)
+        self._approved_users_text.pack(side="left")
+        approved_scroll = ttk.Scrollbar(
+            text_container, orient="vertical", command=self._approved_users_text.yview
+        )
+        approved_scroll.pack(side="left", fill="y")
+        self._approved_users_text.configure(yscrollcommand=approved_scroll.set)
+
+        known_users_frame = ttk.Frame(approved_frame)
+        known_users_frame.pack(anchor="w", pady=4)
+        ttk.Label(known_users_frame, text="Known users:").pack(side="left")
+        self._known_user_combo = ttk.Combobox(
+            known_users_frame, textvariable=self._known_user_pick, width=40,
+            values=state.load_recent_paths("approved_user"),
+        )
+        self._known_user_combo.pack(side="left", padx=4)
+        self._add_known_user_button = ttk.Button(
+            known_users_frame, text="Add", command=self._add_known_user
+        )
+        self._add_known_user_button.pack(side="left")
+
+        self._update_approved_users_enabled()
+
+        self._error_label = ttk.Label(frame, text="", foreground="red")
+        self._error_label.grid(row=7, column=0, columnspan=3, sticky="w", pady=4)
+
+        ttk.Button(frame, text="Start", command=self._on_start).grid(row=8, column=1, pady=12)
 
         self._set_frame(frame)
 
@@ -119,6 +174,25 @@ class App:
         if path:
             self._output_path.set(path)
 
+    def _add_known_user(self) -> None:
+        value = self._known_user_pick.get().strip()
+        if not value:
+            return
+        self._approved_users_text.insert("end", value + "\n")
+
+    def _update_approved_users_enabled(self) -> None:
+        """The approved-users list and "known users" picker are irrelevant
+        once "all users" is checked, so grey them out rather than leaving
+        them interactive but ignored."""
+        if self._use_all_users.get():
+            self._approved_users_text.configure(state="disabled")
+            self._known_user_combo.state(["disabled"])
+            self._add_known_user_button.state(["disabled"])
+        else:
+            self._approved_users_text.configure(state="normal")
+            self._known_user_combo.state(["!disabled"])
+            self._add_known_user_button.state(["!disabled"])
+
     def _on_start(self) -> None:
         self._error_label.config(text="")
 
@@ -136,9 +210,29 @@ class App:
             self._error_label.config(text=str(exc))
             return
 
+        use_all_users = self._use_all_users.get()
+        approved_users_text = self._approved_users_text.get("1.0", "end-1c")
+        approved_author_ids: Optional[set[str]] = None
+        if not use_all_users:
+            try:
+                approved_author_ids = pipeline.parse_approved_user_ids(approved_users_text)
+            except ValueError as exc:
+                self._error_label.config(text=str(exc))
+                return
+            if not approved_author_ids:
+                self._error_label.config(
+                    text='Please enter at least one user, or check "all users".'
+                )
+                return
+
         state.add_recent_path("html_path", html_path)
         state.add_recent_path("image_folder", image_folder)
         state.add_recent_path("output_path", output_path)
+        for line in approved_users_text.splitlines():
+            line = line.strip()
+            if line:
+                state.add_recent_path("approved_user", line)
+        state.save_approved_users_state(approved_users_text, use_all_users)
 
         logger.info(
             "starting run",
@@ -147,13 +241,23 @@ class App:
                 image_folder=image_folder,
                 output_path=output_path,
                 use_cache=self._use_cache.get(),
+                use_all_users=use_all_users,
             ),
         )
-        self._begin_run(Path(html_path), Path(image_folder), Path(output_path), start_time)
+        self._begin_run(
+            Path(html_path), Path(image_folder), Path(output_path), start_time, approved_author_ids
+        )
 
     # -- run orchestration --------------------------------------------------
 
-    def _begin_run(self, html_path: Path, image_folder: Path, output_path: Path, start_time: int) -> None:
+    def _begin_run(
+        self,
+        html_path: Path,
+        image_folder: Path,
+        output_path: Path,
+        start_time: int,
+        approved_author_ids: Optional[set[str]],
+    ) -> None:
         progress = ProgressFrame(self.container, status_text="Running OCR on images...")
         self._set_frame(progress)
 
@@ -172,7 +276,9 @@ class App:
                 self.root.after(0, self._on_run_error, str(exc))
                 return
 
-            self.root.after(0, self._on_ocr_done, html_path, output_path, start_time, file_info)
+            self.root.after(
+                0, self._on_ocr_done, html_path, output_path, start_time, approved_author_ids, file_info
+            )
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -181,14 +287,21 @@ class App:
         messagebox.showerror("Error", message)
         self.show_setup()
 
-    def _on_ocr_done(self, html_path: Path, output_path: Path, start_time: int, file_info: dict) -> None:
+    def _on_ocr_done(
+        self,
+        html_path: Path,
+        output_path: Path,
+        start_time: int,
+        approved_author_ids: Optional[set[str]],
+        file_info: dict,
+    ) -> None:
         try:
             html_text = html_path.read_text(encoding="utf8")
         except OSError as exc:
             self._on_run_error(f"Could not read HTML file: {exc}")
             return
 
-        entries = chatlog.parse_message_groups(html_text, start_time)
+        entries = chatlog.parse_message_groups(html_text, start_time, approved_author_ids)
         self._review_items = pipeline.build_review_items(
             entries, file_info, Path(self._image_folder.get())
         )

@@ -1,10 +1,11 @@
 """Parsing of the DiscordChatExporter HTML export.
 
-Mirrors the filtering logic in the original script: only messages from
-``config.APPROVED_AUTHOR_IDS``, timestamped after ``start_time``, are kept.
-Each accepted message is reduced to its plain text lines plus the filename
-of any attached image (if present) — OCR and the interactive correction step
-are handled separately in pipeline.py.
+Mirrors the filtering logic in the original script: only messages from an
+approved set of author IDs (entered on the setup screen, not hardcoded -
+see pipeline.parse_approved_user_ids), timestamped after ``start_time``, are
+kept. Each accepted message is reduced to its plain text lines plus the
+filename of any attached image (if present) — OCR and the interactive
+correction step are handled separately in pipeline.py.
 """
 
 import datetime
@@ -25,8 +26,14 @@ class MessageEntry:
     image_name: Optional[str]
 
 
-def parse_message_groups(html_text: str, start_time: int) -> list[MessageEntry]:
-    """Return the approved, post-start_time messages from the export."""
+def parse_message_groups(
+    html_text: str, start_time: int, approved_author_ids: Optional[set[str]]
+) -> list[MessageEntry]:
+    """Return the approved, post-start_time messages from the export.
+
+    approved_author_ids is the set of Discord user IDs to keep messages
+    from, or None to keep messages from every author (the "all users" mode).
+    """
     parsed_html = BeautifulSoup(html_text, features="lxml")
     groups = parsed_html.find_all(attrs={"class": "chatlog__message-group"})
 
@@ -51,7 +58,10 @@ def parse_message_groups(html_text: str, start_time: int) -> list[MessageEntry]:
         if author_element is None:
             skip_counts["no_author"] += 1
             continue
-        if author_element.attrs.get("data-user-id") not in config.APPROVED_AUTHOR_IDS:
+        if (
+            approved_author_ids is not None
+            and author_element.attrs.get("data-user-id") not in approved_author_ids
+        ):
             skip_counts["unapproved_author"] += 1
             continue
 

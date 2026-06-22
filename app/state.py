@@ -87,6 +87,35 @@ def add_recent_path(field: str, value: str) -> None:
     logger.info("recorded recent path", extra=logging_config.extra(field=field, value=value))
 
 
+def read_approved_users_state() -> Optional[dict]:
+    """Return {"text": str, "use_all_users": bool} as last saved from the
+    setup screen, or None if it has never been saved (first run) - callers
+    distinguish that from an intentionally-emptied field by checking for
+    None rather than treating an empty/falsy result as "never saved"."""
+    if not config.APPROVED_USERS_STATE_FILE.exists():
+        return None
+
+    with open(config.APPROVED_USERS_STATE_FILE, "r", encoding="utf8") as f:
+        data = json.load(f)
+
+    return {"text": data.get("text", ""), "use_all_users": data.get("use_all_users", False)}
+
+
+def save_approved_users_state(text: str, use_all_users: bool) -> None:
+    """Persist the setup screen's approved-users field verbatim, plus the
+    "all users" toggle, so the next run can be pre-filled with exactly what
+    was used this time."""
+    _ensure_data_dir()
+
+    with open(config.APPROVED_USERS_STATE_FILE, "w", encoding="utf8") as f:
+        json.dump({"text": text, "use_all_users": use_all_users}, f, indent=2)
+
+    logger.info(
+        "saved approved-users setup state",
+        extra=logging_config.extra(use_all_users=use_all_users, line_count=len(text.splitlines())),
+    )
+
+
 def load_cache(folder_path: str) -> Optional[dict]:
     """Return the cached {image_name: [paragraphs]} dict for folder_path.
 

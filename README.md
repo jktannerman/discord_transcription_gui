@@ -24,9 +24,10 @@ What's in scope for v1 (by design, agreed with the project owner):
 - Tesseract is the only OCR backend, but it's called through a small
   swappable interface (`app/ocr.py`) so an EasyOCR backend could be added
   later without touching calling code.
-- The approved-author allow-list and other config values are hardcoded
-  constants in `app/config.py` (isolated there for an eventual settings
-  screen, but not yet exposed in the UI).
+- Most config values are hardcoded constants in `app/config.py` (isolated
+  there for an eventual settings screen, but not yet exposed in the UI). The
+  approved-author list is the one exception - it's entered and cached from
+  the setup screen, the same way the file/folder pickers are.
 
 ## What it does
 
@@ -37,13 +38,22 @@ What's in scope for v1 (by design, agreed with the project owner):
    pre-filled from the last recorded run; a "use cached OCR data" checkbox
    starts checked and can always be toggled - if it's checked but no
    matching cache exists for the selected image folder, OCR just runs
-   normally. The window launches maximized.
+   normally. An "Approved users" multi-line box lists which Discord users'
+   messages get kept, one per line in the form `123456789 - Alice` - only
+   the leading digits (the actual Discord user ID) are used for filtering,
+   the rest is just a human-readable label. It's pre-filled with whatever
+   was used last run; individual entries you've typed before are also
+   remembered and can be re-added via the "Known users" dropdown next to it
+   without retyping the ID. A "Transcribe messages from all users" checkbox
+   bypasses the filter entirely (and greys out the users box, since it's
+   moot while checked). The window launches maximized.
 2. **OCR pass** (background thread, progress bar) — walks the image folder,
    skips non-image files and anything older than the start date, and runs
    Tesseract on the rest. Results are cached to disk as JSON so a re-run
    (e.g. to redo just the correction pass) doesn't repeat OCR work.
 3. **HTML parsing** — parses the export, keeping only messages after the
-   start date from the approved author IDs (the GM + dice-roller bot).
+   start date from the approved users entered on the setup screen (or every
+   user, if "all users" was checked).
 4. **Review screen** — an infinite-scroll window listing every approved
    message in order, mirroring the original chatlog. Text-only messages are
    shown for context; messages with an attached image show that image
@@ -96,8 +106,8 @@ it light until the window was next resized.
 gui_transcription/
   app/
     main.py              # entry point
-    config.py            # constants: paths, allow-list, markers
-    state.py             # JSON run-date log + OCR cache (replaces pickle)
+    config.py            # constants: paths, markers, default approved users
+    state.py             # JSON run-date log, OCR cache, approved-users state
     ocr.py                # Tesseract OCR behind a swappable backend interface
     chatlog.py            # HTML parsing + date/author filtering
     cleanup.py            # post-run regex cleanup pass
@@ -150,8 +160,9 @@ counts), review-screen build/finalize events, and caught exceptions.
 ## Known gaps / next steps
 
 - No real-data end-to-end test yet (see Status above).
-- Author allow-list and other `config.py` constants are not yet editable
-  from the UI (deferred, not an immediate priority).
+- Other `config.py` constants (Tesseract path, skip-types, etc.) are still
+  not editable from the UI (deferred, not an immediate priority) - only the
+  approved-users list has been moved out of config.py so far.
 - The review screen is a single long scroll of stacked rows (image +
   editable text box per message) rather than two independently-scrolling
   columns; this was the simpler, more robust layout to keep image and text

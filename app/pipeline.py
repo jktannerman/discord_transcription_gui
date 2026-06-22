@@ -18,6 +18,7 @@ Split into pieces the GUI can drive explicitly:
 
 import datetime
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,34 @@ from . import cleanup, config, logging_config, ocr, state
 from .chatlog import MessageEntry
 
 logger = logging_config.get_logger(__name__)
+
+# Matches the leading run of digits on a setup-screen approved-users line,
+# e.g. "123456789 - Alice" -> "123456789". Everything after the digits is
+# just a human-readable label and is ignored for filtering purposes.
+_LEADING_DIGITS_RE = re.compile(r"^\s*(\d+)")
+
+
+def parse_approved_user_ids(text: str) -> set[str]:
+    """Parse the setup screen's multi-line approved-users field (one user
+    per line, e.g. "123456789 - Alice") into the set of Discord user IDs to
+    filter the chatlog by.
+
+    Raises ValueError naming the offending line if a non-blank line doesn't
+    start with a numeric user ID, rather than silently dropping it.
+    """
+    ids: set[str] = set()
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        match = _LEADING_DIGITS_RE.match(line)
+        if not match:
+            logger.warning("invalid approved-user line", extra=logging_config.extra(line=line))
+            raise ValueError(
+                f"Could not parse user line {line!r} - expected it to start with a numeric user ID."
+            )
+        ids.add(match.group(1))
+    return ids
 
 
 def parse_start_date(date_str: str) -> int:

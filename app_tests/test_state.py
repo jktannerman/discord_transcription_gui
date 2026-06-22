@@ -86,3 +86,19 @@ def test_add_recent_path_keeps_fields_separate(tmp_path, monkeypatch):
 
     assert state.load_recent_paths("html_path") == ["a.html"]
     assert state.load_recent_paths("output_path") == ["out.txt"]
+
+
+def test_read_approved_users_state_returns_none_when_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "APPROVED_USERS_STATE_FILE", tmp_path / "approved_users.json")
+
+    assert state.read_approved_users_state() is None
+
+
+def test_approved_users_state_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "APPROVED_USERS_STATE_FILE", tmp_path / "approved_users.json")
+
+    state.save_approved_users_state("123456789 - Alice", True)
+
+    assert state.read_approved_users_state() == {"text": "123456789 - Alice", "use_all_users": True}

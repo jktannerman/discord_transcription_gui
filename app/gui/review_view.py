@@ -142,6 +142,11 @@ class ReviewFrame(ttk.Frame):
         # "never edited/visited" - fall back to item.initial_text.
         self._saved_texts: List[Optional[str]] = [None] * len(items)
         self._update_job: Optional[str] = None
+        # Monotonic counter stamped on every _log_event call, purely so log
+        # lines can be ordered exactly even if two land in the same
+        # millisecond - used to reconstruct the precise sequence of
+        # scroll/page/focus events that leads into a pagination loop.
+        self._event_seq = 0
 
         # Pack the fixed-size widgets (button row, scrollbar) before the
         # expanding canvas - packing the expanding widget first starves the
@@ -162,6 +167,7 @@ class ReviewFrame(ttk.Frame):
         self._canvas = canvas
 
         def _on_scrollbar(*args):
+            self._log_event("input_scrollbar", args=args)
             canvas.yview(*args)
             self._schedule_update_visible_images()
 
@@ -177,11 +183,13 @@ class ReviewFrame(ttk.Frame):
 
         def _on_canvas_configure(e):
             canvas.itemconfig(canvas_window, width=e.width)
+            self._log_event("input_canvas_configure", width=e.width, height=e.height)
             self._schedule_update_visible_images()
 
         canvas.bind("<Configure>", _on_canvas_configure)
 
         def _on_mousewheel(e):
+            self._log_event("input_mousewheel", delta=e.delta)
             canvas.yview_scroll(int(-e.delta / 120), "units")
             self._schedule_update_visible_images()
 
@@ -209,6 +217,25 @@ class ReviewFrame(ttk.Frame):
             self._build_row(idx)
 
         self.after_idle(self._update_visible_images)
+
+    def _log_event(self, event: str, **fields) -> None:
+        """Log one step of scroll/page/focus handling at DEBUG, stamped with
+        a sequence number plus the canvas's current window/scroll state, so
+        a captured log can be replayed step-by-step to see exactly what
+        triggered what during a pagination loop."""
+        self._event_seq += 1
+        top_frac, bottom_frac = self._canvas.yview()
+        logger.debug(
+            event,
+            extra=logging_config.extra(
+                seq=self._event_seq,
+                window_start=self._window_start,
+                window_end=self._window_end,
+                top_frac=round(top_frac, 4),
+                bottom_frac=round(bottom_frac, 4),
+                **fields,
+            ),
+        )
 
     def _build_row(self, index: int, before: Optional[tk.Widget] = None) -> tk.Widget:
         """Materialize the row widget(s) for items[index] and register it in
@@ -346,11 +373,13 @@ class ReviewFrame(ttk.Frame):
         return "break"
 
     def _on_page_up(self, event: Optional[tk.Event] = None) -> str:
+        self._log_event("input_page_up")
         self._canvas.yview_scroll(-1, "pages")
         self._schedule_update_visible_images()
         return "break"
 
     def _on_page_down(self, event: Optional[tk.Event] = None) -> str:
+        self._log_event("input_page_down")
         self._canvas.yview_scroll(1, "pages")
         self._schedule_update_visible_images()
         return "break"
@@ -368,6 +397,7 @@ class ReviewFrame(ttk.Frame):
         canvas = self._canvas
         row = self._row_frames.get(index)
         if row is None:
+            self._log_event("scroll_into_view_no_row", index=index)
             return
         canvas.update_idletasks()
         bbox = canvas.bbox("all")
@@ -381,10 +411,24 @@ class ReviewFrame(ttk.Frame):
         view_top = canvas.canvasy(0)
         view_bottom = canvas.canvasy(viewport_height)
 
+        action = "none"
         if row_top < view_top:
             canvas.yview_moveto(row_top / total_height)
+            action = "scroll_up"
         elif row_bottom > view_bottom:
             canvas.yview_moveto((row_bottom - viewport_height) / total_height)
+            action = "scroll_down"
+
+        self._log_event(
+            "scroll_into_view",
+            index=index,
+            row_top=row_top,
+            row_bottom=row_bottom,
+            view_top=round(view_top, 1),
+            view_bottom=round(view_bottom, 1),
+            total_height=total_height,
+            action=action,
+        )
 
     def _focus_text_box(self, index: int) -> None:
         """Focus items[index]'s text box, scroll its row into view on the
@@ -392,6 +436,7 @@ class ReviewFrame(ttk.Frame):
         cursor - the box may have been built (or last left) scrolled to
         wherever its cursor happened to be, which isn't necessarily the
         start of its text."""
+        self._log_event("focus_text_box", index=index)
         widget = self._text_widgets[index]
         widget.focus_set()
         widget.see("insert")
@@ -401,6 +446,11 @@ class ReviewFrame(ttk.Frame):
         """Move focus to the next/previous text box in transcript order (or
         to/from the Finalize button at either end), paging the window
         forward/backward first if the target isn't materialized yet."""
+        self._log_event(
+            "move_focus_start",
+            delta=delta,
+            focus_is_finalize_button=self.focus_get() is self._finalize_button,
+        )
         if self.focus_get() is self._finalize_button:
             if delta < 0:
                 indices = sorted(self._text_widgets.keys())
@@ -430,8 +480,10 @@ class ReviewFrame(ttk.Frame):
             # the natural next stop.
             while True:
                 if self._window_end >= len(self._items):
+                    self._log_event("move_focus_to_finalize_button")
                     self._finalize_button.focus_set()
                     return "break"
+                self._log_event("move_focus_paging_forward", current_index=current_index)
                 self._advance_forward()
                 candidates = [i for i in self._text_widgets if i > current_index]
                 if candidates:
@@ -443,6 +495,7 @@ class ReviewFrame(ttk.Frame):
             while True:
                 if self._window_start <= 0:
                     return "break"
+                self._log_event("move_focus_paging_backward", current_index=current_index)
                 self._advance_backward()
                 candidates = [i for i in self._text_widgets if i < current_index]
                 if candidates:
@@ -461,6 +514,8 @@ class ReviewFrame(ttk.Frame):
         anchor_row = self._row_frames.get(anchor_index)
         old_canvas_top = canvas.canvasy(0)
         old_anchor_y = anchor_row.winfo_y() if anchor_row is not None else None
+        old_bbox = canvas.bbox("all")
+        old_total_height = (old_bbox[3] - old_bbox[1]) if old_bbox else 0
 
         mutate()
 
@@ -470,13 +525,32 @@ class ReviewFrame(ttk.Frame):
         canvas.update_idletasks()
         canvas.configure(scrollregion=canvas.bbox("all"))
 
+        new_anchor_y = None
+        delta = None
+        new_total_height = None
+        new_top_frac = None
         if anchor_row is not None and old_anchor_y is not None and anchor_row.winfo_exists():
-            delta = anchor_row.winfo_y() - old_anchor_y
+            new_anchor_y = anchor_row.winfo_y()
+            delta = new_anchor_y - old_anchor_y
             if delta:
                 bbox = canvas.bbox("all")
-                total_height = (bbox[3] - bbox[1]) if bbox else 0
-                if total_height > 0:
-                    canvas.yview_moveto((old_canvas_top + delta) / total_height)
+                new_total_height = (bbox[3] - bbox[1]) if bbox else 0
+                if new_total_height > 0:
+                    new_top_frac = (old_canvas_top + delta) / new_total_height
+                    canvas.yview_moveto(new_top_frac)
+
+        self._log_event(
+            "transition_preserving_scroll",
+            anchor_index=anchor_index,
+            anchor_row_existed=anchor_row is not None,
+            old_canvas_top=round(old_canvas_top, 1),
+            old_total_height=old_total_height,
+            old_anchor_y=old_anchor_y,
+            new_anchor_y=new_anchor_y,
+            delta=delta,
+            new_total_height=new_total_height,
+            new_top_frac=round(new_top_frac, 4) if new_top_frac is not None else None,
+        )
 
     def _advance_forward(self) -> None:
         """Page the window forward by PAGE_STEP items: drop rows leaving the
@@ -484,13 +558,21 @@ class ReviewFrame(ttk.Frame):
         total = len(self._items)
         old_start, old_end = self._window_start, self._window_end
         if old_end >= total:
+            self._log_event("advance_forward_noop", reason="at_end")
             return
         new_start = min(old_start + PAGE_STEP, total)
         new_end = min(new_start + PAGE_SIZE, total)
         if new_start == old_start and new_end == old_end:
+            self._log_event("advance_forward_noop", reason="window_unchanged")
             return
 
         focused_index = self._focused_text_index()
+        self._log_event(
+            "advance_forward_start",
+            old_start=old_start, old_end=old_end,
+            new_start=new_start, new_end=new_end,
+            focused_index=focused_index,
+        )
 
         def mutate():
             for idx in range(old_start, min(new_start, old_end)):
@@ -508,23 +590,28 @@ class ReviewFrame(ttk.Frame):
         self._window_start, self._window_end = new_start, new_end
         self._restore_focus(focused_index)
         self._schedule_update_visible_images()
-        logger.debug(
-            "advanced review page forward",
-            extra=logging_config.extra(window_start=new_start, window_end=new_end),
-        )
+        self._log_event("advance_forward_done")
 
     def _advance_backward(self) -> None:
         """Page the window backward by PAGE_STEP items: drop rows leaving the
         bottom, build rows entering at the top."""
         old_start, old_end = self._window_start, self._window_end
         if old_start <= 0:
+            self._log_event("advance_backward_noop", reason="at_start")
             return
         new_end = max(old_end - PAGE_STEP, 0)
         new_start = max(new_end - PAGE_SIZE, 0)
         if new_start == old_start and new_end == old_end:
+            self._log_event("advance_backward_noop", reason="window_unchanged")
             return
 
         focused_index = self._focused_text_index()
+        self._log_event(
+            "advance_backward_start",
+            old_start=old_start, old_end=old_end,
+            new_start=new_start, new_end=new_end,
+            focused_index=focused_index,
+        )
 
         def mutate():
             for idx in range(new_end, old_end):
@@ -542,10 +629,7 @@ class ReviewFrame(ttk.Frame):
         self._window_start, self._window_end = new_start, new_end
         self._restore_focus(focused_index)
         self._schedule_update_visible_images()
-        logger.debug(
-            "advanced review page backward",
-            extra=logging_config.extra(window_start=new_start, window_end=new_end),
-        )
+        self._log_event("advance_backward_done")
 
     def _maybe_advance_page(self) -> None:
         """Page forward/backward once the materialized window's edge gets
@@ -562,31 +646,55 @@ class ReviewFrame(ttk.Frame):
         buffer = viewport_height * SCROLL_BUFFER_VIEWPORTS
 
         last_row = self._row_frames.get(self._window_end - 1)
+        last_row_margin = (
+            last_row.winfo_y() + last_row.winfo_height() - visible_bottom
+            if last_row is not None else None
+        )
+        first_row = self._row_frames.get(self._window_start)
+        first_row_margin = (
+            visible_top - first_row.winfo_y() if first_row is not None else None
+        )
+        self._log_event(
+            "maybe_advance_page_check",
+            visible_top=round(visible_top, 1),
+            visible_bottom=round(visible_bottom, 1),
+            buffer=round(buffer, 1),
+            last_row_margin=round(last_row_margin, 1) if last_row_margin is not None else None,
+            first_row_margin=round(first_row_margin, 1) if first_row_margin is not None else None,
+        )
+
         if (
-            last_row is not None
+            last_row_margin is not None
             and self._window_end < len(self._items)
-            and last_row.winfo_y() + last_row.winfo_height() - visible_bottom < buffer
+            and last_row_margin < buffer
         ):
+            self._log_event("maybe_advance_page_decision", direction="forward")
             self._advance_forward()
             return
 
-        first_row = self._row_frames.get(self._window_start)
         if (
-            first_row is not None
+            first_row_margin is not None
             and self._window_start > 0
-            and visible_top - first_row.winfo_y() < buffer
+            and first_row_margin < buffer
         ):
+            self._log_event("maybe_advance_page_decision", direction="backward")
             self._advance_backward()
+            return
+
+        self._log_event("maybe_advance_page_decision", direction="none")
 
     def _schedule_update_visible_images(self) -> None:
         """Coalesce a burst of scroll events into a single load/unload pass,
         run shortly after the most recent event rather than on every one."""
+        had_pending = self._update_job is not None
         if self._update_job is not None:
             self.after_cancel(self._update_job)
+        self._log_event("debounce_scheduled", had_pending=had_pending)
         self._update_job = self.after(DEBOUNCE_MS, self._run_scheduled_update)
 
     def _run_scheduled_update(self) -> None:
         self._update_job = None
+        self._log_event("debounce_fired")
         self._update_visible_images()
 
     def _update_visible_images(self) -> None:
@@ -595,6 +703,7 @@ class ReviewFrame(ttk.Frame):
         canvas = self._canvas
         canvas.update_idletasks()
         viewport_height = canvas.winfo_height()
+        self._log_event("update_visible_images", viewport_height=viewport_height)
         if viewport_height <= 1:
             return
 

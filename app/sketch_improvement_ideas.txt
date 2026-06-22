@@ -1,13 +1,11 @@
 fix date stuff - done?
-keyboard shortcuts
+basic keyboard shortcuts - done
 
 Please now add basic keyboard shortcuts. 
 
 - The most vital is Ctrl-Backspace, deleting a whole word. 
 - Also very useful would be Tab/Shift-Tab, which should go forward/backward one text input box, or to/from the finalisation button if at the very bottom. I do not expect to need to use the actual tab character much.
 - Page Up and Page Down would be nice to have.
-
-
 
 undo/redo in a given text input window
 
@@ -31,6 +29,38 @@ personalised clipboard?
 
 
 change user tokens
+
+
+The current task: instead of being hardcoded, as they currently are, the users whose messages should be picked by the filter are also selected upon startup. These should be cached and selectable in a similar way to the other startup inputs. For ease of use, the program should accept and display user ids that are of the form: "123456789 - Alice", but use only the leading digits for the actual HTML filter.
+
+I am not certain whether it would be better to have all relevant users entered in a single line, or whether each user id should be entered separately. The disadvantage of the former is that the line may be overlong for the window. The disadvantage of the latter is that it is unclear how many user inputs would be needed. Your thoughts here would be appreciated.
+
+There should also be a mode in which *all* user ids are accepted and all messages are transcribed. I am not sure what the best way to represent this for the user would be; please give some suggestions here too.
+
+
 make it fullscreen by default
 
 make the text parts editable
+
+make it possible to open a given image in browser?
+
+
+doesn't transcribe everything
+
+The `pytesseract` often does not seem to detect all of the text in a given image. An example would be the very first image in the HTML file in `./example_inputs`, `Screen_Shot_2026-05-21_at_9.27.10_pm-03B97.png`; while the main text is black on light blue and is mostly transcribed correctly, the header is yellow text on a black background, and is ignored. How can this category of problem best be addressed? Consider several approaches and describe the pros and cons of each, unless there is a clear winning option.
+
+
+
+more comprehensive tests?
+more comprehensive logging?
+
+
+There is currently a severe pagination problem. Upon scrolling up or down and switching pages, it is common for an infinite loop to begin, where the window repeatedly switches between the top of one page and the bottom of another. Think carefully about why this happens; a fix was already attempted once, using scroll anchoring, but it appears to be insufficient. Consider several approaches and describe the pros and cons of each, unless there is a clear winning option.
+
+
+A very minor bug: the window bar does not appear black on startup. This is fixed on resizing the window or alt-tabbing. A bugfix was already attempted once, but it seems to have been insufficient.
+
+
+save load
+
+For long chatlogs, the ability to stop transcribing and resume later would be good. 

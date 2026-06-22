@@ -1,8 +1,9 @@
 import datetime
 import time
 
-from gui_transcription.app import config
 from gui_transcription.app.chatlog import parse_message_groups
+
+APPROVED_USER_ID = "130636614807322624"
 
 
 def _make_html(timestamp: str, user_id: str, text: str | None = None, image_src: str | None = None) -> str:
@@ -32,20 +33,26 @@ def _start_time(date_str: str) -> int:
 
 
 def test_message_before_start_date_excluded():
-    html = _make_html("01/01/2020 00:00", config.APPROVED_AUTHOR_IDS[0], text="hello")
-    entries = parse_message_groups(html, _start_time("2024-01-01"))
+    html = _make_html("01/01/2020 00:00", APPROVED_USER_ID, text="hello")
+    entries = parse_message_groups(html, _start_time("2024-01-01"), {APPROVED_USER_ID})
     assert entries == []
 
 
 def test_message_from_unapproved_author_excluded():
     html = _make_html("01/01/2025 00:00", "999999999999999999", text="hello")
-    entries = parse_message_groups(html, _start_time("2024-01-01"))
+    entries = parse_message_groups(html, _start_time("2024-01-01"), {APPROVED_USER_ID})
     assert entries == []
 
 
+def test_message_included_regardless_of_author_when_no_filter():
+    html = _make_html("01/01/2025 00:00", "999999999999999999", text="hello")
+    entries = parse_message_groups(html, _start_time("2024-01-01"), None)
+    assert len(entries) == 1
+
+
 def test_text_only_message_included():
-    html = _make_html("01/01/2025 00:00", config.APPROVED_AUTHOR_IDS[0], text="line one\nline two")
-    entries = parse_message_groups(html, _start_time("2024-01-01"))
+    html = _make_html("01/01/2025 00:00", APPROVED_USER_ID, text="line one\nline two")
+    entries = parse_message_groups(html, _start_time("2024-01-01"), {APPROVED_USER_ID})
     assert len(entries) == 1
     assert entries[0].text_lines == ["line one", "line two"]
     assert entries[0].image_name is None
@@ -54,9 +61,9 @@ def test_text_only_message_included():
 def test_image_attached_message_extracts_filename():
     html = _make_html(
         "01/01/2025 00:00",
-        config.APPROVED_AUTHOR_IDS[0],
+        APPROVED_USER_ID,
         image_src="https://cdn.example.com/path/my_image.png",
     )
-    entries = parse_message_groups(html, _start_time("2024-01-01"))
+    entries = parse_message_groups(html, _start_time("2024-01-01"), {APPROVED_USER_ID})
     assert len(entries) == 1
     assert entries[0].image_name == "my_image.png"
