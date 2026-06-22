@@ -1,12 +1,36 @@
-fix date stuff
+fix date stuff - done?
 keyboard shortcuts
-image size issues?
+
+Please now add basic keyboard shortcuts. 
+
+- The most vital is Ctrl-Backspace, deleting a whole word. 
+- Also very useful would be Tab/Shift-Tab, which should go forward/backward one text input box, or to/from the finalisation button if at the very bottom. I do not expect to need to use the actual tab character much.
+- Page Up and Page Down would be nice to have.
+
+
+
+undo/redo in a given text input window
+
+image size issues? add zoom?	
+
+
+cache the common folder/output combinations - done
+dark mode - done
+
+
+Please have the dialog where the user inputs the input HTML file, folder and output file path cache previously selected options. There should be a dropdown for each. 
+
+Simultaneously, please implement a dark mode scheme. For both these changes, reference `./song_folder_player` as a model.
+
+
 item mode
 combat mode
 map mode
+
 personalised clipboard?
-undo/redo
-cache the common folder/output combinations
+
+
 change user tokens
-make it fullscreen bydefault
-dark mode
+make it fullscreen by default
+
+make the text parts editable

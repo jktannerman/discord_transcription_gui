@@ -29,7 +29,14 @@ TEXT_FONT_SIZE = 14
 
 
 def enable_dark_title_bar(window: tk.Tk) -> None:
-    """Enable the dark window title bar on Windows 10/11. No-op elsewhere."""
+    """Enable the dark window title bar on Windows 10/11. No-op elsewhere.
+
+    DWM only repaints the non-client area (the title bar) lazily - setting
+    the attribute alone leaves the title bar light until the next resize,
+    which is what made it look like the dark theme "kicked in on resize".
+    The SetWindowPos SWP_FRAMECHANGED call below forces that repaint
+    immediately, without actually changing the window's size or position.
+    """
     if sys.platform != "win32":
         return
 
@@ -42,6 +49,15 @@ def enable_dark_title_bar(window: tk.Tk) -> None:
         value = ctypes.c_int(1)
         ctypes.windll.dwmapi.DwmSetWindowAttribute(
             hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(value), ctypes.sizeof(value)
+        )
+
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_NOZORDER = 0x0004
+        SWP_FRAMECHANGED = 0x0020
+        ctypes.windll.user32.SetWindowPos(
+            hwnd, 0, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
         )
     except (AttributeError, OSError):
         pass  # Silently fail on older Windows versions
@@ -99,13 +115,19 @@ def apply_dark_theme(root: tk.Tk) -> ttk.Style:
 
     # Message/transcript text content sits on the darkest background for
     # better contrast against its foreground than the general UI palette,
-    # and uses a larger monospace font for readability.
+    # and uses a larger monospace font for readability. The Frame style is
+    # for the container the text label sits in - a label alone only paints
+    # the rectangle directly behind its (possibly wrapped, shrink-fit) text,
+    # leaving the surrounding container's lighter background showing
+    # through; wrapping it in a same-colored, width-filling frame closes
+    # that gap so the whole block reads as one dark element.
     style.configure(
         "MessageText.TLabel",
         background=DARK_TEXT_BG,
         foreground=DARK_FG,
         font=(TEXT_FONT_FAMILY, TEXT_FONT_SIZE),
     )
+    style.configure("MessageText.TFrame", background=DARK_TEXT_BG)
 
     # The combobox dropdown listbox is a plain tk.Listbox under the hood and
     # isn't covered by ttk styling - set its colors via the option database.

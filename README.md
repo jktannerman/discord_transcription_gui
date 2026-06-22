@@ -31,9 +31,12 @@ What's in scope for v1 (by design, agreed with the project owner):
 ## What it does
 
 1. **Setup screen** — pick the chatlog HTML file, the exported image folder,
-   and the output `.txt` file. The start date field is pre-filled from the
-   last recorded run; a "use cached OCR data" checkbox is enabled only when
-   a matching cache already exists for the selected image folder.
+   and the output `.txt` file, each a combo box pre-filled with the most
+   recently used value and offering your last several picks as a dropdown
+   (cached to disk per field, most-recent-first). The start date field is
+   pre-filled from the last recorded run; a "use cached OCR data" checkbox
+   is enabled only when a matching cache already exists for the selected
+   image folder. The window launches maximized.
 2. **OCR pass** (background thread, progress bar) — walks the image folder,
    skips non-image files and anything older than the start date, and runs
    Tesseract on the rest. Results are cached to disk as JSON so a re-run
@@ -62,6 +65,17 @@ What's in scope for v1 (by design, agreed with the project owner):
    text to the clipboard, and appends a fresh `[BREAK]` marker as a bookmark
    for the next run.
 
+## Appearance
+
+The whole app uses a dark theme (`app/gui/theme.py`), palette and dark-title-bar
+trick borrowed from `song_folder_player/gui.py`, with the message-text/input-box
+colors and font instead matched to `multi_file_search/multi_file_search.py`
+(darker background, larger monospace font, brighter text cursor) since that read
+more clearly for dense transcript text than the general UI palette. On Windows,
+the title bar's dark mode is forced to repaint immediately on launch via a
+`SetWindowPos(SWP_FRAMECHANGED)` call, since `DwmSetWindowAttribute` alone left
+it light until the window was next resized.
+
 ## Project layout
 
 ```
@@ -81,6 +95,7 @@ gui_transcription/
       progress_view.py    # OCR progress bar
       review_view.py       # the full scrollable review screen + Finalize button
                           # (lazy image loading, large thumbnails)
+      theme.py             # dark theme colors/fonts + ttk Style setup
   app_tests/              # pytest unit tests for all the non-GUI logic
   requirements.txt
   original_transcription_program/   # the original CLI script, kept as reference
@@ -102,12 +117,13 @@ py -3.13 -m gui_transcription.app.main
 py -3.13 -m pytest gui_transcription\app_tests -v
 ```
 
-28 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
-splitting, JSON state persistence, start-date validation, and review-item
-building/output-writing. The GUI itself only has a manual smoke test (window
-construction, the review screen with synthetic data, an edit-then-finalize
-pass against a temp output file) — there's no automated test driving real
-Tk button clicks or a live Tesseract install.
+33 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
+splitting, JSON state persistence (run dates, OCR cache, recent-path
+history), start-date validation, and review-item building/output-writing.
+The GUI itself only has a manual smoke test (window construction, the
+review screen with synthetic data, an edit-then-finalize pass against a
+temp output file) — there's no automated test driving real Tk button
+clicks or a live Tesseract install.
 
 ## Logging
 

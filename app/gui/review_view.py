@@ -21,6 +21,20 @@ is rebuilt later. The currently focused text box keeps focus across a
 transition if it's still in the new window; otherwise focus is simply lost,
 same as scrolling a focused widget off-screen.
 
+Every transition runs through _transition_preserving_scroll, which pins a
+row that survives the transition and compensates the canvas's scroll offset
+by however many pixels were added/removed above it. This isn't just
+cosmetic: adding/removing rows above the viewport changes the scrollregion's
+total height while Tk's stored scroll offset is an absolute pixel value, not
+"the same row" - left uncompensated, that mismatch pushes the visible
+top/bottom fraction further past whatever threshold just triggered the
+transition (the math is monotonic: (a+H)/(b+H) > a/b for any H > 0), so one
+page load made the next one more likely rather than less, producing a
+runaway cascade of transitions ("stuck in a loop") instead of a single,
+settled one. Pinning a surviving row's screen position keeps the visible
+content - and therefore the trigger fractions - stable across the
+transition.
+
 Images are additionally loaded/decoded lazily within the materialized
 window, only for rows within (or near) the visible viewport, and unloaded
 again once scrolled away.
@@ -184,8 +198,11 @@ class ReviewFrame(ttk.Frame):
 
         if item.image_path is None:
             preview = "\n".join(item.entry.text_lines).strip() or "(no text)"
+            text_frame = ttk.Frame(row, style="MessageText.TFrame", padding=6)
+            text_frame.pack(fill="x")
             ttk.Label(
-                row, text=preview, wraplength=900, justify="left", style="MessageText.TLabel"
+                text_frame, text=preview, wraplength=900, justify="left",
+                style="MessageText.TLabel",
             ).pack(anchor="w")
             return row
 
@@ -205,10 +222,12 @@ class ReviewFrame(ttk.Frame):
         if item.entry.text_lines:
             message_text = "\n".join(item.entry.text_lines).strip()
             if message_text:
+                msg_frame = ttk.Frame(left, style="MessageText.TFrame", padding=6)
+                msg_frame.pack(fill="x", pady=4)
                 ttk.Label(
-                    left, text=message_text, wraplength=THUMBNAIL_SIZE[0], justify="left",
+                    msg_frame, text=message_text, wraplength=THUMBNAIL_SIZE[0], justify="left",
                     style="MessageText.TLabel",
-                ).pack(pady=4)
+                ).pack(anchor="w")
 
         text_widget = tk.Text(
             row, width=40, height=30, wrap="word", relief="flat",
@@ -252,6 +271,35 @@ class ReviewFrame(ttk.Frame):
         if widget is not None:
             widget.focus_set()
 
+    def _transition_preserving_scroll(self, anchor_index: int, mutate: Callable[[], None]) -> None:
+        """Run `mutate` (which adds/removes rows in the window) and keep the
+        row at anchor_index - which must survive the transition unmodified -
+        at the same screen position it was in before. Without this, the
+        canvas's scroll offset stays an unchanged absolute pixel value while
+        the scrollregion's height (and everything below the edit point)
+        shifts, which both looks like a jump and miscomputes the next
+        trigger fraction (see module docstring)."""
+        canvas = self._canvas
+        anchor_row = self._row_frames.get(anchor_index)
+        old_canvas_top = canvas.canvasy(0)
+        old_anchor_y = anchor_row.winfo_y() if anchor_row is not None else None
+
+        mutate()
+
+        # Force layout now instead of waiting for the scroll_frame's
+        # <Configure> binding to update the scrollregion on its own time,
+        # since we need accurate geometry immediately to compute delta.
+        canvas.update_idletasks()
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+        if anchor_row is not None and old_anchor_y is not None and anchor_row.winfo_exists():
+            delta = anchor_row.winfo_y() - old_anchor_y
+            if delta:
+                bbox = canvas.bbox("all")
+                total_height = (bbox[3] - bbox[1]) if bbox else 0
+                if total_height > 0:
+                    canvas.yview_moveto((old_canvas_top + delta) / total_height)
+
     def _advance_forward(self) -> None:
         """Page the window forward by PAGE_STEP items: drop rows leaving the
         top, build rows entering at the bottom."""
@@ -265,10 +313,20 @@ class ReviewFrame(ttk.Frame):
             return
 
         focused_index = self._focused_text_index()
-        for idx in range(old_start, min(new_start, old_end)):
-            self._destroy_row(idx)
-        for idx in range(old_end, new_end):
-            self._build_row(idx)
+
+        def mutate():
+            for idx in range(old_start, min(new_start, old_end)):
+                self._destroy_row(idx)
+            for idx in range(old_end, new_end):
+                self._build_row(idx)
+
+        # new_start survives this transition unmodified (it's the first row
+        # not dropped), so it's a stable anchor to pin on screen.
+        if new_start < old_end:
+            self._transition_preserving_scroll(new_start, mutate)
+        else:
+            mutate()
+
         self._window_start, self._window_end = new_start, new_end
         self._restore_focus(focused_index)
         self._schedule_update_visible_images()
@@ -289,12 +347,20 @@ class ReviewFrame(ttk.Frame):
             return
 
         focused_index = self._focused_text_index()
-        for idx in range(new_end, old_end):
-            self._destroy_row(idx)
-        if new_start < old_start:
-            anchor = self._row_frames[old_start]
-            for idx in range(old_start - 1, new_start - 1, -1):
-                anchor = self._build_row(idx, before=anchor)
+
+        def mutate():
+            for idx in range(new_end, old_end):
+                self._destroy_row(idx)
+            if new_start < old_start:
+                anchor = self._row_frames[old_start]
+                for idx in range(old_start - 1, new_start - 1, -1):
+                    anchor = self._build_row(idx, before=anchor)
+
+        # old_start survives this transition unmodified (only the bottom is
+        # dropped, and new rows are inserted above it), so it's a stable
+        # anchor to pin on screen.
+        self._transition_preserving_scroll(old_start, mutate)
+
         self._window_start, self._window_end = new_start, new_end
         self._restore_focus(focused_index)
         self._schedule_update_visible_images()
