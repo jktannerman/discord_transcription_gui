@@ -28,10 +28,16 @@ RUN_DATE_FILE = APP_DATA_DIR / "run_dates.json"
 OCR_CACHE_FILE = APP_DATA_DIR / "ocr_cache.json"
 RECENT_PATHS_FILE = APP_DATA_DIR / "recent_paths.json"
 APPROVED_USERS_STATE_FILE = APP_DATA_DIR / "approved_users.json"
+SESSION_FILE = APP_DATA_DIR / "session.json"
 LOG_FILE = APP_DATA_DIR / "app.log"
 
 # How many previously-used values to keep, per setup-screen field, for the
 # dropdown history (most-recently-used first).
 MAX_RECENT_PATHS = 8
+
+# How often the review screen's in-progress edits/scroll position/focus are
+# autosaved to SESSION_FILE, so a session can be resumed after closing the
+# app mid-review.
+AUTOSAVE_INTERVAL_MS = 5000
 
 TIMESTAMP_FORMAT = "%d/%m/%Y %H:%M"

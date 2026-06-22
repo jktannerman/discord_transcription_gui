@@ -116,6 +116,53 @@ def save_approved_users_state(text: str, use_all_users: bool) -> None:
     )
 
 
+def load_session() -> Optional[dict]:
+    """Return the saved in-progress review session, or None if there isn't
+    one (no prior run, or the last run finished/was finalized normally)."""
+    if not config.SESSION_FILE.exists():
+        return None
+
+    with open(config.SESSION_FILE, "r", encoding="utf8") as f:
+        session = json.load(f)
+
+    logger.info(
+        "loaded saved session",
+        extra=logging_config.extra(output_path=session.get("output_path")),
+    )
+    return session
+
+
+def save_session(session: dict) -> None:
+    """Persist the in-progress review session (run inputs, per-item edits,
+    focus/scroll position), overwriting any previously saved session - only
+    one session is ever kept, same as the OCR cache. Written via a temp
+    file + atomic replace since this is called repeatedly (every few
+    seconds) while the app may be closed at any moment, and a partial write
+    left in place of the real file would corrupt the next resume attempt."""
+    _ensure_data_dir()
+
+    tmp_path = config.SESSION_FILE.with_suffix(".tmp")
+    with open(tmp_path, "w", encoding="utf8") as f:
+        json.dump(session, f, indent=2)
+    tmp_path.replace(config.SESSION_FILE)
+
+    logger.debug(
+        "saved session",
+        extra=logging_config.extra(
+            output_path=session.get("output_path"),
+            item_count=len(session.get("edited_texts") or []),
+        ),
+    )
+
+
+def clear_session() -> None:
+    """Delete the saved in-progress session, if any - called once a run is
+    finalized, since there's nothing left to resume."""
+    if config.SESSION_FILE.exists():
+        config.SESSION_FILE.unlink()
+        logger.info("cleared saved session")
+
+
 def load_cache(folder_path: str) -> Optional[dict]:
     """Return the cached {image_name: [paragraphs]} dict for folder_path.
 

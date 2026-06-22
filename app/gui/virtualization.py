@@ -18,8 +18,12 @@ from .image_loading import THUMBNAIL_SIZE
 _ESTIMATED_IMAGE_ROW_HEIGHT = THUMBNAIL_SIZE[1] + 220
 
 # Used to turn a text-only row's character count into an estimated wrapped
-# line count, matching _build_row's wraplength=900 for that row's label.
-_TEXT_ROW_WRAPLENGTH = 900
+# line count, matching _build_row's wraplength for that row's immutable-
+# original label - THUMBNAIL_SIZE[0], the same fixed column width used for
+# an image row's left column, since text-only rows now use the same
+# two-column layout (immutable original on the left, editable copy on the
+# right) rather than a single full-width label.
+_TEXT_ROW_WRAPLENGTH = THUMBNAIL_SIZE[0]
 _TEXT_ROW_CHARS_PER_LINE = _TEXT_ROW_WRAPLENGTH // 7  # ~7px/char at this font size
 _TEXT_ROW_LINE_HEIGHT = 18
 _TEXT_ROW_PADDING = 24

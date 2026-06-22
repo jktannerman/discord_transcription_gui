@@ -1,10 +1,13 @@
 """Review screen shown after the OCR batch completes.
 
 An infinite-scroll, paginated listing of every approved message in order.
-Each row shows the message's image (if any) on the left, paired with one
-freely-editable text box on the right pre-filled with that image's OCR
-text - copy/paste and arbitrary edits are allowed, nothing is parsed or
-restricted. Text-only messages are shown for context with no editable box.
+Every row has the same two-column shape: an immutable left column (the
+message's image, if it has one, or its original text otherwise) paired
+with one freely-editable text box on the right - pre-filled with that
+image's OCR text for an image message, or a copy of the message's own
+text for a text-only message (so the user can adjust spacing without
+touching the immutable original beside it). Copy/paste and arbitrary
+edits are allowed in every text box; nothing is parsed or restricted.
 Nothing is written to disk until the Finalize button at the bottom is
 clicked, which writes every message's final lines in one pass.
 
@@ -139,11 +142,21 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         master: tk.Widget,
         items: List[ReviewItem],
         on_finalize: Callable[[List[Optional[str]]], None],
+        initial_saved_texts: Optional[List[Optional[str]]] = None,
+        initial_focus_index: Optional[int] = None,
+        initial_scroll_fraction: Optional[float] = None,
     ):
         super().__init__(master)
-        logger.info("building review screen", extra=logging_config.extra(item_count=len(items)))
+        logger.info(
+            "building review screen",
+            extra=logging_config.extra(
+                item_count=len(items), resuming=initial_saved_texts is not None
+            ),
+        )
         self._items = items
         self._on_finalize = on_finalize
+        self._initial_focus_index = initial_focus_index
+        self._initial_scroll_fraction = initial_scroll_fraction
         # Per-item row height (px), seeded with cheap estimates and
         # overwritten with the real winfo_height() once a row is built -
         # the source of truth for the full virtual document's layout, used
@@ -170,9 +183,15 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         ).metrics("linespace")
         # Text captured from a row's widget just before it's torn down, so
         # edits survive a row being paged out and back in. None means
-        # "never edited/visited" - fall back to item.initial_text.
-        self._saved_texts: List[Optional[str]] = [None] * len(items)
+        # "never edited/visited" - fall back to item.initial_text. Seeded
+        # from a saved session's edits when resuming, rather than starting
+        # blank.
+        if initial_saved_texts is not None and len(initial_saved_texts) == len(items):
+            self._saved_texts: List[Optional[str]] = list(initial_saved_texts)
+        else:
+            self._saved_texts = [None] * len(items)
         self._update_job: Optional[str] = None
+        self._initial_position_job: Optional[str] = None
         # Monotonic counter stamped on every _log_event call, purely so log
         # lines can be ordered exactly even if two land in the same
         # millisecond - used to reconstruct the precise sequence of
@@ -253,10 +272,41 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
             if self._update_job is not None:
                 self.after_cancel(self._update_job)
                 self._update_job = None
+            if self._initial_position_job is not None:
+                self.after_cancel(self._initial_position_job)
+                self._initial_position_job = None
 
         self.bind("<Destroy>", _on_destroy)
 
-        self.after_idle(self._reconcile)
+        self.after_idle(self._apply_initial_position)
+
+    def _apply_initial_position(self) -> None:
+        """First-layout hook, run once via after_idle in place of a plain
+        _reconcile call: restores a resumed session's focus/scroll position
+        if one was given, otherwise just reconciles at the top like a fresh
+        review screen. Focusing a row's text box already scrolls it into
+        view (_focus_text_box), so the focus-index case subsumes the
+        scroll-fraction one - the latter is only used as a fallback when a
+        session was saved with no row focused (e.g. focus was on the
+        Finalize button).
+
+        _ensure_materialized/_focus_text_box need a real canvas height to
+        compute scroll offsets against, which isn't guaranteed yet on the
+        very first after_idle tick (the plain _reconcile() this replaced
+        tolerated that via its own early-return-on-unsized-canvas guard,
+        relying on a later <Configure> event to retry) - so this polls
+        briefly until the canvas actually has one, rather than risking a
+        focus/scroll jump computed against a height of 0."""
+        if self._canvas.winfo_height() <= 1:
+            self._initial_position_job = self.after(20, self._apply_initial_position)
+            return
+        if self._initial_focus_index is not None:
+            self._ensure_materialized(self._initial_focus_index)
+            self._focus_text_box(self._initial_focus_index)
+            return
+        if self._initial_scroll_fraction is not None:
+            self._canvas.yview_moveto(self._initial_scroll_fraction)
+        self._reconcile()
 
     def _scroll_text_widget(self, text_widget: tk.Text, delta: int) -> bool:
         """Try to scroll an editable text box by one wheel notch in the
@@ -296,7 +346,15 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         """Materialize the row widget(s) for items[index] and register it in
         the window's bookkeeping dicts. If `before` is given, the row is
         inserted immediately above that widget instead of appended at the
-        bottom (used when paging in rows above the current window)."""
+        bottom (used when paging in rows above the current window).
+
+        Every row has the same two-column shape: an immutable left column
+        (the image, for an image message, or a same-themed-as-the-image-
+        column label holding the message's original text, for a text-only
+        one) and an editable text box on the right (_build_editable_text_box)
+        - that box holds the OCR text for an image message, or a copy of
+        the original text for a text-only one, so spacing can be adjusted
+        without touching the immutable original beside it."""
         item = self._items[index]
         pack_kwargs = {"fill": "x", "pady": 4, "padx": 4}
         if before is not None:
@@ -306,53 +364,81 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         row.pack(**pack_kwargs)
         self._row_frames[index] = row
 
-        if item.image_path is None:
-            preview = "\n".join(item.entry.text_lines).strip() or "(no text)"
-            text_frame = ttk.Frame(row, style="MessageText.TFrame", padding=6)
-            text_frame.pack(fill="x")
-            ttk.Label(
-                text_frame, text=preview, wraplength=900, justify="left",
-                style="MessageText.TLabel",
-            ).pack(anchor="w")
-            return row
-
         left = ttk.Frame(row)
         left.pack(side="left", padx=6, fill="y")
 
-        # Width is the global THUMBNAIL_SIZE[0] constant, same for every
-        # row, so images/text boxes still line up into two neat columns -
-        # only height is sized per image (to its actual aspect-preserving
-        # fit height, not the full bounding box) since most images here are
-        # landscape, and a box-shaped placeholder would letterbox them with
-        # large empty bands above/below the real photo. Fixed size (rather
-        # than left to the real loaded photo's size) so loading/unloading
-        # the image on scroll doesn't change the row's layout (which would
-        # jump the scroll position).
-        _, image_h = fitted_image_size(item.image_path)
-        container = ttk.Frame(left, width=THUMBNAIL_SIZE[0], height=image_h)
-        container.pack_propagate(False)
-        container.pack()
-        image_label = ttk.Label(container, text="(scroll to load image)", anchor="center")
-        image_label.pack(fill="both", expand=True)
+        if item.image_path is not None:
+            # Width is the global THUMBNAIL_SIZE[0] constant, same for every
+            # row, so images/text boxes still line up into two neat columns -
+            # only height is sized per image (to its actual aspect-preserving
+            # fit height, not the full bounding box) since most images here
+            # are landscape, and a box-shaped placeholder would letterbox
+            # them with large empty bands above/below the real photo. Fixed
+            # size (rather than left to the real loaded photo's size) so
+            # loading/unloading the image on scroll doesn't change the row's
+            # layout (which would jump the scroll position).
+            _, image_h = fitted_image_size(item.image_path)
+            container = ttk.Frame(left, width=THUMBNAIL_SIZE[0], height=image_h)
+            container.pack_propagate(False)
+            container.pack()
+            image_label = ttk.Label(container, text="(scroll to load image)", anchor="center")
+            image_label.pack(fill="both", expand=True)
 
-        self._images.register(index, item.image_path, image_label)
+            self._images.register(index, item.image_path, image_label)
 
-        if item.entry.text_lines:
-            message_text = "\n".join(item.entry.text_lines).strip()
-            if message_text:
-                msg_frame = ttk.Frame(left, style="MessageText.TFrame", padding=6)
-                msg_frame.pack(fill="x", pady=4)
-                ttk.Label(
-                    msg_frame, text=message_text, wraplength=THUMBNAIL_SIZE[0], justify="left",
-                    style="MessageText.TLabel",
-                ).pack(anchor="w")
+            if item.entry.text_lines:
+                message_text = "\n".join(item.entry.text_lines).strip()
+                if message_text:
+                    msg_frame = ttk.Frame(left, style="MessageText.TFrame", padding=6)
+                    msg_frame.pack(fill="x", pady=4)
+                    ttk.Label(
+                        msg_frame, text=message_text, wraplength=THUMBNAIL_SIZE[0], justify="left",
+                        style="MessageText.TLabel",
+                    ).pack(anchor="w")
+            floor_px = image_h
+        else:
+            # Plain (default-styled) frame/label, matching the image
+            # column's own DARK_BG_ALT background rather than the darker
+            # MessageText style used for an image row's caption - this is
+            # the immutable original, displayed only for reference, not an
+            # editable input, so it's visually distinct from both the
+            # editable box beside it and an image row's caption.
+            #
+            # Unlike the image case, this column's height isn't known until
+            # the label exists, so it's measured with propagate left on
+            # (the container sizing itself naturally around the label, per
+            # its wraplength) before being pinned to a fixed width/height -
+            # same end state as the image column, just measured rather than
+            # computed upfront from a cheap header read.
+            preview = "\n".join(item.entry.text_lines).strip() or "(no text)"
+            container = ttk.Frame(left)
+            container.pack()
+            ttk.Label(
+                container, text=preview, wraplength=THUMBNAIL_SIZE[0], justify="left",
+            ).pack(anchor="w", fill="x")
+            container.update_idletasks()
+            floor_px = max(container.winfo_reqheight(), 1)
+            container.configure(width=THUMBNAIL_SIZE[0], height=floor_px)
+            container.pack_propagate(False)
 
+        self._image_floor_px[index] = floor_px
+        self._build_editable_text_box(row, index, floor_px, item.initial_text)
+        return row
+
+    def _build_editable_text_box(
+        self, row: tk.Widget, index: int, floor_px: int, initial_text: str
+    ) -> None:
+        """Build the right-hand editable text box shared by every row
+        (image or text-only) and register it in the window's bookkeeping
+        dicts - extracted from _build_row since image and text-only rows
+        used to differ here (only image rows got a box at all), and now
+        don't."""
         # Fixed-height container (same pack_propagate(False) trick as the
-        # image placeholder above) so the text box's height is whatever
+        # left column above) so the text box's height is whatever
         # _size_text_container decides, rather than stretching to match the
-        # image's height via fill="both" - that stretch is what previously
-        # made every text box the same (often mostly-empty) height
-        # regardless of how little text it held.
+        # left column's height via fill="both" - that stretch is what
+        # previously made every text box the same (often mostly-empty)
+        # height regardless of how little text it held.
         text_container = ttk.Frame(row)
         text_container.pack(side="left", fill="x", expand=True, padx=6)
         text_container.pack_propagate(False)
@@ -379,7 +465,7 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         text_widget.pack(side="left", fill="both", expand=True)
 
         saved = self._saved_texts[index]
-        text_widget.insert("1.0", saved if saved is not None else (item.initial_text or ""))
+        text_widget.insert("1.0", saved if saved is not None else initial_text)
         # The "insert" mark has right gravity, so inserting at "1.0" (where
         # it already sits on a fresh widget) leaves it at the *end* of the
         # new text rather than the start - then Tab-focusing this box later
@@ -390,8 +476,7 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         text_widget.edit_reset()  # don't let the initial insert be undoable
         text_widget.edit_modified(False)  # don't count that insert as a user edit
 
-        self._image_floor_px[index] = image_h
-        self._size_text_container(text_container, text_widget, image_h)
+        self._size_text_container(text_container, text_widget, floor_px)
 
         text_widget.bind("<Control-BackSpace>", self._delete_word_backward)
         text_widget.bind("<Tab>", self._on_tab)
@@ -406,7 +491,6 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         )
         self._text_widgets[index] = text_widget
         self._text_containers[index] = text_container
-        return row
 
     def _max_text_box_height_px(self) -> int:
         """Cap an editable text box's height at TEXT_BOX_MAX_HEIGHT_FRACTION
@@ -683,18 +767,35 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
 
         self._images.update_visible(self._offset_of, self._row_heights, visible_top, visible_bottom)
 
-    def _on_finalize_clicked(self) -> None:
-        logger.info("finalize button clicked on review screen")
+    def collect_edited_texts(self) -> List[Optional[str]]:
+        """Current edited text for every item, in transcript order: the
+        materialized widget's live content if its row is currently built,
+        else the last-saved text from a row that was paged out, else None
+        (meaning "never touched" - callers fall back to item.initial_text).
+        Used both for Finalize and for periodic session autosaving - the
+        two need the same snapshot, just written to different places."""
         edited_texts: List[Optional[str]] = []
-        for idx, item in enumerate(self._items):
-            if item.image_path is None:
-                edited_texts.append(None)
-                continue
+        for idx in range(len(self._items)):
             widget = self._text_widgets.get(idx)
             if widget is not None:
                 edited_texts.append(widget.get("1.0", "end-1c"))
-            elif self._saved_texts[idx] is not None:
-                edited_texts.append(self._saved_texts[idx])
             else:
-                edited_texts.append(item.initial_text or "")
-        self._on_finalize(edited_texts)
+                edited_texts.append(self._saved_texts[idx])
+        return edited_texts
+
+    def get_focused_index(self) -> Optional[int]:
+        """Item index of the currently-focused text box, or None if no text
+        box has focus (e.g. focus is on the Finalize button, or nothing in
+        this frame at all) - used by autosave to remember where to restore
+        focus to on resume."""
+        return self._focused_text_index()
+
+    def get_scroll_top_fraction(self) -> float:
+        """Canvas scroll position as a [0.0, 1.0] fraction - used as the
+        autosaved fallback position when no text box is focused to restore
+        focus to instead."""
+        return self._canvas.yview()[0]
+
+    def _on_finalize_clicked(self) -> None:
+        logger.info("finalize button clicked on review screen")
+        self._on_finalize(self.collect_edited_texts())

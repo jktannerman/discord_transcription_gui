@@ -5,10 +5,12 @@ Split into pieces the GUI can drive explicitly:
 - ``parse_start_date`` / ``run_ocr_batch`` run before any user interaction
   (the latter on a background thread, reporting progress via callback).
 - ``build_review_items`` turns the approved messages + OCR'd paragraphs into
-  a flat list the review screen displays all at once (image on one side,
-  one freely-editable text box with that image's OCR text on the other).
-  Nothing is written to disk until the user reviews everything and clicks
-  Finalize.
+  a flat list the review screen displays all at once: each item pairs its
+  message with an editable text box, initialized to that image's OCR text
+  (image messages) or the message's own original text (text-only messages,
+  so spacing can be adjusted without touching the immutable original shown
+  alongside it). Nothing is written to disk until the user reviews
+  everything and clicks Finalize.
 - ``write_all_items`` writes every message's final lines (using whatever the
   user edited, or the original OCR text if they left it alone) once, in
   order, when Finalize is clicked.
@@ -172,13 +174,16 @@ def write_message_lines(output_path: Path, lines_to_write: list[str]) -> None:
 
 @dataclass
 class ReviewItem:
-    """One row of the review screen: a message, optionally paired with an
-    image and the editable text initialized from that image's OCR
-    paragraphs (joined with blank lines)."""
+    """One row of the review screen: a message, paired with an editable
+    text box initialized from either that image's OCR paragraphs (joined
+    with blank lines), for an image message, or the message's own original
+    text, for a text-only message - the latter exists purely so the user
+    can adjust spacing without touching the immutable original shown
+    alongside it (entry.text_lines)."""
 
     entry: MessageEntry
     image_path: Optional[Path]
-    initial_text: Optional[str]
+    initial_text: str
 
 
 def build_review_items(
@@ -186,12 +191,18 @@ def build_review_items(
     file_info: dict[str, list[str]],
     image_folder: Path,
 ) -> list[ReviewItem]:
-    """Pair each approved message with its image (if any) and that image's
-    OCR text pre-joined into one editable block."""
+    """Pair each approved message with its image (if any) and an editable
+    text block: that image's OCR text for an image message, or the
+    message's own original text (unstripped, so deliberate spacing carries
+    over) for a text-only message."""
     items: list[ReviewItem] = []
     for entry in entries:
         if entry.image_name is None:
-            items.append(ReviewItem(entry=entry, image_path=None, initial_text=None))
+            items.append(
+                ReviewItem(
+                    entry=entry, image_path=None, initial_text="\n".join(entry.text_lines)
+                )
+            )
             continue
 
         paragraphs = file_info.get(entry.image_name, [])
@@ -214,14 +225,20 @@ def build_review_items(
 
 def lines_for_item(item: ReviewItem, edited_text: Optional[str] = None) -> list[str]:
     """Build the final lines to write for one review item, using edited_text
-    in place of the original OCR text if the user changed it."""
+    in place of the original text if the user changed it. For an image
+    message, the immutable caption (entry.text_lines) is written first,
+    followed by the edited/OCR text block; for a text-only message, only
+    the edited/original text block is written - the editable copy stands
+    in for entry.text_lines entirely, rather than being appended alongside
+    it, since this exists for the user to (de)duplicate that text."""
+    text = edited_text if edited_text is not None else item.initial_text
+
+    if item.image_path is None:
+        return [line + "\n" for line in text.split("\n")] if text else []
+
     lines = [line + "\n" for line in item.entry.text_lines]
-
-    if item.initial_text is not None:
-        text = edited_text if edited_text is not None else item.initial_text
-        if text:
-            lines.append(text + "\n")
-
+    if text:
+        lines.append(text + "\n")
     return lines
 
 

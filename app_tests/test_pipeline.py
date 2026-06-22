@@ -63,7 +63,10 @@ def test_build_review_items_text_only_message():
 
     assert len(items) == 1
     assert items[0].image_path is None
-    assert items[0].initial_text is None
+    # initial_text is the editable copy a text-only message now gets too,
+    # initialized from (not stripped of) its own original lines so the
+    # user can adjust spacing freely without losing it up front.
+    assert items[0].initial_text == "hello\nworld"
     assert items[0].entry.text_lines == ["hello", "world"]
 
 
@@ -104,11 +107,19 @@ def test_lines_for_item_uses_edited_text_when_given():
     assert lines == ["user-corrected text\n"]
 
 
-def test_lines_for_item_text_only_message_ignores_edited_text():
+def test_lines_for_item_text_only_message_uses_edited_text_when_given():
     entries = [MessageEntry(text_lines=["just text"], image_name=None)]
     items = build_review_items(entries, file_info={}, image_folder=Path("/images"))
 
-    lines = lines_for_item(items[0], edited_text="should be ignored")
+    lines = lines_for_item(items[0], edited_text="user-adjusted spacing")
+    assert lines == ["user-adjusted spacing\n"]
+
+
+def test_lines_for_item_text_only_message_uses_initial_text_by_default():
+    entries = [MessageEntry(text_lines=["just text"], image_name=None)]
+    items = build_review_items(entries, file_info={}, image_folder=Path("/images"))
+
+    lines = lines_for_item(items[0])
     assert lines == ["just text\n"]
 
 

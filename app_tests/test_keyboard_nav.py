@@ -30,19 +30,13 @@ def test_find_text_index_returns_start_if_it_has_an_image():
     assert nav._find_text_index(1, step=1) == 1
 
 
-def test_find_text_index_skips_text_only_items_searching_forward():
+def test_find_text_index_returns_start_if_it_is_text_only():
+    # Text-only rows now have an editable text box too (the spacing-only
+    # copy), so there's nothing left to skip past - every in-range index is
+    # valid, regardless of step direction.
     nav = _NavStub([_text_item(), _text_item(), _image_item(), _text_item()])
-    assert nav._find_text_index(0, step=1) == 2
-
-
-def test_find_text_index_skips_text_only_items_searching_backward():
-    nav = _NavStub([_text_item(), _image_item(), _text_item(), _text_item()])
-    assert nav._find_text_index(3, step=-1) == 1
-
-
-def test_find_text_index_returns_none_when_no_image_item_in_range():
-    nav = _NavStub([_text_item(), _text_item(), _text_item()])
-    assert nav._find_text_index(0, step=1) is None
+    assert nav._find_text_index(0, step=1) == 0
+    assert nav._find_text_index(1, step=1) == 1
 
 
 def test_find_text_index_returns_none_past_either_end():

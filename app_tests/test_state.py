@@ -102,3 +102,58 @@ def test_approved_users_state_round_trip(tmp_path, monkeypatch):
     state.save_approved_users_state("123456789 - Alice", True)
 
     assert state.read_approved_users_state() == {"text": "123456789 - Alice", "use_all_users": True}
+
+
+def test_load_session_returns_none_when_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "SESSION_FILE", tmp_path / "session.json")
+
+    assert state.load_session() is None
+
+
+def test_session_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "SESSION_FILE", tmp_path / "session.json")
+
+    session = {
+        "html_path": "chat.html",
+        "image_folder": "images",
+        "output_path": "out.txt",
+        "start_time": 12345,
+        "approved_author_ids": ["111", "222"],
+        "use_cache": True,
+        "edited_texts": [None, "edited text"],
+        "focus_index": 1,
+        "scroll_fraction": 0.5,
+    }
+
+    state.save_session(session)
+
+    assert state.load_session() == session
+
+
+def test_save_session_overwrites_previous_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "SESSION_FILE", tmp_path / "session.json")
+
+    state.save_session({"output_path": "first.txt", "edited_texts": []})
+    state.save_session({"output_path": "second.txt", "edited_texts": []})
+
+    assert state.load_session()["output_path"] == "second.txt"
+
+
+def test_clear_session_removes_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "SESSION_FILE", tmp_path / "session.json")
+
+    state.save_session({"output_path": "out.txt", "edited_texts": []})
+    state.clear_session()
+
+    assert state.load_session() is None
+
+
+def test_clear_session_is_a_noop_when_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "SESSION_FILE", tmp_path / "session.json")
+
+    state.clear_session()  # should not raise

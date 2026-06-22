@@ -75,3 +75,19 @@ Relatedly, it would be useful for the user to be able to edit a copy of pure tex
 
 
 This project has now seen several updates and revisions. Please consider its current overall structure. Is it still natural? Are there any obvious problems or potential improvements? Are there any design decisions which feel likely to lead to problems down the line?
+
+
+
+Many images seem to have corresponding textboxes that are so large that tabbing/shift-tabbing to them does not have the cursor (or any actual text) on screen; they are mostly empty. This is not very useful. Where possible, text input boxes should be at most the height of the screen, or less; perhaps even as small as possible while still containing the current text (plus some leeway if the user adds new lines). Note that there is no benefit to making a textbox shorter than the corresponding image, however. If an image truly has more text associated with it than can fit on one screen, the textbox should have an internal scrollbar. If possible, a scrollbar should be created dynamically if the user adds enough lines to overflow the current height.
+
+Is it the case that all the textboxes currently have the same height, to prevent pagination issues or suchlike? If so, is there a way to have textboxes of varied height while still preventing any pagination problems?
+
+
+
+Somewhat relatedly, many images are much shorter than their textboxes. It might be useful to have 
+
+
+Are the logs useful? Should they be split up further?
+
+
+However, the maximum height of a textbox is still too tall, just enough that it usually doesn't all comfortably fit on one screen, even if it technically would with perfect positioning. Please adjust it so that there will be a reasonable margin upon tabbing to the next textbox.

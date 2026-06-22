@@ -42,6 +42,14 @@ What's in scope for v1 (by design, agreed with the project owner):
    without retyping the ID. A "Transcribe messages from all users" checkbox
    bypasses the filter entirely (and greys out the users box, since it's
    moot while checked). The window launches maximized.
+
+   If an in-progress review session was left over from last time (closing
+   the app mid-review, rather than clicking Finalize), a prompt appears
+   before the setup screen offering to resume it - accepting skips the
+   setup screen entirely and re-runs that session's saved inputs (OCR
+   cache permitting) straight through to the review screen, with every
+   saved edit, the focused text box, and the scroll position all restored.
+   Declining discards the saved session outright.
 2. **OCR pass** (background thread, progress bar) — walks the image folder,
    skips non-image files and anything older than the start date, and runs
    Tesseract on the rest. Results are cached to disk as JSON so a re-run
@@ -50,16 +58,20 @@ What's in scope for v1 (by design, agreed with the project owner):
    start date from the approved users entered on the setup screen (or every
    user, if "all users" was checked).
 4. **Review screen** — an infinite-scroll window listing every approved
-   message in order, mirroring the original chatlog. Text-only messages are
-   shown for context; messages with an attached image show that image next
-   to a single freely-editable text box pre-filled with its OCR text (all
-   paragraphs joined together) — copy, paste, and arbitrary edits are all
-   allowed, nothing is parsed or restricted. Only a bounded window of rows
-   (12 by default) is ever built as actual widgets at once; scrolling near
-   either edge of that window pages the next/previous half-window in and
-   tears the opposite half down, so scrolling stays responsive no matter how
-   long the transcript is. Each page transition pins a surviving row's
-   on-screen position and compensates the scroll offset for whatever was
+   message in order, mirroring the original chatlog. Every row has the same
+   two-column shape: an immutable left column (the message's image, for an
+   image message, or its original text, for a text-only one) paired with
+   one freely-editable text box on the right — pre-filled with the image's
+   OCR text (all paragraphs joined together) for an image message, or a
+   copy of the message's own text for a text-only one, so its spacing can
+   be adjusted without touching the immutable original beside it. Copy,
+   paste, and arbitrary edits are all allowed in every text box, nothing is
+   parsed or restricted. Only a bounded window of rows (12 by default) is
+   ever built as actual widgets at once; scrolling near either edge of that
+   window pages the next/previous half-window in and tears the opposite
+   half down, so scrolling stays responsive no matter how long the
+   transcript is. Each page transition pins a surviving row's on-screen
+   position and compensates the scroll offset for whatever was
    added/removed above it ("scroll anchoring") — without that compensation,
    paging in more rows above the viewport made the next page-load trigger
    *more* likely rather than less, causing a runaway cascade of transitions
@@ -68,7 +80,10 @@ What's in scope for v1 (by design, agreed with the project owner):
    if it's still in the new window. Images within the materialized window
    are additionally decoded/loaded lazily as you scroll near them (and
    unloaded again once you scroll away). Nothing is written to disk while
-   reviewing.
+   reviewing - but every edit, the focused text box, and the scroll position
+   are autosaved to disk every 5 seconds, so closing the app at any point
+   mid-review leaves a session that can be resumed from the setup screen's
+   prompt next launch (see "Setup screen" above).
 
    Every image column is the same fixed width (so the image/text-box pairs
    line up into two neat columns), but each image's *height* is its own
@@ -94,11 +109,12 @@ What's in scope for v1 (by design, agreed with the project owner):
    within whichever text box has focus; **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo
    within a single text box.
 5. **Finalize** — a single button at the bottom of the review screen writes
-   every message's final lines (edited text if you changed it, original OCR
-   text otherwise) to the output file in one pass, then runs the original
-   regex cleanup pass, records the new run-end date, copies the newly-added
-   text to the clipboard, and appends a fresh `[BREAK]` marker as a bookmark
-   for the next run.
+   every message's final lines (edited text if you changed it, original OCR/
+   message text otherwise) to the output file in one pass, then runs the
+   original regex cleanup pass, records the new run-end date, copies the
+   newly-added text to the clipboard, appends a fresh `[BREAK]` marker as a
+   bookmark for the next run, and clears the autosaved session - there's
+   nothing left to resume once a run has actually been finalized.
 
 ## Appearance
 
@@ -118,7 +134,8 @@ gui_transcription/
   app/
     main.py              # entry point
     config.py            # constants: paths, markers, default approved users
-    state.py             # JSON run-date log, OCR cache, approved-users state
+    state.py             # JSON run-date log, OCR cache, approved-users
+                          # state, in-progress session save/resume
     ocr.py                # Tesseract OCR behind a swappable backend interface
     chatlog.py            # HTML parsing + date/author filtering
     cleanup.py            # post-run regex cleanup pass
@@ -158,14 +175,20 @@ is just enough to orient a new contributor:
   into a self-sustaining oscillation loop; see the module docstring for the
   full story. Pure layout math lives in `app/gui/virtualization.py` so it's
   testable without a display.
-- **Per-row image sizing.** Every row's image column is the same fixed
-  width (`THUMBNAIL_SIZE[0]` in `app/gui/image_loading.py`), but each
-  image's height is its own aspect-preserving fit within `THUMBNAIL_SIZE`
-  (`fitted_image_size`), not the full bounding box - otherwise a landscape
-  image (the common case) gets letterboxed inside a box-shaped slot. This
-  only reads the image file's header (cheap), separately from the actual
-  lazy pixel decode in `ImageLoader._load_image` once a row scrolls near
-  the viewport.
+- **Per-row left-column sizing.** Every row's left column is the same fixed
+  width (`THUMBNAIL_SIZE[0]` in `app/gui/image_loading.py`), whether it
+  holds an image (image messages) or the immutable original-text label
+  (text-only messages) - so every row's image/text-box (or label/text-box)
+  pair lines up into two neat columns. An image's height is its own
+  aspect-preserving fit within `THUMBNAIL_SIZE` (`fitted_image_size`), not
+  the full bounding box - otherwise a landscape image (the common case)
+  gets letterboxed inside a box-shaped slot; this only reads the image
+  file's header (cheap), separately from the actual lazy pixel decode in
+  `ImageLoader._load_image` once a row scrolls near the viewport. A
+  text-only row's label height isn't known until the label exists, so
+  `_build_row` measures it with the container's `pack_propagate` left on
+  before pinning both dimensions, rather than computing it upfront the way
+  `fitted_image_size` does for images.
 - **Per-row text box sizing.** Each editable text box lives in its own
   fixed-height container (`pack_propagate(False)`, same trick as the image
   placeholder) so it doesn't stretch to fill the row via Tk's `fill="both"`
@@ -215,18 +238,22 @@ py -3.13 -m app.main
 py -3.13 -m pytest gui_transcription\app_tests -v
 ```
 
-77 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
+81 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
 splitting and backend dispatch, the JSON log formatter, JSON state
-persistence (run dates, OCR cache, recent-path history), start-date
-validation, review-item building/output-writing, the OCR batch
-runner/cache short-circuit and the finalize pass (cleanup + run-date +
-clipboard + BREAK-marker bookmarking), the review screen's keyboard-nav
-text-box lookup, and its row-height estimation/visible-range math
+persistence (run dates, OCR cache, recent-path history, in-progress session
+save/resume), start-date validation, review-item building/output-writing
+(including a text-only message's editable spacing copy standing in for its
+immutable original when written out), the OCR batch runner/cache
+short-circuit and the finalize pass (cleanup + run-date + clipboard +
+BREAK-marker bookmarking), the review screen's keyboard-nav text-box
+lookup, and its row-height estimation/visible-range math
 (`app/gui/virtualization.py`, the part of the windowing logic that's pure
 enough to unit-test without a display). The GUI itself only has a manual
-smoke test (window construction, the review screen with synthetic data, an
-edit-then-finalize pass against a temp output file) — there's no automated
-test driving real Tk button clicks or a live Tesseract install.
+smoke test (window construction, the review screen with synthetic image
+and text-only items, an edit-then-finalize pass against a temp output
+file, and a resumed session's saved edits/focus restoring correctly) —
+there's no automated test driving real Tk button clicks or a live
+Tesseract install.
 
 ## Logging
 
@@ -249,3 +276,12 @@ counts), review-screen build/finalize events, and caught exceptions.
   - neighboring rows' positions are only corrected on the next scroll-driven
   reconcile, not instantly, though this has no visible effect since the row
   being typed in doesn't move on screen either way.
+- Resuming a session re-runs HTML parsing/OCR from the saved inputs rather
+  than serializing the parsed messages themselves, so it's only matched
+  back up to the saved edits/focus by item count - if the underlying HTML
+  export changes between sessions (e.g. a fresh re-export with more
+  messages), the counts won't line up and the saved edits are discarded
+  with a warning instead of being (potentially incorrectly) reapplied.
+- There's no UI for resetting a message's editable copy back to its
+  original OCR/message text once edited (deferred, not an immediate
+  priority, per the original feature request).

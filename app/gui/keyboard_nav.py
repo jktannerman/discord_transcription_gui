@@ -127,16 +127,14 @@ class KeyboardNavMixin:
         self._scroll_into_view(index)
 
     def _find_text_index(self, start: int, step: int) -> Optional[int]:
-        """Scan self._items from `start` (inclusive) in `step` direction
-        (+1/-1) for the next index with an editable text box (image_path
-        is not None) - independent of what's currently materialized,
-        unlike self._text_widgets, which only reflects the materialized
-        window."""
-        idx = start
-        while 0 <= idx < len(self._items):
-            if self._items[idx].image_path is not None:
-                return idx
-            idx += step
+        """Return `start` if it's a valid item index, else None - every row
+        has an editable text box now (image messages get the OCR text box,
+        text-only messages get the spacing-editable copy), so there's
+        nothing left to skip past; this just clamps to the valid range, the
+        same contract _move_focus relies on when stepping by one index at a
+        time."""
+        if 0 <= start < len(self._items):
+            return start
         return None
 
     def _move_focus(self, delta: int) -> str:

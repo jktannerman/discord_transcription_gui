@@ -5,6 +5,15 @@ runs the OCR batch on a background thread while showing a progress screen,
 then shows the full review screen (every approved message, images paired
 with editable OCR text) and writes everything out once Finalize is clicked,
 finishing with a summary screen.
+
+Also owns session persistence: while the review screen is up, the current
+edits/focus/scroll position are autosaved every
+config.AUTOSAVE_INTERVAL_MS (see _start_autosave/_run_autosave) so closing
+the app mid-review doesn't lose progress. On the next launch, App.__init__
+checks for a saved session and offers to resume it (_offer_resume),
+rebuilding the same run from its saved inputs and re-applying the saved
+edits/position once OCR/parsing finish (_resume_session/_show_review). The
+saved session is cleared once a run is actually finalized.
 """
 
 import threading
@@ -59,9 +68,16 @@ class App:
         self._known_user_pick = tk.StringVar()
 
         self._review_items: list[pipeline.ReviewItem] | None = None
+        self._autosave_job: Optional[str] = None
+        self._resume_payload: Optional[dict] = None
+
+        pending_session = state.load_session()
 
         self.show_setup()
         self.root.deiconify()
+
+        if pending_session is not None:
+            self.root.after(100, self._offer_resume, pending_session)
 
     # -- frame management -------------------------------------------------
 
@@ -74,6 +90,7 @@ class App:
     # -- setup screen -------------------------------------------------------
 
     def show_setup(self) -> None:
+        self._cancel_autosave()
         frame = ttk.Frame(self.container)
 
         ttk.Label(frame, text="Chatlog HTML file:").grid(row=0, column=0, sticky="w", pady=4)
@@ -257,11 +274,18 @@ class App:
         output_path: Path,
         start_time: int,
         approved_author_ids: Optional[set[str]],
+        use_cache: Optional[bool] = None,
     ) -> None:
         progress = ProgressFrame(self.container, status_text="Running OCR on images...")
         self._set_frame(progress)
 
-        use_cache = self._use_cache.get()
+        if use_cache is None:
+            use_cache = self._use_cache.get()
+
+        self._image_folder_for_run = image_folder
+        self._start_time_for_run = start_time
+        self._approved_author_ids_for_run = approved_author_ids
+        self._use_cache_for_run = use_cache
 
         def worker():
             try:
@@ -287,6 +311,87 @@ class App:
         messagebox.showerror("Error", message)
         self.show_setup()
 
+    # -- session resume ------------------------------------------------------
+
+    def _offer_resume(self, session: dict) -> None:
+        """Called shortly after launch if state.load_session() found a
+        saved in-progress session. Discards it outright if declined, since
+        there's nothing useful to do with a stale "no" - the user would
+        just be asked again next launch otherwise."""
+        if not messagebox.askyesno(
+            "Resume previous session",
+            "An in-progress review session was found. Resume it?",
+        ):
+            state.clear_session()
+            return
+        self._resume_session(session)
+
+    def _resume_session(self, session: dict) -> None:
+        """Re-run the saved session's inputs through the normal OCR/parse
+        pipeline (use_cache forced from the saved value, so resuming
+        doesn't necessarily redo OCR) - _show_review then re-applies the
+        saved edits/focus/scroll position once that finishes, the same way
+        a fresh run's review items are built either way."""
+        try:
+            html_path = Path(session["html_path"])
+            image_folder = Path(session["image_folder"])
+            output_path = Path(session["output_path"])
+            start_time = session["start_time"]
+            raw_ids = session["approved_author_ids"]
+            approved_author_ids = set(raw_ids) if raw_ids is not None else None
+            use_cache = session["use_cache"]
+        except KeyError as exc:
+            logger.warning(
+                "malformed saved session, discarding",
+                extra=logging_config.extra(error=str(exc)),
+            )
+            state.clear_session()
+            return
+
+        self._image_folder.set(str(image_folder))
+        self._resume_payload = session
+        self._begin_run(
+            html_path, image_folder, output_path, start_time, approved_author_ids,
+            use_cache=use_cache,
+        )
+
+    # -- autosave -------------------------------------------------------------
+
+    def _cancel_autosave(self) -> None:
+        if self._autosave_job is not None:
+            self.root.after_cancel(self._autosave_job)
+            self._autosave_job = None
+
+    def _start_autosave(self) -> None:
+        self._cancel_autosave()
+        self._run_autosave()
+
+    def _run_autosave(self) -> None:
+        """Snapshot the review screen's current edits/focus/scroll position
+        to disk, then reschedule itself - runs continuously while the
+        review screen is up (see _start_autosave/_cancel_autosave), every
+        config.AUTOSAVE_INTERVAL_MS, so closing the app at any point during
+        review leaves a resumable session behind."""
+        frame = getattr(self, "_review_frame", None)
+        if frame is not None and frame.winfo_exists():
+            session = {
+                "html_path": str(self._html_path_for_run),
+                "image_folder": str(self._image_folder_for_run),
+                "output_path": str(self._output_path_for_run),
+                "start_time": self._start_time_for_run,
+                "approved_author_ids": (
+                    sorted(self._approved_author_ids_for_run)
+                    if self._approved_author_ids_for_run is not None
+                    else None
+                ),
+                "use_cache": self._use_cache_for_run,
+                "edited_texts": frame.collect_edited_texts(),
+                "focus_index": frame.get_focused_index(),
+                "scroll_fraction": frame.get_scroll_top_fraction(),
+            }
+            state.save_session(session)
+        self._autosave_job = self.root.after(config.AUTOSAVE_INTERVAL_MS, self._run_autosave)
+
     def _on_ocr_done(
         self,
         html_path: Path,
@@ -311,8 +416,40 @@ class App:
         self._show_review()
 
     def _show_review(self) -> None:
-        frame = ReviewFrame(self.container, self._review_items, self._on_finalize_clicked)
+        resume = self._resume_payload
+        self._resume_payload = None
+
+        initial_saved_texts = None
+        initial_focus_index = None
+        initial_scroll_fraction = None
+        if resume is not None:
+            saved_texts = resume.get("edited_texts")
+            if isinstance(saved_texts, list) and len(saved_texts) == len(self._review_items):
+                initial_saved_texts = saved_texts
+                initial_focus_index = resume.get("focus_index")
+                initial_scroll_fraction = resume.get("scroll_fraction")
+            else:
+                logger.warning(
+                    "saved session item count mismatch, discarding saved edits",
+                    extra=logging_config.extra(current_item_count=len(self._review_items)),
+                )
+                messagebox.showwarning(
+                    "Resume",
+                    "The chatlog appears to have changed since the saved session - "
+                    "starting the review fresh instead of restoring saved edits.",
+                )
+
+        frame = ReviewFrame(
+            self.container,
+            self._review_items,
+            self._on_finalize_clicked,
+            initial_saved_texts=initial_saved_texts,
+            initial_focus_index=initial_focus_index,
+            initial_scroll_fraction=initial_scroll_fraction,
+        )
         self._set_frame(frame)
+        self._review_frame = frame
+        self._start_autosave()
 
     def _on_finalize_clicked(self, edited_texts: list[str | None]) -> None:
         logger.info("finalize clicked")
@@ -323,6 +460,9 @@ class App:
             logger.exception("finalize failed")
             self._on_run_error(f"Failed to write output: {exc}")
             return
+
+        self._cancel_autosave()
+        state.clear_session()
 
         frame = ttk.Frame(self.container)
         ttk.Label(frame, text="Done! The new content has been copied to your clipboard.", padding=12).pack()
