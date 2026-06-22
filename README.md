@@ -158,13 +158,18 @@ py -3.13 -m app.main
 py -3.13 -m pytest gui_transcription\app_tests -v
 ```
 
-33 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
-splitting, JSON state persistence (run dates, OCR cache, recent-path
-history), start-date validation, and review-item building/output-writing.
-The GUI itself only has a manual smoke test (window construction, the
-review screen with synthetic data, an edit-then-finalize pass against a
-temp output file) — there's no automated test driving real Tk button
-clicks or a live Tesseract install.
+77 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
+splitting and backend dispatch, the JSON log formatter, JSON state
+persistence (run dates, OCR cache, recent-path history), start-date
+validation, review-item building/output-writing, the OCR batch
+runner/cache short-circuit and the finalize pass (cleanup + run-date +
+clipboard + BREAK-marker bookmarking), the review screen's keyboard-nav
+text-box lookup, and its row-height estimation/visible-range math
+(`app/gui/virtualization.py`, the part of the windowing logic that's pure
+enough to unit-test without a display). The GUI itself only has a manual
+smoke test (window construction, the review screen with synthetic data, an
+edit-then-finalize pass against a temp output file) — there's no automated
+test driving real Tk button clicks or a live Tesseract install.
 
 ## Logging
 
