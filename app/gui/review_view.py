@@ -184,7 +184,9 @@ class ReviewFrame(ttk.Frame):
 
         if item.image_path is None:
             preview = "\n".join(item.entry.text_lines).strip() or "(no text)"
-            ttk.Label(row, text=preview, wraplength=900, justify="left").pack(anchor="w")
+            ttk.Label(
+                row, text=preview, wraplength=900, justify="left", style="MessageText.TLabel"
+            ).pack(anchor="w")
             return row
 
         left = ttk.Frame(row)
@@ -204,13 +206,17 @@ class ReviewFrame(ttk.Frame):
             message_text = "\n".join(item.entry.text_lines).strip()
             if message_text:
                 ttk.Label(
-                    left, text=message_text, wraplength=THUMBNAIL_SIZE[0], justify="left"
+                    left, text=message_text, wraplength=THUMBNAIL_SIZE[0], justify="left",
+                    style="MessageText.TLabel",
                 ).pack(pady=4)
 
         text_widget = tk.Text(
-            row, width=40, height=30, wrap="word",
-            bg=theme.DARK_BG_WIDGET, fg=theme.DARK_FG, insertbackground=theme.DARK_FG,
+            row, width=40, height=30, wrap="word", relief="flat",
+            font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE),
+            bg=theme.DARK_TEXT_BG, fg=theme.DARK_FG, insertbackground=theme.DARK_INSERT,
             selectbackground=theme.DARK_ACCENT, selectforeground="white",
+            highlightthickness=1, highlightbackground=theme.DARK_BG_ALT,
+            highlightcolor=theme.DARK_FOCUS_HIGHLIGHT,
         )
         saved = self._saved_texts[index]
         text_widget.insert("1.0", saved if saved is not None else (item.initial_text or ""))

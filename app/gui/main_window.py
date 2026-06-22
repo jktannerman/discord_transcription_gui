@@ -25,6 +25,7 @@ class App:
         self.root = root
         self.root.title("Discord Transcription Tool")
         self.root.geometry("700x500")
+        self.root.state("zoomed")
         theme.apply_dark_theme(self.root)
 
         self.container = ttk.Frame(self.root, padding=12)
@@ -32,9 +33,13 @@ class App:
 
         self.current_frame: tk.Widget | None = None
 
-        self._html_path = tk.StringVar()
-        self._image_folder = tk.StringVar()
-        self._output_path = tk.StringVar()
+        def _most_recent(field: str) -> str:
+            recent = state.load_recent_paths(field)
+            return recent[0] if recent else ""
+
+        self._html_path = tk.StringVar(value=_most_recent("html_path"))
+        self._image_folder = tk.StringVar(value=_most_recent("image_folder"))
+        self._output_path = tk.StringVar(value=_most_recent("output_path"))
         self._start_date = tk.StringVar(value=state.read_last_run_date() or "")
         self._use_cache = tk.BooleanVar(value=False)
 
@@ -53,7 +58,6 @@ class App:
     # -- setup screen -------------------------------------------------------
 
     def show_setup(self) -> None:
-        self.root.geometry("700x500")
         frame = ttk.Frame(self.container)
 
         ttk.Label(frame, text="Chatlog HTML file:").grid(row=0, column=0, sticky="w", pady=4)
@@ -86,6 +90,7 @@ class App:
         self._cache_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=4)
         self._cache_check.state(["disabled"])
         self._image_folder.trace_add("write", self._update_cache_checkbox)
+        self._update_cache_checkbox()  # sync to the prefilled image folder, if any
 
         self._error_label = ttk.Label(frame, text="", foreground="red")
         self._error_label.grid(row=5, column=0, columnspan=3, sticky="w", pady=4)
@@ -199,7 +204,6 @@ class App:
         self._show_review()
 
     def _show_review(self) -> None:
-        self.root.geometry("1200x800")
         frame = ReviewFrame(self.container, self._review_items, self._on_finalize_clicked)
         self._set_frame(frame)
 

@@ -14,6 +14,19 @@ DARK_BG_WIDGET = "#3c3c3c"  # Buttons, entry/text fields
 DARK_FG = "#d4d4d4"  # Text color
 DARK_ACCENT = "#264f78"  # Selection highlight
 
+# Colors and font for message/transcript text content and editable input
+# boxes specifically, matched to multi_file_search/multi_file_search.py's
+# text area and search-entry styling, which reads more clearly than the
+# general UI palette above for dense body text and typed input.
+DARK_TEXT_BG = "#171717"  # Darker than DARK_BG, so text boxes read as the
+                          # darkest element on screen (darker than the image
+                          # panel's DARK_BG_ALT background next to them)
+DARK_INSERT = "white"  # Brighter text-cursor color than DARK_FG
+DARK_FOCUS_HIGHLIGHT = "#569cd6"  # Border color for a focused input box
+
+TEXT_FONT_FAMILY = "Consolas"
+TEXT_FONT_SIZE = 14
+
 
 def enable_dark_title_bar(window: tk.Tk) -> None:
     """Enable the dark window title bar on Windows 10/11. No-op elsewhere."""
@@ -83,6 +96,16 @@ def apply_dark_theme(root: tk.Tk) -> ttk.Style:
     )
     style.map("TScrollbar", background=[("active", "#6a6a6a"), ("pressed", "#7a7a7a")])
     style.configure("TProgressbar", background=DARK_ACCENT, troughcolor=DARK_BG_WIDGET)
+
+    # Message/transcript text content sits on the darkest background for
+    # better contrast against its foreground than the general UI palette,
+    # and uses a larger monospace font for readability.
+    style.configure(
+        "MessageText.TLabel",
+        background=DARK_TEXT_BG,
+        foreground=DARK_FG,
+        font=(TEXT_FONT_FAMILY, TEXT_FONT_SIZE),
+    )
 
     # The combobox dropdown listbox is a plain tk.Listbox under the hood and
     # isn't covered by ttk styling - set its colors via the option database.
