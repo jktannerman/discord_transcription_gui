@@ -8,6 +8,8 @@ compatibility constraints.
 """
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -20,14 +22,71 @@ def _ensure_data_dir() -> None:
     config.APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _atomic_write_json(path: Path, data) -> None:
+    """Write data to path as JSON without ever leaving a truncated/partial
+    file in its place, mirroring song_folder_player/state.py's save_state:
+    write to a temp file in the same directory, fsync it so the bytes are
+    actually on disk, rotate whatever currently occupies path to a .bak
+    sibling, then os.replace the temp file into path. os.replace is atomic
+    on Windows/POSIX, so a crash at any point leaves either the old file or
+    the new one intact - never a half-written one - and the .bak rotation
+    means even a bad *new* write (not just a crash mid-write) still leaves
+    the previous good version recoverable."""
+    _ensure_data_dir()
+    backup_path = path.with_suffix(".bak")
+
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=path.stem + "_", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+
+        if path.exists():
+            os.replace(path, backup_path)
+        os.replace(tmp_path, path)
+    except OSError:
+        logger.error("failed to write %s", path, exc_info=True)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _read_json_with_backup(path: Path):
+    """Read JSON from path, falling back to its .bak sibling (written by
+    _atomic_write_json) if path is missing or unreadable - covers both a
+    corrupt primary file and the narrow window where path has been rotated
+    out but the replacement hasn't landed yet. Returns None if neither file
+    is present/readable."""
+    backup_path = path.with_suffix(".bak")
+
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            logger.warning("%s unreadable, trying backup", path, exc_info=True)
+
+    if backup_path.exists():
+        try:
+            with open(backup_path, "r", encoding="utf8") as f:
+                data = json.load(f)
+            logger.warning("loaded %s from backup", path)
+            return data
+        except (json.JSONDecodeError, OSError):
+            logger.warning("backup for %s unreadable too", path, exc_info=True)
+
+    return None
+
+
 def read_last_run_date() -> Optional[str]:
     """Return the most recent recorded end date, or None if none recorded yet."""
-    if not config.RUN_DATE_FILE.exists():
+    dates = _read_json_with_backup(config.RUN_DATE_FILE)
+    if dates is None:
         logger.info("no run-date file found, no previous run date")
         return None
-
-    with open(config.RUN_DATE_FILE, "r", encoding="utf8") as f:
-        dates = json.load(f)
 
     last_date = dates[-1] if dates else None
     logger.info("read last run date", extra=logging_config.extra(last_date=last_date))
@@ -36,17 +95,9 @@ def read_last_run_date() -> Optional[str]:
 
 def append_run_date(date_str: str) -> None:
     """Append a new end date to the run-date log."""
-    _ensure_data_dir()
-
-    dates = []
-    if config.RUN_DATE_FILE.exists():
-        with open(config.RUN_DATE_FILE, "r", encoding="utf8") as f:
-            dates = json.load(f)
-
+    dates = _read_json_with_backup(config.RUN_DATE_FILE) or []
     dates.append(date_str)
-
-    with open(config.RUN_DATE_FILE, "w", encoding="utf8") as f:
-        json.dump(dates, f, indent=2)
+    _atomic_write_json(config.RUN_DATE_FILE, dates)
 
     logger.info("appended run date", extra=logging_config.extra(date=date_str))
 
@@ -54,11 +105,9 @@ def append_run_date(date_str: str) -> None:
 def load_recent_paths(field: str) -> list:
     """Return the cached recent values for a setup-screen field (e.g.
     "html_path"), most-recently-used first. Empty list if none recorded yet."""
-    if not config.RECENT_PATHS_FILE.exists():
+    data = _read_json_with_backup(config.RECENT_PATHS_FILE)
+    if data is None:
         return []
-
-    with open(config.RECENT_PATHS_FILE, "r", encoding="utf8") as f:
-        data = json.load(f)
 
     return data.get(field, [])
 
@@ -68,12 +117,8 @@ def add_recent_path(field: str, value: str) -> None:
     against earlier entries and capping the history length."""
     if not value:
         return
-    _ensure_data_dir()
 
-    data = {}
-    if config.RECENT_PATHS_FILE.exists():
-        with open(config.RECENT_PATHS_FILE, "r", encoding="utf8") as f:
-            data = json.load(f)
+    data = _read_json_with_backup(config.RECENT_PATHS_FILE) or {}
 
     paths = data.get(field, [])
     if value in paths:
@@ -81,8 +126,7 @@ def add_recent_path(field: str, value: str) -> None:
     paths.insert(0, value)
     data[field] = paths[: config.MAX_RECENT_PATHS]
 
-    with open(config.RECENT_PATHS_FILE, "w", encoding="utf8") as f:
-        json.dump(data, f, indent=2)
+    _atomic_write_json(config.RECENT_PATHS_FILE, data)
 
     logger.info("recorded recent path", extra=logging_config.extra(field=field, value=value))
 
@@ -92,11 +136,9 @@ def read_approved_users_state() -> Optional[dict]:
     setup screen, or None if it has never been saved (first run) - callers
     distinguish that from an intentionally-emptied field by checking for
     None rather than treating an empty/falsy result as "never saved"."""
-    if not config.APPROVED_USERS_STATE_FILE.exists():
+    data = _read_json_with_backup(config.APPROVED_USERS_STATE_FILE)
+    if data is None:
         return None
-
-    with open(config.APPROVED_USERS_STATE_FILE, "r", encoding="utf8") as f:
-        data = json.load(f)
 
     return {"text": data.get("text", ""), "use_all_users": data.get("use_all_users", False)}
 
@@ -105,10 +147,7 @@ def save_approved_users_state(text: str, use_all_users: bool) -> None:
     """Persist the setup screen's approved-users field verbatim, plus the
     "all users" toggle, so the next run can be pre-filled with exactly what
     was used this time."""
-    _ensure_data_dir()
-
-    with open(config.APPROVED_USERS_STATE_FILE, "w", encoding="utf8") as f:
-        json.dump({"text": text, "use_all_users": use_all_users}, f, indent=2)
+    _atomic_write_json(config.APPROVED_USERS_STATE_FILE, {"text": text, "use_all_users": use_all_users})
 
     logger.info(
         "saved approved-users setup state",
@@ -119,11 +158,9 @@ def save_approved_users_state(text: str, use_all_users: bool) -> None:
 def load_session() -> Optional[dict]:
     """Return the saved in-progress review session, or None if there isn't
     one (no prior run, or the last run finished/was finalized normally)."""
-    if not config.SESSION_FILE.exists():
+    session = _read_json_with_backup(config.SESSION_FILE)
+    if session is None:
         return None
-
-    with open(config.SESSION_FILE, "r", encoding="utf8") as f:
-        session = json.load(f)
 
     logger.info(
         "loaded saved session",
@@ -135,16 +172,16 @@ def load_session() -> Optional[dict]:
 def save_session(session: dict) -> None:
     """Persist the in-progress review session (run inputs, per-item edits,
     focus/scroll position), overwriting any previously saved session - only
-    one session is ever kept, same as the OCR cache. Written via a temp
-    file + atomic replace since this is called repeatedly (every few
-    seconds) while the app may be closed at any moment, and a partial write
-    left in place of the real file would corrupt the next resume attempt."""
-    _ensure_data_dir()
-
-    tmp_path = config.SESSION_FILE.with_suffix(".tmp")
-    with open(tmp_path, "w", encoding="utf8") as f:
-        json.dump(session, f, indent=2)
-    tmp_path.replace(config.SESSION_FILE)
+    one session is ever kept, same as the OCR cache. This is the highest-
+    value target for crash safety in the whole app: it's autosaved every
+    few seconds while reviewing a transcript that may represent hours of
+    OCR + correction work, and the app can be closed (or crash) at any
+    instant mid-write. _atomic_write_json's fsync + rename means that never
+    corrupts the file in place, and the .bak rotation means even a write
+    that completes but encodes a bad/incomplete in-memory session still
+    leaves the previous-known-good session recoverable on the next
+    resume-prompt rather than discarding all progress outright."""
+    _atomic_write_json(config.SESSION_FILE, session)
 
     logger.debug(
         "saved session",
@@ -156,10 +193,21 @@ def save_session(session: dict) -> None:
 
 
 def clear_session() -> None:
-    """Delete the saved in-progress session, if any - called once a run is
-    finalized, since there's nothing left to resume."""
+    """Delete the saved in-progress session and its backup, if any - called
+    once a run is finalized, since there's nothing left to resume. The
+    backup must be removed too, not just the primary file - otherwise
+    load_session's backup fallback would resurrect a stale, already-
+    finalized session on the next launch."""
+    backup_path = config.SESSION_FILE.with_suffix(".bak")
+    deleted = False
     if config.SESSION_FILE.exists():
         config.SESSION_FILE.unlink()
+        deleted = True
+    if backup_path.exists():
+        backup_path.unlink()
+        deleted = True
+
+    if deleted:
         logger.info("cleared saved session")
 
 
@@ -169,12 +217,10 @@ def load_cache(folder_path: str) -> Optional[dict]:
     Returns None if there is no cache, or the cache was written for a
     different image folder.
     """
-    if not config.OCR_CACHE_FILE.exists():
+    cache = _read_json_with_backup(config.OCR_CACHE_FILE)
+    if cache is None:
         logger.info("no ocr cache file found")
         return None
-
-    with open(config.OCR_CACHE_FILE, "r", encoding="utf8") as f:
-        cache = json.load(f)
 
     if cache.get("folder") != str(Path(folder_path)):
         logger.info(
@@ -194,13 +240,14 @@ def load_cache(folder_path: str) -> Optional[dict]:
 
 
 def save_cache(folder_path: str, data: dict) -> None:
-    """Persist the {image_name: [paragraphs]} dict for folder_path."""
-    _ensure_data_dir()
-
+    """Persist the {image_name: [paragraphs]} dict for folder_path. This is
+    the other high-value target alongside the session file - it represents
+    however long the Tesseract pass over the whole image folder took, and
+    losing it forces redoing OCR from scratch on the next run - so it goes
+    through the same atomic write + backup rotation as the session."""
     cache = {"folder": str(Path(folder_path)), "data": data}
 
-    with open(config.OCR_CACHE_FILE, "w", encoding="utf8") as f:
-        json.dump(cache, f, indent=2)
+    _atomic_write_json(config.OCR_CACHE_FILE, cache)
 
     logger.info(
         "saved ocr cache",

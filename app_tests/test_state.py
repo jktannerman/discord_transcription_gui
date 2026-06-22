@@ -1,3 +1,5 @@
+import json
+
 from gui_transcription.app import config, state
 
 
@@ -157,3 +159,79 @@ def test_clear_session_is_a_noop_when_no_file(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SESSION_FILE", tmp_path / "session.json")
 
     state.clear_session()  # should not raise
+
+
+def test_session_backup_created_on_second_save(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    session_file = tmp_path / "session.json"
+    monkeypatch.setattr(config, "SESSION_FILE", session_file)
+    backup_file = session_file.with_suffix(".bak")
+
+    state.save_session({"output_path": "first.txt", "edited_texts": []})
+    assert not backup_file.exists()
+
+    state.save_session({"output_path": "second.txt", "edited_texts": []})
+    assert backup_file.exists()
+    assert json.loads(backup_file.read_text(encoding="utf8"))["output_path"] == "first.txt"
+
+
+def test_session_recovers_from_backup_when_primary_corrupt(tmp_path, monkeypatch):
+    """Mimics a crash mid-write: session.json left empty/truncated, but the
+    previous good session survives in session.bak."""
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    session_file = tmp_path / "session.json"
+    monkeypatch.setattr(config, "SESSION_FILE", session_file)
+    backup_file = session_file.with_suffix(".bak")
+
+    state.save_session({"output_path": "good.txt", "edited_texts": []})
+    state.save_session({"output_path": "overwritten.txt", "edited_texts": []})
+    session_file.write_text("", encoding="utf8")
+
+    assert state.load_session()["output_path"] == "good.txt"
+    assert backup_file.exists()
+
+
+def test_clear_session_removes_backup_too(tmp_path, monkeypatch):
+    """A stale backup must not resurrect a session that was already
+    finalized and explicitly cleared."""
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    session_file = tmp_path / "session.json"
+    monkeypatch.setattr(config, "SESSION_FILE", session_file)
+    backup_file = session_file.with_suffix(".bak")
+
+    state.save_session({"output_path": "first.txt", "edited_texts": []})
+    state.save_session({"output_path": "second.txt", "edited_texts": []})
+    assert backup_file.exists()
+
+    state.clear_session()
+
+    assert not session_file.exists()
+    assert not backup_file.exists()
+    assert state.load_session() is None
+
+
+def test_no_session_temp_files_left_after_save(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "SESSION_FILE", tmp_path / "session.json")
+
+    state.save_session({"output_path": "first.txt", "edited_texts": []})
+    state.save_session({"output_path": "second.txt", "edited_texts": []})
+
+    assert list(tmp_path.glob("session_*.tmp")) == []
+
+
+def test_cache_recovers_from_backup_when_primary_corrupt(tmp_path, monkeypatch):
+    """Mimics a crash mid-write to the OCR cache, which can represent a
+    long Tesseract pass over a large image folder."""
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    cache_file = tmp_path / "ocr_cache.json"
+    monkeypatch.setattr(config, "OCR_CACHE_FILE", cache_file)
+    backup_file = cache_file.with_suffix(".bak")
+
+    folder = str(tmp_path / "images")
+    state.save_cache(folder, {"good.png": ["text"]})
+    state.save_cache(folder, {"overwritten.png": ["text"]})
+    cache_file.write_text("", encoding="utf8")
+
+    assert state.load_cache(folder) == {"good.png": ["text"]}
+    assert backup_file.exists()

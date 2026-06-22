@@ -145,7 +145,10 @@ gui_transcription/
     main.py              # entry point
     config.py            # constants: paths, markers, default approved users
     state.py             # JSON run-date log, OCR cache, approved-users
-                          # state, in-progress session save/resume
+                          # state, in-progress session save/resume - every
+                          # write goes through atomic write-then-replace
+                          # with .bak rotation, every read falls back to
+                          # the .bak if the primary file is missing/corrupt
     ocr.py                # Tesseract OCR behind a swappable backend interface
     chatlog.py            # HTML parsing + date/author filtering
     cleanup.py            # post-run regex cleanup pass
@@ -265,14 +268,15 @@ py -3.13 -m app.main
 py -3.13 -m pytest gui_transcription\app_tests -v
 ```
 
-90 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
+95 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
 splitting and backend dispatch, the JSON log formatter, JSON state
 persistence (run dates, OCR cache, recent-path history, in-progress session
 save/resume), start-date validation, review-item building/output-writing
 (including a text-only message's editable spacing copy standing in for its
 immutable original when written out, and a message with both a caption
 and an image getting two independently-edited text blocks), the OCR batch
-runner/cache short-circuit and the finalize pass (cleanup + run-date +
+runner/cache short-circuit, the atomic-write-plus-backup-rotation/recovery
+behavior of every state file (`app/state.py`), and the finalize pass (cleanup + run-date +
 clipboard + BREAK-marker bookmarking), the review screen's slot-based
 keyboard navigation (`_move_focus` stepping through `(item_index, role)`
 slots in transcript order, message-before-ocr for a row with both), and
@@ -312,6 +316,11 @@ counts), review-screen build/finalize events, and caught exceptions.
   export changes between sessions (e.g. a fresh re-export with more
   messages), the counts won't line up and the saved edits are discarded
   with a warning instead of being (potentially incorrectly) reapplied.
+- Only one generation of backup is kept per state file (`*.bak`), not a
+  full history - a crash can still lose up to one autosave interval's
+  worth of review edits (5 seconds, `AUTOSAVE_INTERVAL_MS`) if it happens
+  between two autosaves, since the .bak only protects the *previous*
+  successful write, not the in-memory edits since then.
 - There's no UI for resetting a message's editable copy back to its
   original OCR/message text once edited (deferred, not an immediate
   priority, per the original feature request).
