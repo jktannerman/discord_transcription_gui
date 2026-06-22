@@ -12,6 +12,14 @@ Images are loaded/decoded lazily, only for rows within (or near) the
 visible viewport, and unloaded again once scrolled away. Decoding every
 attached image up front made initial build and scrolling laggy once there
 were more than a handful of messages.
+
+The load/unload pass itself is debounced (see DEBOUNCE_MS): fast scrolling
+fires many wheel/scrollbar events in quick succession, and running the pass
+synchronously on every single one blocked the Tk event loop with back-to-back
+image decodes, which both caused the lag and produced "ghost" partial images
+(a widget's image= being swapped again before Tk finished painting the
+previous swap). Debouncing collapses a burst of events into a single pass
+once scrolling actually pauses.
 """
 
 import tkinter as tk
@@ -34,6 +42,11 @@ THUMBNAIL_SIZE = (760, 950)
 # below the visible area, so scrolling a little doesn't trigger a reload
 # and neighboring messages are visible for spacing context.
 SCROLL_BUFFER_VIEWPORTS = 1
+
+# How long to wait, after the most recent scroll event, before actually
+# loading/unloading images. Keeps a fast multi-event scroll burst from
+# triggering a decode on every single tick.
+DEBOUNCE_MS = 80
 
 
 class _ImageSlot:
@@ -62,6 +75,7 @@ class ReviewFrame(ttk.Frame):
         self._on_finalize = on_finalize
         self._text_widgets: List[Optional[tk.Text]] = []
         self._image_slots: List[_ImageSlot] = []
+        self._update_job: Optional[str] = None
 
         # Pack the fixed-size widgets (button row, scrollbar) before the
         # expanding canvas - packing the expanding widget first starves the
@@ -81,7 +95,7 @@ class ReviewFrame(ttk.Frame):
 
         def _on_scrollbar(*args):
             canvas.yview(*args)
-            self._update_visible_images()
+            self._schedule_update_visible_images()
 
         scrollbar.configure(command=_on_scrollbar)
         canvas.configure(yscrollcommand=scrollbar.set)
@@ -95,18 +109,24 @@ class ReviewFrame(ttk.Frame):
 
         def _on_canvas_configure(e):
             canvas.itemconfig(canvas_window, width=e.width)
-            self._update_visible_images()
+            self._schedule_update_visible_images()
 
         canvas.bind("<Configure>", _on_canvas_configure)
 
         def _on_mousewheel(e):
             canvas.yview_scroll(int(-e.delta / 120), "units")
-            self._update_visible_images()
+            self._schedule_update_visible_images()
 
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
         # bind_all is global, so undo it when this frame goes away, otherwise
         # the next screen's scrolling would dispatch to this destroyed canvas
-        self.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        def _on_destroy(e):
+            canvas.unbind_all("<MouseWheel>")
+            if self._update_job is not None:
+                self.after_cancel(self._update_job)
+                self._update_job = None
+
+        self.bind("<Destroy>", _on_destroy)
 
         for item in items:
             self._build_row(item)
@@ -147,6 +167,17 @@ class ReviewFrame(ttk.Frame):
         text_widget.insert("1.0", item.initial_text or "")
         text_widget.pack(side="left", fill="both", expand=True, padx=6)
         self._text_widgets.append(text_widget)
+
+    def _schedule_update_visible_images(self) -> None:
+        """Coalesce a burst of scroll events into a single load/unload pass,
+        run shortly after the most recent event rather than on every one."""
+        if self._update_job is not None:
+            self.after_cancel(self._update_job)
+        self._update_job = self.after(DEBOUNCE_MS, self._run_scheduled_update)
+
+    def _run_scheduled_update(self) -> None:
+        self._update_job = None
+        self._update_visible_images()
 
     def _update_visible_images(self) -> None:
         """Load images for rows within the (buffered) visible viewport and
