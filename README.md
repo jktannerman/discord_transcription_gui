@@ -53,11 +53,24 @@ What's in scope for v1 (by design, agreed with the project owner):
    default) is ever built as actual widgets at once; scrolling near either
    edge of that window pages the next/previous half-window in and tears the
    opposite half down, so scrolling stays responsive no matter how long the
-   transcript is. Edits survive a row being paged out and back in, and the
-   focused text box keeps focus across a transition if it's still in the new
-   window. Images within the materialized window are additionally
-   decoded/loaded lazily as you scroll near them (and unloaded again once
-   you scroll away). Nothing is written to disk while reviewing.
+   transcript is. Each page transition pins a surviving row's on-screen
+   position and compensates the scroll offset for whatever was added/removed
+   above it ("scroll anchoring") — without that compensation, paging in more
+   rows above the viewport made the next page-load trigger *more* likely
+   rather than less, causing a runaway cascade of transitions back toward
+   the start of the transcript. Edits survive a row being paged out and back
+   in, and the focused text box keeps focus across a transition if it's
+   still in the new window. Images within the materialized window are
+   additionally decoded/loaded lazily as you scroll near them (and unloaded
+   again once you scroll away). Nothing is written to disk while reviewing.
+
+   Keyboard shortcuts on the review screen: **Ctrl+Backspace** deletes the
+   previous word; **Tab**/**Shift+Tab** move between text boxes in
+   transcript order (paging the window in if needed), landing on the
+   Finalize button once there's no further text box; **Page Up**/**Page
+   Down** scroll the whole window, overriding Tk's default of scrolling
+   within whichever text box has focus; **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo
+   within a single text box.
 5. **Finalize** — a single button at the bottom of the review screen writes
    every message's final lines (edited text if you changed it, original OCR
    text otherwise) to the output file in one pass, then runs the original

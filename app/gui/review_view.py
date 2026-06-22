@@ -39,6 +39,15 @@ Images are additionally loaded/decoded lazily within the materialized
 window, only for rows within (or near) the visible viewport, and unloaded
 again once scrolled away.
 
+Keyboard shortcuts, bound per text box (and globally for Page Up/Down) since
+Tk's defaults either don't cover these or actively conflict with them:
+Ctrl+Backspace deletes the previous word; Tab/Shift-Tab move between text
+boxes in transcript order, advancing/paging the window if the target isn't
+materialized yet, landing on the Finalize button once there's no text box
+left to advance to; Page Up/Down scroll the whole window rather than (Tk's
+default) scrolling within whichever Text widget has focus; Ctrl+Z/Ctrl+Shift+Z
+undo/redo within a single text box, using Tk's built-in per-widget undo stack.
+
 The load/unload pass (and the page-edge check) is debounced (see
 DEBOUNCE_MS): fast scrolling fires many wheel/scrollbar events in quick
 succession, and running the pass synchronously on every single one blocked
@@ -48,6 +57,7 @@ before Tk finished painting the previous swap). Debouncing collapses a burst
 of events into a single pass once scrolling actually pauses.
 """
 
+import re
 import tkinter as tk
 from tkinter import ttk
 from typing import Callable, Dict, List, Optional
@@ -87,6 +97,10 @@ PAGE_STEP = PAGE_SIZE // 2
 # to cross before the next/previous half-page is loaded in.
 BOTTOM_TRIGGER_FRACTION = 0.7
 TOP_TRIGGER_FRACTION = 0.3
+
+# Matches the word immediately before the cursor, plus any whitespace
+# trailing it up to the cursor - what Ctrl+Backspace deletes.
+_TRAILING_WORD_RE = re.compile(r"\S+\s*$")
 
 
 class _ImageSlot:
@@ -130,9 +144,11 @@ class ReviewFrame(ttk.Frame):
         # others of space and squashes the scrollbar into a sliver.
         button_row = ttk.Frame(self)
         button_row.pack(side="bottom", fill="x", pady=8)
-        ttk.Button(
+        self._finalize_button = ttk.Button(
             button_row, text="Finalize and write to file", command=self._on_finalize_clicked
-        ).pack(pady=6)
+        )
+        self._finalize_button.pack(pady=6)
+        self._finalize_button.bind("<Shift-Tab>", self._on_shift_tab)
 
         scrollbar = ttk.Scrollbar(self, orient="vertical")
         scrollbar.pack(side="right", fill="y")
@@ -166,10 +182,18 @@ class ReviewFrame(ttk.Frame):
             self._schedule_update_visible_images()
 
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        # Global fallback for Page Up/Down so they scroll the review window
+        # even when focus is on the Finalize button rather than a text box
+        # (each text box also gets its own binding in _build_row, which
+        # takes precedence and overrides Tk's default Text page-scrolling).
+        canvas.bind_all("<Prior>", self._on_page_up)
+        canvas.bind_all("<Next>", self._on_page_down)
         # bind_all is global, so undo it when this frame goes away, otherwise
         # the next screen's scrolling would dispatch to this destroyed canvas
         def _on_destroy(e):
             canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Prior>")
+            canvas.unbind_all("<Next>")
             if self._update_job is not None:
                 self.after_cancel(self._update_job)
                 self._update_job = None
@@ -230,7 +254,7 @@ class ReviewFrame(ttk.Frame):
                 ).pack(anchor="w")
 
         text_widget = tk.Text(
-            row, width=40, height=30, wrap="word", relief="flat",
+            row, width=40, height=30, wrap="word", relief="flat", undo=True,
             font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE),
             bg=theme.DARK_TEXT_BG, fg=theme.DARK_FG, insertbackground=theme.DARK_INSERT,
             selectbackground=theme.DARK_ACCENT, selectforeground="white",
@@ -239,7 +263,15 @@ class ReviewFrame(ttk.Frame):
         )
         saved = self._saved_texts[index]
         text_widget.insert("1.0", saved if saved is not None else (item.initial_text or ""))
+        text_widget.edit_reset()  # don't let the initial insert be undoable
         text_widget.pack(side="left", fill="both", expand=True, padx=6)
+        text_widget.bind("<Control-BackSpace>", self._delete_word_backward)
+        text_widget.bind("<Tab>", self._on_tab)
+        text_widget.bind("<Shift-Tab>", self._on_shift_tab)
+        text_widget.bind("<Prior>", self._on_page_up)
+        text_widget.bind("<Next>", self._on_page_down)
+        text_widget.bind("<Control-z>", self._undo_text)
+        text_widget.bind("<Control-Z>", self._redo_text)
         self._text_widgets[index] = text_widget
         return row
 
@@ -270,6 +302,140 @@ class ReviewFrame(ttk.Frame):
         widget = self._text_widgets.get(index)
         if widget is not None:
             widget.focus_set()
+
+    def _delete_word_backward(self, event: tk.Event) -> str:
+        """Ctrl+Backspace: delete the word before the cursor (plus any
+        whitespace trailing it), or just merge with the previous line if
+        the cursor is already at the start of a line."""
+        widget = event.widget
+        line_start = widget.index("insert linestart")
+        text_before = widget.get(line_start, "insert")
+        if not text_before:
+            if widget.index("insert") != "1.0":
+                widget.delete("insert -1c", "insert")
+            return "break"
+
+        match = _TRAILING_WORD_RE.search(text_before)
+        delete_from = f"{line_start}+{match.start()}c" if match else line_start
+        widget.delete(delete_from, "insert")
+        return "break"
+
+    def _undo_text(self, event: tk.Event) -> str:
+        try:
+            event.widget.edit_undo()
+        except tk.TclError:
+            pass  # nothing to undo
+        return "break"
+
+    def _redo_text(self, event: tk.Event) -> str:
+        try:
+            event.widget.edit_redo()
+        except tk.TclError:
+            pass  # nothing to redo
+        return "break"
+
+    def _on_page_up(self, event: Optional[tk.Event] = None) -> str:
+        self._canvas.yview_scroll(-1, "pages")
+        self._schedule_update_visible_images()
+        return "break"
+
+    def _on_page_down(self, event: Optional[tk.Event] = None) -> str:
+        self._canvas.yview_scroll(1, "pages")
+        self._schedule_update_visible_images()
+        return "break"
+
+    def _on_tab(self, event: tk.Event) -> str:
+        return self._move_focus(1)
+
+    def _on_shift_tab(self, event: tk.Event) -> str:
+        return self._move_focus(-1)
+
+    def _scroll_into_view(self, index: int) -> None:
+        """Adjust the canvas's scroll position only as much as needed to
+        bring items[index]'s row fully into the viewport, used after Tab
+        moves focus somewhere not currently visible."""
+        canvas = self._canvas
+        row = self._row_frames.get(index)
+        if row is None:
+            return
+        canvas.update_idletasks()
+        bbox = canvas.bbox("all")
+        total_height = (bbox[3] - bbox[1]) if bbox else 0
+        if total_height <= 0:
+            return
+
+        viewport_height = canvas.winfo_height()
+        row_top = row.winfo_y()
+        row_bottom = row_top + row.winfo_height()
+        view_top = canvas.canvasy(0)
+        view_bottom = canvas.canvasy(viewport_height)
+
+        if row_top < view_top:
+            canvas.yview_moveto(row_top / total_height)
+        elif row_bottom > view_bottom:
+            canvas.yview_moveto((row_bottom - viewport_height) / total_height)
+
+    def _move_focus(self, delta: int) -> str:
+        """Move focus to the next/previous text box in transcript order (or
+        to/from the Finalize button at either end), paging the window
+        forward/backward first if the target isn't materialized yet."""
+        if self.focus_get() is self._finalize_button:
+            if delta < 0:
+                indices = sorted(self._text_widgets.keys())
+                if indices:
+                    target = indices[-1]
+                    self._text_widgets[target].focus_set()
+                    self._scroll_into_view(target)
+            return "break"
+
+        current_index = self._focused_text_index()
+        indices = sorted(self._text_widgets.keys())
+
+        if current_index is None:
+            if indices:
+                target = indices[0] if delta > 0 else indices[-1]
+                self._text_widgets[target].focus_set()
+                self._scroll_into_view(target)
+            return "break"
+
+        pos = indices.index(current_index)
+        new_pos = pos + delta
+        if 0 <= new_pos < len(indices):
+            target = indices[new_pos]
+            self._text_widgets[target].focus_set()
+            self._scroll_into_view(target)
+            return "break"
+
+        if delta > 0:
+            # Off the bottom edge of the materialized text boxes - page
+            # forward until either a further text box appears (some
+            # materialized rows may be text-only messages with no box) or
+            # there's nothing left, in which case the Finalize button is
+            # the natural next stop.
+            while True:
+                if self._window_end >= len(self._items):
+                    self._finalize_button.focus_set()
+                    return "break"
+                self._advance_forward()
+                candidates = [i for i in self._text_widgets if i > current_index]
+                if candidates:
+                    target = min(candidates)
+                    self._text_widgets[target].focus_set()
+                    self._scroll_into_view(target)
+                    return "break"
+        else:
+            # Off the top edge - page backward the same way. If we're
+            # already at the very first text box, there's nowhere to go.
+            while True:
+                if self._window_start <= 0:
+                    return "break"
+                self._advance_backward()
+                candidates = [i for i in self._text_widgets if i < current_index]
+                if candidates:
+                    target = max(candidates)
+                    self._text_widgets[target].focus_set()
+                    self._scroll_into_view(target)
+                    return "break"
 
     def _transition_preserving_scroll(self, anchor_index: int, mutate: Callable[[], None]) -> None:
         """Run `mutate` (which adds/removes rows in the window) and keep the
