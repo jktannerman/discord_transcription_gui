@@ -238,3 +238,99 @@ def test_resuming_session_restores_saved_edit_and_focus(root, sample_image):
     widget = frame._text_widgets[(text_item, "message")]
     assert widget.get("1.0", "end-1c") == "a resumed edit"
     assert focus_calls == [(text_item, "message")]
+
+
+def _container_bounds(frame, index, role):
+    """The (top, bottom) of a box's container in the same document-space
+    coordinates _keep_cursor_in_viewport computes them in - see that
+    method's docstring for why a winfo_rooty() delta against the row (not
+    winfo_y(), and not the container's own position relative to the
+    repositioned _scroll_frame) is what's reliable here."""
+    container = frame._text_containers[(index, role)]
+    row = frame._row_frames[index]
+    top = frame._offset_of(index) + (container.winfo_rooty() - row.winfo_rooty())
+    return top, top + container.winfo_height()
+
+
+def _long_text_items(sample_image, tall_index=5, count=10):
+    """A run of short one-line messages with one long, many-line message
+    (tall_index) tall enough that its message box - capped at
+    TEXT_BOX_MAX_HEIGHT_FRACTION of the canvas - is a sizeable fraction of
+    the test window's height, so scrolling to the top or bottom of the
+    10-row document reliably leaves part of that one row's box offscreen."""
+    long_text = "\n".join(f"line {i}" for i in range(40))
+    entries = [
+        MessageEntry(
+            message_id=str(i),
+            text_lines=[long_text if i == tall_index else f"text {i}"],
+            image_names=[],
+        )
+        for i in range(count)
+    ]
+    return build_review_items(entries, {}, image_folder=sample_image.parent)
+
+
+def test_keep_cursor_in_viewport_scrolls_down_to_align_box_bottom_with_view_bottom(root, sample_image):
+    items = _long_text_items(sample_image)
+    frame, _ = _build_frame(root, items)
+    frame._canvas.yview_moveto(0.0)
+    frame._reconcile()
+    root.update_idletasks()
+
+    key = (5, "message")
+    widget = frame._text_widgets[key]
+    widget.focus_set()
+    widget.mark_set("insert", "end-1c")
+    widget.see("insert")
+    root.update_idletasks()
+
+    container_top, container_bottom = _container_bounds(frame, 5, "message")
+    view_bottom_before = frame._canvas.canvasy(frame._canvas.winfo_height())
+    assert container_bottom > view_bottom_before  # cursor (near box's end) starts offscreen below
+
+    frame._keep_cursor_in_viewport(key, widget)
+    root.update_idletasks()
+
+    new_view_bottom = frame._canvas.canvasy(frame._canvas.winfo_height())
+    assert abs(new_view_bottom - container_bottom) < 2
+
+
+def test_keep_cursor_in_viewport_scrolls_up_to_align_box_top_with_view_top(root, sample_image):
+    items = _long_text_items(sample_image)
+    frame, _ = _build_frame(root, items)
+    frame._canvas.yview_moveto(1.0)
+    frame._reconcile()
+    root.update_idletasks()
+
+    key = (5, "message")
+    widget = frame._text_widgets[key]
+    widget.focus_set()
+    widget.mark_set("insert", "1.0")
+    widget.see("insert")
+    root.update_idletasks()
+
+    container_top, _ = _container_bounds(frame, 5, "message")
+    view_top_before = frame._canvas.canvasy(0)
+    assert container_top < view_top_before  # cursor (at box's start) starts offscreen above
+
+    frame._keep_cursor_in_viewport(key, widget)
+    root.update_idletasks()
+
+    new_view_top = frame._canvas.canvasy(0)
+    assert abs(new_view_top - container_top) < 2
+
+
+def test_keep_cursor_in_viewport_does_nothing_when_cursor_already_visible(root, sample_image):
+    items = _items(sample_image, count=5)
+    frame, _ = _build_frame(root, items)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    key = (text_item, "message")
+    widget = frame._text_widgets[key]
+    widget.focus_set()
+    widget.mark_set("insert", "1.0")
+    root.update_idletasks()
+    view_before = frame._canvas.yview()
+
+    frame._keep_cursor_in_viewport(key, widget)
+
+    assert frame._canvas.yview() == view_before

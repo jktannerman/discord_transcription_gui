@@ -294,6 +294,8 @@ class RowBuildingMixin:
         text_widget.bind("<Next>", self._on_page_down)
         text_widget.bind("<Control-z>", self._undo_text)
         text_widget.bind("<Control-Z>", self._redo_text)
+        text_widget.bind("<Up>", lambda e, k=key: self._on_vertical_arrow(e, k))
+        text_widget.bind("<Down>", lambda e, k=key: self._on_vertical_arrow(e, k))
         text_widget.bind(
             "<<Modified>>",
             lambda e, k=key, t=text_widget: self._on_text_modified(k, t),

@@ -140,8 +140,7 @@ Default newline specifications (a note should be made of these somewhere):
 - - A message which is a die rolling result should by default be followed by three empty lines, but if the next message is also a die rolling command, it should be followed by only one empty line.
 
 
-
-
+- done
 When done, please one-time migrate any existing data to the new format, as necessary. There should only be one set. Note that, in addition to the lack of spacer data, the existing data is likely in an obsolete format that assumes only one image per message.
 
 
@@ -149,7 +148,7 @@ focus not saved? or offscreen on resume? Needs to show cursor.
 
 
 
-When pressing Up or Down while in a textbox, if that would take the cursor offscreen, the page should scroll so as to keep the cursor visible; for example, holding Down should align the bottom of the focused textbox with the bottom of the main part of the window.
+When pressing Up or Down while in a textbox, if that would take the cursor partially or fully offscreen, the page should scroll so as to keep the cursor visible; for example, holding Down should align the bottom of the focused textbox with the bottom of the main part of the window.
 
 
 Page Up/Down should preserve the current focus where possible.

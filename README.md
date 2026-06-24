@@ -17,7 +17,7 @@ logging conventions - this README sticks to what it does and how to run it.
 v1 is implemented, unit-tested, and has now been exercised end-to-end
 against a real Discord export (OCR pass, review screen, finalize).
 
-What's in scope for v1 (by design, agreed with the project owner):
+What's in scope for v1:
 - Tesseract is the only OCR backend, but it's called through a small
   swappable interface (`app/ocr.py`) so an EasyOCR backend could be added
   later without touching calling code.
@@ -167,10 +167,8 @@ What's in scope for v1 (by design, agreed with the project owner):
    and the next, and the gap before the next message - there's also a
    **spacer box**: a one-line-tall, editable box holding nothing but
    literal `\n` characters (typed as backslash-n, not real line breaks),
-   pre-filled with a default count (3 blank lines between most messages,
-   1 between a message's own text and its image, 2 between two images on
-   the same message, and no gap at all between a die-roll command and its
-   result) that you can freely add to, remove from, or otherwise edit -
+   pre-filled with a default count that you can freely add to, remove from, 
+   or otherwise edit -
    anything else typed into one is ignored. This replaces the original
    script's fixed regex-based spacing, which couldn't express anything
    finer than its own hardcoded rules. See ARCHITECTURE.md's "Spacer
@@ -185,7 +183,12 @@ What's in scope for v1 (by design, agreed with the project owner):
    between/after each of those too; paging the window in if needed),
    landing on the Finalize button once there's no further box;
    **Page Up**/**Page Down** scroll the whole window, overriding Tk's
-   default of scrolling within whichever text box has focus;
+   default of scrolling within whichever text box has focus; **Up**/**Down**
+   move the cursor within a box as usual, but also scroll the review window
+   itself if that would otherwise leave the cursor offscreen - holding
+   **Down** at the bottom of a box's own view aligns that box's bottom edge
+   with the bottom of the window (and **Up** the top edge with the top),
+   rather than only the cursor's own line peeking into view;
    **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo within a single text box.
 5. **Finalize** — a button that floats over the bottom of the review
    screen, but only once you've scrolled all the way to the end of the
@@ -206,11 +209,7 @@ What's in scope for v1 (by design, agreed with the project owner):
 
 ## Appearance
 
-The whole app uses a dark theme (`app/gui/theme.py`), palette and dark-title-bar
-trick borrowed from `song_folder_player/gui.py`, with the message-text/input-box
-colors and font instead matched to `multi_file_search/multi_file_search.py`
-(darker background, larger monospace font, brighter text cursor) since that read
-more clearly for dense transcript text than the general UI palette. On Windows,
+The whole app uses a dark theme (`app/gui/theme.py`). On Windows,
 the title bar's dark mode is forced to repaint immediately on launch via a
 `SetWindowPos(SWP_FRAMECHANGED)` call, since `DwmSetWindowAttribute` alone left
 it light until the window was next resized.

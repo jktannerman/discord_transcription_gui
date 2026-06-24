@@ -1,7 +1,10 @@
 """Keyboard navigation and editing shortcuts for the review screen's text
 boxes: Tab/Shift-Tab move between boxes in transcript order, Page Up/Down
-scroll the whole window, Ctrl+Backspace deletes the previous word, and
-Ctrl+Z/Ctrl+Shift+Z undo/redo within a box. Mixed into ReviewFrame rather
+scroll the whole window, Up/Down keep the cursor's box on-screen (scrolling
+the review window, not just the box's own internal view, if the cursor
+would otherwise go offscreen - see _keep_cursor_in_viewport), Ctrl+Backspace
+deletes the previous word, and Ctrl+Z/Ctrl+Shift+Z undo/redo within a box.
+Mixed into ReviewFrame rather
 than taken as a standalone object, since every method here reaches into
 ReviewFrame's row/widget bookkeeping (self._text_widgets, self._slots,
 self._row_heights, self._ensure_materialized, self._canvas,
@@ -119,6 +122,83 @@ class KeyboardNavMixin:
             action=action,
         )
         self._update_finalize_button_visibility()
+
+    def _on_vertical_arrow(self, event: tk.Event, key: Tuple[int, str]) -> None:
+        """Up/Down aren't bound to "break" - Tk's default Text binding still
+        moves the cursor (and keeps it visible within the box's own internal
+        scroll, via the box's own .see("insert")) exactly as it always has.
+        What that default binding doesn't do is keep the box's *container*
+        within the canvas viewport - a box can scroll its cursor internally
+        while sitting partially or fully off the top/bottom edge of the
+        review window. Checked one idle tick later, after the default
+        binding (which runs on the same event dispatch, just after this one)
+        has already moved the cursor, so there's something real to check."""
+        widget = event.widget
+        self.after_idle(lambda: self._keep_cursor_in_viewport(key, widget))
+
+    def _keep_cursor_in_viewport(self, key: Tuple[int, str], widget: tk.Text) -> None:
+        """If `widget`'s cursor ("insert") ended up above/below the canvas's
+        visible viewport after an Up/Down keypress, scroll just enough to
+        bring it back in - aligning the *box's* top/bottom edge (not just the
+        cursor's own line) with the viewport's, so the rest of the box reads
+        as much as fits rather than only the cursor's line peeking into view.
+        Pressing Down can only ever push the cursor past the bottom edge (and
+        Up past the top), so which edge is violated already says which way
+        to scroll - no separate direction argument needed.
+
+        Box position is computed the same way the rest of this module is
+        forced to (see _scroll_into_view's docstring): self._offset_of(index)
+        for the row's own document-space offset, plus a winfo_rooty() delta
+        for the box's offset *within* that row, which - unlike the row's own
+        winfo_y() - isn't affected by _scroll_frame being repositioned on
+        every reconcile, since that repositioning doesn't change a box's
+        position relative to its own row."""
+        index, _ = key
+        if widget is not self._text_widgets.get(key):
+            return  # row was torn down/rebuilt before this idle tick ran
+        container = self._text_containers.get(key)
+        row = self._row_frames.get(index)
+        if container is None or row is None:
+            return
+        try:
+            bbox = widget.bbox("insert")
+            if bbox is None:
+                return
+            container_top = self._offset_of(index) + (container.winfo_rooty() - row.winfo_rooty())
+            cursor_top = container_top + (widget.winfo_rooty() - container.winfo_rooty()) + bbox[1]
+        except tk.TclError:
+            return  # a widget along the way was destroyed mid-check
+        container_bottom = container_top + container.winfo_height()
+        cursor_bottom = cursor_top + bbox[3]
+
+        canvas = self._canvas
+        viewport_height = canvas.winfo_height()
+        total_height = sum(self._row_heights)
+        if viewport_height <= 1 or total_height <= 0:
+            return
+        view_top = canvas.canvasy(0)
+        view_bottom = canvas.canvasy(viewport_height)
+
+        action = "none"
+        if cursor_top < view_top:
+            canvas.yview_moveto(max(container_top, 0) / total_height)
+            action = "scroll_up_to_box_top"
+        elif cursor_bottom > view_bottom:
+            canvas.yview_moveto(max(container_bottom - viewport_height, 0) / total_height)
+            action = "scroll_down_to_box_bottom"
+
+        self._log_event(
+            "arrow_scroll_into_view",
+            key=key,
+            cursor_top=round(cursor_top, 1),
+            cursor_bottom=round(cursor_bottom, 1),
+            view_top=round(view_top, 1),
+            view_bottom=round(view_bottom, 1),
+            action=action,
+        )
+        if action != "none":
+            self._schedule_reconcile()
+            self._update_finalize_button_visibility()
 
     def _focus_text_box(self, index: int, role: str) -> None:
         """Focus items[index]'s `role` text box, scroll its row into view
