@@ -116,52 +116,7 @@ I am not completely confident in my usage of BeautifulSoup to parse the Discord 
 In particular, attention should be paid to the possibility that a given message may have multiple images attached. 
 
 
-
-When done, please migrate any existing data to the new format, as necessary. There should only be one set.
-
-
-focus not saved? or offscreen on resume? Needs to show cursor.
-
-
-
-When pressing Up or Down while in a textbox, if that would take the cursor offscreen, the page should scroll so as to keep the cursor visible; for example, holding Down should align the bottom of the focused textbox with the bottom of the main part of the window.
-
-
-Page Up/Down should preserve the current focus where possible.
-
-
-
-Please make the right column input textboxes a little larger than the corresponding left column elements. They should be about one line taller upwards and one line taller downwards, in the relevant font size.
-
-
-Please add an option to restore the last session, even if it was finalised and written to an output file, in order to be able to redo something overlooked.
-
-
-undo/redo in a given text input window, persisting across switching windows, but not across different sessions.
-
-
-A very minor bug: the window bar does not appear black on startup. This is fixed on resizing the window or alt-tabbing. A bugfix was already attempted once, but it seems to have been insufficient.
-
-
-image size issues? add zoom?
-
-
-
-
-
-
-item mode
-combat mode
-map mode
-book mode
-
-personalised clipboard?
-
-
-ctrl-f?? with regex?
-
-
-
+- done 
 write spec for exact line spacing rules
 
 
@@ -186,9 +141,60 @@ Default newline specifications (a note should be made of these somewhere):
 
 
 
+
+When done, please one-time migrate any existing data to the new format, as necessary. There should only be one set. Note that, in addition to the lack of spacer data, the existing data is likely in an obsolete format that assumes only one image per message.
+
+
+focus not saved? or offscreen on resume? Needs to show cursor.
+
+
+
+When pressing Up or Down while in a textbox, if that would take the cursor offscreen, the page should scroll so as to keep the cursor visible; for example, holding Down should align the bottom of the focused textbox with the bottom of the main part of the window.
+
+
+Page Up/Down should preserve the current focus where possible.
+
+
+
+Please make the right column input textboxes a little larger than the corresponding left column elements. They should be about one line taller upwards and one line taller downwards, in the relevant font size.
+
+
+Please add an option to restore the last session, even if it was finalised and written to an output file, in order to be able to redo something overlooked.
+
+
+undo/redo in a given text input window, persisting across switching windows, but not across different sessions.
+
+
+checkbox that can be checked to restore original state; automatically unchecks when user has made edits; can be rechecked to restore edited mode; only overwritten when user makes edits to unchecked
+
+
+A very minor bug: the window bar does not appear black on startup. This is fixed on resizing the window or alt-tabbing. A bugfix was already attempted once, but it seems to have been insufficient.
+
+
+image size issues? add zoom?
+
+
+
+
+
+
+item mode
+combat mode
+map mode
+book mode
+
+personalised clipboard?
+
+
+ctrl-f?? with regex?
+
+
+
+
+
 flag/highlight common misspellings? (scan upper/lowercase) just actual spellcheck with red underlines??
 
-I's -> It's - 4
+I's -> It's - 5
 I'l -> It'll - 1
 Im -> I'm or similar  - 2
 singular dashes, like ‘ - 4
