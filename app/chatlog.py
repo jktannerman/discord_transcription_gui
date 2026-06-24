@@ -4,7 +4,8 @@ Mirrors the filtering logic in the original script: only messages from an
 approved set of author IDs (entered on the setup screen, not hardcoded -
 see pipeline.parse_approved_user_ids), timestamped after ``start_time``, are
 kept. Each accepted message is reduced to its Discord message ID, plain
-text lines, and the filename of any attached image (if present) — OCR and
+text lines, and the filenames of any attached images (a message can have
+more than one, each in its own ``chatlog__attachment`` block) - OCR and
 the interactive correction step are handled separately in pipeline.py. The
 message ID is Discord's own stable per-message identifier (read from the
 export's ``data-message-id`` attribute), kept so a resumed review session
@@ -27,6 +28,7 @@ import datetime
 import re
 from dataclasses import dataclass
 from typing import Optional
+
 from urllib.parse import unquote
 
 from bs4 import BeautifulSoup
@@ -42,7 +44,7 @@ _TIMEZONE_RE = re.compile(r"UTC([+-])(\d{1,2})(?::?(\d{2}))?")
 class MessageEntry:
     message_id: str
     text_lines: list[str]
-    image_name: Optional[str]
+    image_names: list[str]
 
 
 def _parse_export_timezone(parsed_html: BeautifulSoup) -> datetime.timezone:
@@ -136,18 +138,22 @@ def _parse_message(message) -> MessageEntry:
     text = message.find(attrs={"class": "chatlog__markdown-preserve"})
     text_lines = text.get_text().split("\n") if text else []
 
-    image = message.find(attrs={"class": "chatlog__attachment-media"})
-    image_name = None
-    if image:
+    # find_all, not find: a message can have more than one attachment, each
+    # in its own chatlog__attachment block with its own
+    # chatlog__attachment-media img - using find() here used to silently
+    # keep only the first and drop the rest.
+    images = message.find_all(attrs={"class": "chatlog__attachment-media"})
+    image_names = []
+    for image in images:
         file_name = image.attrs["src"]
         # Decode after splitting off the basename, not before - a literal
         # "%2F" in a path segment shouldn't be misread as a "/" separator.
-        image_name = unquote(file_name.split("/")[-1])
+        image_names.append(unquote(file_name.split("/")[-1]))
 
     logger.debug(
         "parsed message",
         extra=logging_config.extra(
-            message_id=message_id, line_count=len(text_lines), image_name=image_name
+            message_id=message_id, line_count=len(text_lines), image_count=len(image_names)
         ),
     )
-    return MessageEntry(message_id=message_id, text_lines=text_lines, image_name=image_name)
+    return MessageEntry(message_id=message_id, text_lines=text_lines, image_names=image_names)

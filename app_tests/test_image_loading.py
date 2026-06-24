@@ -76,10 +76,10 @@ def test_fitted_image_size_unreadable_path_falls_back_to_bounding_box(tmp_path):
 
 def _loader_with_dispatch_spies():
     loader = ImageLoader()
-    loader.register(0, "fake_path_0", SimpleNamespace())
-    loader.register(1, "fake_path_1", SimpleNamespace())
-    loader.register(2, "fake_path_2", SimpleNamespace())
-    loader.register(3, "fake_path_3", SimpleNamespace())
+    loader.register(0, 0, "fake_path_0", SimpleNamespace())
+    loader.register(1, 0, "fake_path_1", SimpleNamespace())
+    loader.register(2, 0, "fake_path_2", SimpleNamespace())
+    loader.register(3, 0, "fake_path_3", SimpleNamespace())
     return loader
 
 
@@ -106,7 +106,7 @@ def test_update_visible_loads_only_rows_overlapping_the_viewport():
 
 def test_update_visible_does_not_reload_an_already_loaded_row():
     loader = _loader_with_dispatch_spies()
-    loader._slots[1].loaded = True
+    loader._slots[(1, 0)].loaded = True
     load, unload = _update(loader, visible_top=150, visible_bottom=250)
     loaded_indices = {call.args[0].image_path for call in load.call_args_list}
     assert loaded_indices == {"fake_path_2"}  # row 1 already loaded, skipped
@@ -134,7 +134,7 @@ def test_update_visible_does_not_unload_a_row_still_in_view():
 
 def test_update_visible_calls_log_event_for_each_load_and_unload():
     loader = _loader_with_dispatch_spies()
-    loader._slots[3].loaded = True  # will be unloaded
+    loader._slots[(3, 0)].loaded = True  # will be unloaded
     logged = []
     row_heights = [100, 100, 100, 100]
     with patch.object(loader, "_load_image"), patch.object(loader, "_unload_image"):
@@ -172,10 +172,10 @@ def tk_root():
 def test_load_image_success_sets_photo_on_label(tk_root, small_image):
     loader = ImageLoader()
     label = tk.Label(tk_root)
-    loader.register(0, small_image, label)
+    loader.register(0, 0, small_image, label)
     loader.update_visible(lambda idx: 0, [100], visible_top=0, visible_bottom=100)
-    assert loader._slots[0].loaded is True
-    assert loader._slots[0].photo is not None
+    assert loader._slots[(0, 0)].loaded is True
+    assert loader._slots[(0, 0)].photo is not None
     assert label.cget("image") != ""
 
 
@@ -184,9 +184,9 @@ def test_load_image_failure_shows_fallback_text_and_marks_loaded_to_avoid_retry_
     loader = ImageLoader()
     label = tk.Label(tk_root)
     bogus = tmp_path / "does_not_exist.png"
-    loader.register(0, bogus, label)
+    loader.register(0, 0, bogus, label)
     loader.update_visible(lambda idx: 0, [100], visible_top=0, visible_bottom=100)
-    assert loader._slots[0].loaded is True  # marked loaded even on failure
+    assert loader._slots[(0, 0)].loaded is True  # marked loaded even on failure
     assert "could not preview" in label.cget("text")
 
 
@@ -194,11 +194,11 @@ def test_load_image_failure_shows_fallback_text_and_marks_loaded_to_avoid_retry_
 def test_unload_image_clears_photo_and_restores_placeholder_text(tk_root, small_image):
     loader = ImageLoader()
     label = tk.Label(tk_root)
-    loader.register(0, small_image, label)
+    loader.register(0, 0, small_image, label)
     loader.update_visible(lambda idx: 0, [100], visible_top=0, visible_bottom=100)
-    assert loader._slots[0].loaded is True
+    assert loader._slots[(0, 0)].loaded is True
 
     loader.update_visible(lambda idx: 0, [100], visible_top=1000, visible_bottom=2000)
-    assert loader._slots[0].loaded is False
-    assert loader._slots[0].photo is None
+    assert loader._slots[(0, 0)].loaded is False
+    assert loader._slots[(0, 0)].photo is None
     assert label.cget("text") == "(scroll to load image)"

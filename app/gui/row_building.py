@@ -24,7 +24,7 @@ from ..pipeline import ReviewItem
 from . import theme
 from .image_loading import THUMBNAIL_SIZE, fitted_image_size
 from .layout_constants import (
-    GAP_BELOW_MESSAGE_PX,
+    GAP_BETWEEN_STACKED_PX,
     ROW_FRAME_BORDERWIDTH_PX,
     ROW_FRAME_PADDING_PX,
     TEXT_BOX_MARGIN_PX,
@@ -54,11 +54,11 @@ class RowBuildingMixin:
         bottom (used when paging in rows above the current window).
 
         Every row has the same two-column shape, both columns stacked
-        text-above-image (mirroring Discord's own layout) when a message
-        has both: an immutable left column (the message's own original
-        text, its image, or both) paired with the matching editable box(es)
-        on the right - a copy of the message's own text whenever it has
-        any, and/or an OCR text box whenever it has an image."""
+        text-above-images (mirroring Discord's own layout): an immutable
+        left column (the message's own original text, its image(s), or
+        both) paired with the matching editable box(es) on the right - a
+        copy of the message's own text whenever it has any, and one OCR
+        text box per attached image, in attachment order."""
         item = self._items[index]
         pack_kwargs = {"fill": "x", "pady": 4, "padx": 4}
         if before is not None:
@@ -77,27 +77,28 @@ class RowBuildingMixin:
         right.pack(side="left", fill="x", expand=True, padx=6)
 
         has_message = item.initial_message_text is not None
-        has_image = item.image_path is not None
-        # When a row has both boxes, leave a gap below the top one so the
-        # two stacked boxes (and their immutable counterparts) don't touch.
-        gap_below_message = GAP_BELOW_MESSAGE_PX if (has_message and has_image) else 0
-
-        message_h = 0
-        if has_message:
-            message_h = self._build_immutable_message_label(left, item, pady_bottom=gap_below_message)
-
-        image_h = 0
-        if has_image:
-            image_h = self._build_image_placeholder(left, item, index)
+        image_count = len(item.image_paths)
+        # Number of stacked elements (caption, then each image) in this
+        # row - every element but the last gets a gap below it so stacked
+        # boxes (and their immutable counterparts) don't touch.
+        stacked_count = (1 if has_message else 0) + image_count
+        elements_built = 0
 
         if has_message:
+            elements_built += 1
+            gap = GAP_BETWEEN_STACKED_PX if elements_built < stacked_count else 0
+            message_h = self._build_immutable_message_label(left, item, pady_bottom=gap)
             self._build_editable_text_box(
-                right, index, "message", item.initial_message_text, message_h,
-                pady_bottom=gap_below_message,
+                right, index, "message", item.initial_message_text, message_h, pady_bottom=gap,
             )
-        if has_image:
+
+        for image_index, image_path in enumerate(item.image_paths):
+            elements_built += 1
+            gap = GAP_BETWEEN_STACKED_PX if elements_built < stacked_count else 0
+            image_h = self._build_image_placeholder(left, image_path, index, image_index, pady_bottom=gap)
             self._build_editable_text_box(
-                right, index, "ocr", item.initial_ocr_text or "", image_h,
+                right, index, f"ocr{image_index}", item.initial_ocr_texts[image_index],
+                image_h, pady_bottom=gap,
             )
 
         return row
@@ -142,11 +143,15 @@ class RowBuildingMixin:
         container.pack_propagate(False)
         return floor_px
 
-    def _build_image_placeholder(self, parent: tk.Widget, item: ReviewItem, index: int) -> int:
+    def _build_image_placeholder(
+        self, parent: tk.Widget, image_path, index: int, image_index: int, pady_bottom: int = 0,
+    ) -> int:
         """Build the fixed-size image placeholder (actual pixels loaded
-        lazily on scroll - see image_loading.py) and register it with
-        self._images. Returns the image's on-screen height in px, used as
-        its paired editable OCR box's height floor.
+        lazily on scroll - see image_loading.py) for one of this row's
+        images and register it with self._images, keyed by (index,
+        image_index) since a row can now have more than one. Returns the
+        image's on-screen height in px, used as its paired editable OCR
+        box's height floor.
 
         Width is the global THUMBNAIL_SIZE[0] constant, same for every row,
         so images/text boxes still line up into two neat columns - only
@@ -157,13 +162,13 @@ class RowBuildingMixin:
         than left to the real loaded photo's size) so loading/unloading the
         image on scroll doesn't change the row's layout (which would jump
         the scroll position)."""
-        _, image_h = fitted_image_size(item.image_path)
+        _, image_h = fitted_image_size(image_path)
         container = ttk.Frame(parent, width=THUMBNAIL_SIZE[0], height=image_h)
         container.pack_propagate(False)
-        container.pack()
+        container.pack(pady=(0, pady_bottom))
         image_label = ttk.Label(container, text="(scroll to load image)", anchor="center")
         image_label.pack(fill="both", expand=True)
-        self._images.register(index, item.image_path, image_label)
+        self._images.register(index, image_index, image_path, image_label)
         return image_h
 
     def _build_editable_text_box(
@@ -176,13 +181,14 @@ class RowBuildingMixin:
         pady_bottom: int = 0,
     ) -> None:
         """Build one editable text box - role is "message" (a copy of the
-        message's own text) or "ocr" (an image's OCR text) - and register
-        it in the window's bookkeeping dicts, keyed by (index, role) since
-        a row can now have one of these, the other, or both stacked
-        text-above-image to match the left column (_build_row). paired_height
-        is the on-screen height of this box's immutable counterpart in the
-        left column - the label's, for a "message" box, or the image's, for
-        an "ocr" box - see _fixed_text_box_height."""
+        message's own text) or "ocr{N}" (the Nth attached image's OCR
+        text) - and register it in the window's bookkeeping dicts, keyed
+        by (index, role) since a row can now have a message box, any
+        number of OCR boxes, or both, stacked text-above-images to match
+        the left column (_build_row). paired_height is the on-screen
+        height of this box's immutable counterpart in the left column -
+        the label's, for a "message" box, or that image's, for an "ocrN"
+        box - see _fixed_text_box_height."""
         key = (index, role)
         # Fixed-height container (same pack_propagate(False) trick as the
         # left column's placeholders) so the text box's height is exactly

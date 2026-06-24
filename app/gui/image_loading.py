@@ -53,7 +53,7 @@ def fitted_image_size(image_path, bounding_box: Tuple[int, int] = THUMBNAIL_SIZE
 
 
 class ImageSlot:
-    """Tracks one image row's load state. Row position/height for the
+    """Tracks one image's load state. Row position/height for the
     visibility check comes from ReviewFrame's row-height table (keyed by
     item index), not from this slot, since widget geometry is relative to
     the repositioned scroll frame block rather than the canvas's coordinate
@@ -69,19 +69,24 @@ class ImageSlot:
 
 
 class ImageLoader:
-    """Owns the set of materialized image rows and their load state.
-    ReviewFrame registers a slot when a row is built and unregisters it
-    when the row is torn down; update_visible() loads/unloads based on
-    each slot's row offset against the (buffered) viewport."""
+    """Owns the set of materialized images and their load state, keyed by
+    (item index, image index within that item) since a row can now have
+    more than one image. ReviewFrame registers a slot per image when a row
+    is built and unregisters every slot for a row (unregister_row) when
+    it's torn down; update_visible() loads/unloads each slot based on its
+    *row's* offset against the (buffered) viewport - the whole row is
+    loaded/unloaded as a unit, not image-by-image, the same as before
+    multiple images per row were possible."""
 
     def __init__(self):
-        self._slots: Dict[int, ImageSlot] = {}
+        self._slots: Dict[Tuple[int, int], ImageSlot] = {}
 
-    def register(self, index: int, image_path, label: tk.Widget) -> None:
-        self._slots[index] = ImageSlot(image_path=image_path, label=label)
+    def register(self, index: int, image_index: int, image_path, label: tk.Widget) -> None:
+        self._slots[(index, image_index)] = ImageSlot(image_path=image_path, label=label)
 
-    def unregister(self, index: int) -> None:
-        self._slots.pop(index, None)
+    def unregister_row(self, index: int) -> None:
+        for key in [k for k in self._slots if k[0] == index]:
+            del self._slots[key]
 
     def update_visible(
         self,
@@ -101,18 +106,24 @@ class ImageLoader:
         each one with the same seq/scroll-state context as every other
         scroll-trace event, so an image load can be correlated against the
         reconcile that triggered it without falling back to timestamps."""
-        for idx, slot in self._slots.items():
+        for (idx, image_idx), slot in self._slots.items():
             row_top = offset_of(idx)
             row_bottom = row_top + row_heights[idx]
             should_be_loaded = row_bottom >= visible_top and row_top <= visible_bottom
 
             if should_be_loaded and not slot.loaded:
                 if log_event:
-                    log_event("loading_image", index=idx, row_top=row_top, row_bottom=row_bottom)
+                    log_event(
+                        "loading_image", index=idx, image_index=image_idx,
+                        row_top=row_top, row_bottom=row_bottom,
+                    )
                 self._load_image(slot)
             elif not should_be_loaded and slot.loaded:
                 if log_event:
-                    log_event("unloading_image", index=idx, row_top=row_top, row_bottom=row_bottom)
+                    log_event(
+                        "unloading_image", index=idx, image_index=image_idx,
+                        row_top=row_top, row_bottom=row_bottom,
+                    )
                 self._unload_image(slot)
 
     def _load_image(self, slot: ImageSlot) -> None:

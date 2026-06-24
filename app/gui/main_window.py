@@ -40,14 +40,23 @@ logger = logging_config.get_logger(__name__)
 
 def _match_saved_edits(
     review_items: list["pipeline.ReviewItem"], saved_texts: dict
-) -> list[tuple[Optional[str], Optional[str]]]:
+) -> list[tuple[Optional[str], list[Optional[str]]]]:
     """Translate a session's message_id-keyed saved edits onto the
     freshly-parsed review_items' current positions. Saved entries whose
     message_id no longer appears (the message was filtered out, or removed
     from a later re-export) are simply dropped - silently, since this is
-    the expected outcome of normal chatlog growth, not an error."""
+    the expected outcome of normal chatlog growth, not an error.
+
+    A saved edit's "ocr" list is aligned to the matched item's *current*
+    image_paths by position, padding with None (meaning "not edited") if
+    the saved list is shorter, and ignoring any extra entries if it's
+    longer - covers a re-export changing how many images that exact
+    message has, which would otherwise misalign an OCR edit onto the wrong
+    image."""
     by_id = {item.message_id: idx for idx, item in enumerate(review_items)}
-    built: list[tuple[Optional[str], Optional[str]]] = [(None, None) for _ in review_items]
+    built: list[tuple[Optional[str], list[Optional[str]]]] = [
+        (None, [None] * len(item.image_paths)) for item in review_items
+    ]
     matched = dropped = 0
     for message_id, edit in saved_texts.items():
         idx = by_id.get(message_id)
@@ -55,7 +64,12 @@ def _match_saved_edits(
             dropped += 1
             continue
         matched += 1
-        built[idx] = (edit.get("message"), edit.get("ocr"))
+        item = review_items[idx]
+        saved_ocr = edit.get("ocr") or []
+        aligned_ocr = [
+            saved_ocr[i] if i < len(saved_ocr) else None for i in range(len(item.image_paths))
+        ]
+        built[idx] = (edit.get("message"), aligned_ocr)
     logger.info(
         "resumed session edits matched by message_id",
         extra=logging_config.extra(
@@ -323,11 +337,11 @@ class App:
                 focus_message_id = [self._review_items[idx].message_id, role]
 
             edited_texts_by_id = {}
-            for idx, (message_text, ocr_text) in enumerate(frame.collect_edited_texts()):
-                if message_text is not None or ocr_text is not None:
+            for idx, (message_text, ocr_texts) in enumerate(frame.collect_edited_texts()):
+                if message_text is not None or any(t is not None for t in ocr_texts):
                     edited_texts_by_id[self._review_items[idx].message_id] = {
                         "message": message_text,
-                        "ocr": ocr_text,
+                        "ocr": ocr_texts,
                     }
 
             session = {
@@ -404,7 +418,7 @@ class App:
         self._review_frame = frame
         self._start_autosave()
 
-    def _on_finalize_clicked(self, edited_texts: list[tuple[str | None, str | None]]) -> None:
+    def _on_finalize_clicked(self, edited_texts: list[tuple[str | None, list[str | None]]]) -> None:
         logger.info("finalize clicked")
         run = self._run
         try:

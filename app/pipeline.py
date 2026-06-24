@@ -181,20 +181,18 @@ def write_message_lines(output_path: Path, lines_to_write: list[str]) -> None:
 
 @dataclass
 class ReviewItem:
-    """One row of the review screen: a message, paired with up to two
-    independently-editable text boxes - one initialized from the message's
-    own original text (``initial_message_text``), one from its image's OCR
-    paragraphs joined with blank lines (``initial_ocr_text``). Either can
-    be None, but never both: ``initial_message_text`` is None only for an
-    image message with no caption (nothing to edit there), and
-    ``initial_ocr_text`` is None only for a text-only message (no image to
-    OCR) - see build_review_items. A message with both a caption and an
-    image gets both boxes."""
+    """One row of the review screen: a message, paired with an editable
+    text box for its own message text (``initial_message_text``, whenever
+    it has any) and one independently-editable OCR text box per attached
+    image, in attachment order - ``image_paths``/``initial_ocr_texts`` are
+    parallel lists (possibly empty, for a text-only message). A message
+    with a caption and N images gets one message box plus N OCR boxes - see
+    build_review_items."""
 
     entry: MessageEntry
-    image_path: Optional[Path]
+    image_paths: list[Path]
     initial_message_text: Optional[str]
-    initial_ocr_text: Optional[str]
+    initial_ocr_texts: list[str]
 
     @property
     def message_id(self) -> str:
@@ -206,49 +204,53 @@ def build_review_items(
     file_info: dict[str, list[str]],
     image_folder: Path,
 ) -> list[ReviewItem]:
-    """Pair each approved message with its image (if any) and its editable
+    """Pair each approved message with its images (if any) and its editable
     text box(es): a copy of the message's own original text (unstripped, so
-    deliberate spacing carries over) whenever it has any, and/or that
-    image's joined OCR text whenever it has an image - independently, so a
-    message with both gets both."""
+    deliberate spacing carries over) whenever it has any, and one box per
+    attached image holding that image's joined OCR text - independently, so
+    a message with both a caption and images gets all of them."""
     items: list[ReviewItem] = []
     for entry in entries:
-        if entry.image_name is None:
-            items.append(
-                ReviewItem(
-                    entry=entry,
-                    image_path=None,
-                    initial_message_text="\n".join(entry.text_lines),
-                    initial_ocr_text=None,
-                )
-            )
-            continue
+        if entry.image_names:
+            # No message box at all for an image-only message with no
+            # caption - nothing there to edit.
+            initial_message_text = "\n".join(entry.text_lines) if entry.text_lines else None
+        else:
+            # A text-only message always gets a message box, even if its
+            # text is empty, so it still gets a row at all.
+            initial_message_text = "\n".join(entry.text_lines)
 
-        paragraphs = file_info.get(entry.image_name, [])
-        # Tesseract output routinely ends with a blank line, which
-        # split_into_paragraphs turns into a trailing empty-after-strip
-        # paragraph - join naively and that becomes a literal "\n\n" tail on
-        # initial_ocr_text, which then carries through to the final output
-        # unless the user happens to manually trim it. Dropping empty
-        # paragraphs (wherever they fall, not just at the end) avoids that
-        # without changing how real paragraph breaks are rendered.
-        initial_ocr_text = "\n\n".join(
-            stripped for para in paragraphs if (stripped := para.strip())
-        )
-        initial_message_text = "\n".join(entry.text_lines) if entry.text_lines else None
+        initial_ocr_texts = []
+        for image_name in entry.image_names:
+            paragraphs = file_info.get(image_name, [])
+            # Tesseract output routinely ends with a blank line, which
+            # split_into_paragraphs turns into a trailing empty-after-strip
+            # paragraph - join naively and that becomes a literal "\n\n"
+            # tail on the OCR text, which then carries through to the final
+            # output unless the user happens to manually trim it. Dropping
+            # empty paragraphs (wherever they fall, not just at the end)
+            # avoids that without changing how real paragraph breaks are
+            # rendered.
+            initial_ocr_texts.append(
+                "\n\n".join(stripped for para in paragraphs if (stripped := para.strip()))
+            )
+
         items.append(
             ReviewItem(
                 entry=entry,
-                image_path=image_folder / entry.image_name,
+                image_paths=[image_folder / name for name in entry.image_names],
                 initial_message_text=initial_message_text,
-                initial_ocr_text=initial_ocr_text,
+                initial_ocr_texts=initial_ocr_texts,
             )
         )
 
-    image_items = sum(1 for item in items if item.image_path is not None)
+    image_items = sum(1 for item in items if item.image_paths)
+    total_images = sum(len(item.image_paths) for item in items)
     logger.info(
         "built review items",
-        extra=logging_config.extra(total_items=len(items), image_items=image_items),
+        extra=logging_config.extra(
+            total_items=len(items), image_items=image_items, total_images=total_images
+        ),
     )
     return items
 
@@ -256,13 +258,15 @@ def build_review_items(
 def lines_for_item(
     item: ReviewItem,
     edited_message_text: Optional[str] = None,
-    edited_ocr_text: Optional[str] = None,
+    edited_ocr_texts: Optional[list[Optional[str]]] = None,
 ) -> list[str]:
     """Build the final lines to write for one review item, using each
     edited_* value in place of the corresponding original text if the user
     changed it. The message-text block (if this item has one) is written
-    first, then the OCR block (if it has one) - text above image, mirroring
-    both Discord's own layout and the review screen's box order."""
+    first, then one OCR block per image in attachment order - text above
+    images, mirroring both Discord's own layout and the review screen's box
+    order. edited_ocr_texts, if given, is one entry per item.image_paths
+    (None meaning "not edited, use the original")."""
     lines: list[str] = []
 
     if item.initial_message_text is not None:
@@ -270,8 +274,9 @@ def lines_for_item(
         if text:
             lines.extend(line + "\n" for line in text.split("\n"))
 
-    if item.image_path is not None:
-        ocr_text = edited_ocr_text if edited_ocr_text is not None else item.initial_ocr_text
+    for i, initial_ocr_text in enumerate(item.initial_ocr_texts):
+        edited = edited_ocr_texts[i] if edited_ocr_texts is not None and i < len(edited_ocr_texts) else None
+        ocr_text = edited if edited is not None else initial_ocr_text
         if ocr_text:
             lines.append(ocr_text + "\n")
 
@@ -281,15 +286,17 @@ def lines_for_item(
 def write_all_items(
     output_path: Path,
     items: list[ReviewItem],
-    edited_texts: list[tuple[Optional[str], Optional[str]]],
+    edited_texts: list[tuple[Optional[str], list[Optional[str]]]],
 ) -> None:
     """Write every review item's final lines, in order, in one pass.
-    edited_texts is one (edited_message_text, edited_ocr_text) pair per
+    edited_texts is one (edited_message_text, edited_ocr_texts) pair per
     item, matching ReviewFrame.collect_edited_texts."""
     logger.info("finalizing: writing all review items", extra=logging_config.extra(item_count=len(items)))
-    edited_count = sum(1 for m, o in edited_texts if m is not None or o is not None)
-    for item, (edited_message_text, edited_ocr_text) in zip(items, edited_texts):
-        write_message_lines(output_path, lines_for_item(item, edited_message_text, edited_ocr_text))
+    edited_count = sum(
+        1 for m, ocr_list in edited_texts if m is not None or any(o is not None for o in ocr_list)
+    )
+    for item, (edited_message_text, edited_ocr_texts) in zip(items, edited_texts):
+        write_message_lines(output_path, lines_for_item(item, edited_message_text, edited_ocr_texts))
     logger.info(
         "finished writing all review items",
         extra=logging_config.extra(item_count=len(items), edited_count=edited_count),

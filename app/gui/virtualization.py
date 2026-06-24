@@ -11,7 +11,7 @@ from typing import List, Tuple
 from ..pipeline import ReviewItem
 from .image_loading import THUMBNAIL_SIZE, fitted_image_size
 from .layout_constants import (
-    GAP_BELOW_MESSAGE_PX,
+    GAP_BETWEEN_STACKED_PX,
     ROW_FRAME_OVERHEAD_PX,
     TEXT_BOX_MARGIN_PX,
 )
@@ -66,30 +66,36 @@ def estimate_row_height(item: ReviewItem) -> int:
     row's real winfo_height().
 
     Estimates both of the row's columns - the immutable left column (label
-    and/or image, stacked) and the editable right column (message and/or
-    ocr box, stacked the same way) - independently and takes the taller of
-    the two, mirroring _build_row's actual side-by-side layout, then adds
-    ROW_FRAME_OVERHEAD_PX for the row's own padding/border. A message with
-    both a caption and an image gets GAP_BELOW_MESSAGE_PX added to
-    whichever column total includes the caption element, same as the real
-    layout. Since the right column is always its left counterpart plus
-    TEXT_BOX_MARGIN_PX per stacked element, the right column is always the
-    taller of the two - the max() is kept anyway so this stays correct even
-    if that margin is ever changed to zero or removed."""
+    and/or images, stacked) and the editable right column (message box
+    and/or one OCR box per image, stacked the same way) - independently and
+    takes the taller of the two, mirroring _build_row's actual side-by-side
+    layout, then adds ROW_FRAME_OVERHEAD_PX for the row's own padding/
+    border. Each stacked element but the last (caption, then each image)
+    gets GAP_BETWEEN_STACKED_PX added to whichever column total includes
+    it, same as the real layout. Since the right column is always its left
+    counterpart plus TEXT_BOX_MARGIN_PX per stacked element, the right
+    column is always the taller of the two - the max() is kept anyway so
+    this stays correct even if that margin is ever changed to zero or
+    removed."""
     has_message = item.initial_message_text is not None
-    has_image = item.image_path is not None
-    gap = GAP_BELOW_MESSAGE_PX if (has_message and has_image) else 0
+    image_count = len(item.image_paths)
+    stacked_count = (1 if has_message else 0) + image_count
 
     left = 0
     right = 0
+    elements_seen = 0
     if has_message:
+        elements_seen += 1
+        gap = GAP_BETWEEN_STACKED_PX if elements_seen < stacked_count else 0
         label_h = _estimate_message_text_height(item)
         left += label_h + gap
         right += label_h + TEXT_BOX_MARGIN_PX + gap
-    if has_image:
-        _, image_h = fitted_image_size(item.image_path)
-        left += image_h
-        right += image_h + TEXT_BOX_MARGIN_PX
+    for image_path in item.image_paths:
+        elements_seen += 1
+        gap = GAP_BETWEEN_STACKED_PX if elements_seen < stacked_count else 0
+        _, image_h = fitted_image_size(image_path)
+        left += image_h + gap
+        right += image_h + TEXT_BOX_MARGIN_PX + gap
 
     return max(left, right) + ROW_FRAME_OVERHEAD_PX
 

@@ -14,10 +14,12 @@ scroll jump once ReviewFrame._remeasure_built_rows corrected it away.
 # review_view.ReviewFrame._fixed_text_box_height.
 TEXT_BOX_MARGIN_PX = 12
 
-# Gap (px) left below a stacked caption (label/box) when a row also has an
-# image (and its paired editable box) beneath it - see
-# review_view.ReviewFrame._build_row.
-GAP_BELOW_MESSAGE_PX = 6
+# Gap (px) left below one stacked element (the caption label/box, or an
+# image/OCR-box pair) when another follows it in the same column - a
+# message with a caption and N images stacks caption, image_0, ..., image_(N-1)
+# in the left column (and their editable counterparts in the right column),
+# each but the last followed by this gap - see review_view.ReviewFrame._build_row.
+GAP_BETWEEN_STACKED_PX = 6
 
 # A row's own ttk.Frame chrome (relief="groove", borderwidth=..., padding=...)
 # - see review_view.ReviewFrame._build_row.

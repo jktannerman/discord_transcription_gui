@@ -7,44 +7,57 @@ from gui_transcription.app.pipeline import ReviewItem
 
 def test_estimate_row_height_image_item_is_positive():
     item = ReviewItem(
-        entry=MessageEntry(message_id="m", text_lines=[], image_name="card.png"),
-        image_path=Path("card.png"),
+        entry=MessageEntry(message_id="m", text_lines=[], image_names=["card.png"]),
+        image_paths=[Path("card.png")],
         initial_message_text=None,
-        initial_ocr_text="",
+        initial_ocr_texts=[""],
     )
     assert estimate_row_height(item) > 0
 
 
 def test_estimate_row_height_text_only_scales_with_line_count():
     short = ReviewItem(
-        entry=MessageEntry(message_id="m", text_lines=["hi"], image_name=None),
-        image_path=None, initial_message_text="hi", initial_ocr_text=None,
+        entry=MessageEntry(message_id="m", text_lines=["hi"], image_names=[]),
+        image_paths=[], initial_message_text="hi", initial_ocr_texts=[],
     )
     long = ReviewItem(
-        entry=MessageEntry(message_id="m", text_lines=["hi " * 200], image_name=None),
-        image_path=None, initial_message_text="hi " * 200, initial_ocr_text=None,
+        entry=MessageEntry(message_id="m", text_lines=["hi " * 200], image_names=[]),
+        image_paths=[], initial_message_text="hi " * 200, initial_ocr_texts=[],
     )
     assert estimate_row_height(long) > estimate_row_height(short)
 
 
 def test_estimate_row_height_empty_text_is_still_positive():
     item = ReviewItem(
-        entry=MessageEntry(message_id="m", text_lines=[], image_name=None),
-        image_path=None, initial_message_text="", initial_ocr_text=None,
+        entry=MessageEntry(message_id="m", text_lines=[], image_names=[]),
+        image_paths=[], initial_message_text="", initial_ocr_texts=[],
     )
     assert estimate_row_height(item) > 0
 
 
 def test_estimate_row_height_image_with_caption_taller_than_image_alone():
     image_only = ReviewItem(
-        entry=MessageEntry(message_id="m", text_lines=[], image_name="card.png"),
-        image_path=Path("card.png"), initial_message_text=None, initial_ocr_text="",
+        entry=MessageEntry(message_id="m", text_lines=[], image_names=["card.png"]),
+        image_paths=[Path("card.png")], initial_message_text=None, initial_ocr_texts=[""],
     )
     image_with_caption = ReviewItem(
-        entry=MessageEntry(message_id="m", text_lines=["a caption"], image_name="card.png"),
-        image_path=Path("card.png"), initial_message_text="a caption", initial_ocr_text="",
+        entry=MessageEntry(message_id="m", text_lines=["a caption"], image_names=["card.png"]),
+        image_paths=[Path("card.png")], initial_message_text="a caption", initial_ocr_texts=[""],
     )
     assert estimate_row_height(image_with_caption) > estimate_row_height(image_only)
+
+
+def test_estimate_row_height_two_images_taller_than_one():
+    one_image = ReviewItem(
+        entry=MessageEntry(message_id="m", text_lines=[], image_names=["card.png"]),
+        image_paths=[Path("card.png")], initial_message_text=None, initial_ocr_texts=[""],
+    )
+    two_images = ReviewItem(
+        entry=MessageEntry(message_id="m", text_lines=[], image_names=["card.png", "card2.png"]),
+        image_paths=[Path("card.png"), Path("card2.png")],
+        initial_message_text=None, initial_ocr_texts=["", ""],
+    )
+    assert estimate_row_height(two_images) > estimate_row_height(one_image)
 
 
 def test_compute_visible_range_empty_list_returns_empty_range():

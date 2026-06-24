@@ -1,9 +1,12 @@
 import datetime
+from pathlib import Path
 from typing import Optional
 
 import pytest
 
 from gui_transcription.app.chatlog import parse_message_groups
+
+_EXAMPLE_INPUTS = Path(__file__).resolve().parent.parent / "example_inputs"
 
 APPROVED_USER_ID = "130636614807322624"
 
@@ -16,16 +19,22 @@ def _make_html(
     user_id: str,
     text: str | None = None,
     image_src: str | None = None,
+    image_srcs: Optional[list[str]] = None,
     timezone: Optional[str] = "UTC+0",
     message_id: Optional[str] = DEFAULT_MESSAGE_ID,
 ) -> str:
     text_html = (
         f'<div class="chatlog__markdown-preserve">{text}</div>' if text is not None else ""
     )
-    image_html = (
-        f'<img class="chatlog__attachment-media" src="{image_src}">'
-        if image_src is not None
-        else ""
+    # image_src is a convenience for the single-image case; image_srcs (a
+    # list) is for messages with more than one attachment, each in its own
+    # chatlog__attachment block, mirroring the real export's markup.
+    srcs = image_srcs if image_srcs is not None else ([image_src] if image_src is not None else [])
+    image_html = "".join(
+        f'<div class="chatlog__attachment">'
+        f'<img class="chatlog__attachment-media" src="{src}">'
+        f"</div>"
+        for src in srcs
     )
     # Real exports always include this postamble (see
     # example_inputs/pq_wm_0001_p2.html) - timezone=None simulates a
@@ -87,7 +96,7 @@ def test_text_only_message_included():
     entries = parse_message_groups(html, _start_time("2024-01-01"), {APPROVED_USER_ID})
     assert len(entries) == 1
     assert entries[0].text_lines == ["line one", "line two"]
-    assert entries[0].image_name is None
+    assert entries[0].image_names == []
 
 
 def test_image_attached_message_extracts_filename():
@@ -98,7 +107,7 @@ def test_image_attached_message_extracts_filename():
     )
     entries = parse_message_groups(html, _start_time("2024-01-01"), {APPROVED_USER_ID})
     assert len(entries) == 1
-    assert entries[0].image_name == "my_image.png"
+    assert entries[0].image_names == ["my_image.png"]
 
 
 def test_image_filename_url_decoded():
@@ -108,7 +117,22 @@ def test_image_filename_url_decoded():
         image_src="https://cdn.example.com/path/my%20image.png",
     )
     entries = parse_message_groups(html, _start_time("2024-01-01"), {APPROVED_USER_ID})
-    assert entries[0].image_name == "my image.png"
+    assert entries[0].image_names == ["my image.png"]
+
+
+def test_message_with_multiple_images_extracts_all_filenames_in_order():
+    html = _make_html(
+        "01/01/2025 00:00",
+        APPROVED_USER_ID,
+        text="red and black",
+        image_srcs=[
+            "https://cdn.example.com/path/red.png",
+            "https://cdn.example.com/path/black.png",
+        ],
+    )
+    entries = parse_message_groups(html, _start_time("2024-01-01"), {APPROVED_USER_ID})
+    assert len(entries) == 1
+    assert entries[0].image_names == ["red.png", "black.png"]
 
 
 def test_positive_export_timezone_offset_applied():
@@ -166,3 +190,25 @@ def test_parse_message_missing_container_raises():
     html = _make_html("01/01/2025 00:00", APPROVED_USER_ID, text="hello", message_id=None)
     with pytest.raises(ValueError):
         parse_message_groups(html, _start_time("2024-01-01"), {APPROVED_USER_ID})
+
+
+def test_real_export_with_multiple_attachments_per_message():
+    """short_test_input.html is a real DiscordChatExporter export with five
+    messages from one author in a single message group: an image-only
+    message, a text-only continuation, an image with a caption, a message
+    with *two* image attachments and a caption, and a text-only message -
+    exercising find_all (not just find) actually picking up every
+    attachment rather than only the first."""
+    html = (_EXAMPLE_INPUTS / "short_test_input.html").read_text(encoding="utf8")
+    entries = parse_message_groups(html, _start_time("2024-01-01"), {"209767680100663296"})
+
+    assert len(entries) == 5
+    assert [e.image_names for e in entries] == [
+        ["red-132B5.png"],
+        ["black-525D9.png"],
+        ["red-8E623.png"],
+        ["red-C0E63.png", "black-1E1D0.png"],
+        [],
+    ]
+    assert entries[3].text_lines == ["red and black"]
+    assert entries[4].text_lines == ["text-only message"]

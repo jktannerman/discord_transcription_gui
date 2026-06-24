@@ -2,16 +2,16 @@
 
 An infinite-scroll, paginated listing of every approved message in order.
 Every row has the same two-column shape: an immutable left column (the
-message's own original text, its image, or both stacked text-above-image
-- mirroring Discord's own layout - depending on what the message has)
-paired with the matching editable text box(es) on the right, stacked in
-the same text-above-image order: a copy of the message's own text
-whenever it has any, and/or a box pre-filled with its image's OCR text
-whenever it has an image - independently editable, so a message with both
-gets both boxes. Copy/paste and arbitrary edits are allowed in every text
-box; nothing is parsed or restricted. Nothing is written to disk until the
-Finalize button at the bottom is clicked, which writes every message's
-final lines in one pass.
+message's own original text, its image(s), or both stacked text-above-
+images - mirroring Discord's own layout - depending on what the message
+has) paired with the matching editable text box(es) on the right, stacked
+in the same text-above-images order: a copy of the message's own text
+whenever it has any, and one box per attached image pre-filled with that
+image's OCR text - independently editable, so a message with a caption
+and multiple images gets all of those boxes. Copy/paste and arbitrary
+edits are allowed in every text box; nothing is parsed or restricted.
+Nothing is written to disk until the Finalize button at the bottom is
+clicked, which writes every message's final lines in one pass.
 
 Only a bounded window of rows is ever materialized as widgets at once,
 rather than every message in the transcript - building hundreds of
@@ -140,8 +140,8 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         self,
         master: tk.Widget,
         items: List[ReviewItem],
-        on_finalize: Callable[[List[Tuple[Optional[str], Optional[str]]]], None],
-        initial_saved_texts: Optional[List[Tuple[Optional[str], Optional[str]]]] = None,
+        on_finalize: Callable[[List[Tuple[Optional[str], List[Optional[str]]]]], None],
+        initial_saved_texts: Optional[List[Tuple[Optional[str], List[Optional[str]]]]] = None,
         initial_focus_slot: Optional[Tuple[int, str]] = None,
         initial_scroll_fraction: Optional[float] = None,
     ):
@@ -158,20 +158,21 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         self._initial_scroll_fraction = initial_scroll_fraction
         # Flat, transcript-ordered list of every editable box this item
         # list has, as (item_index, role) pairs - "role" is "message" (a
-        # copy of the message's own text) or "ocr" (an image's OCR text).
-        # A message gets a "message" slot whenever it has any text, an
-        # "ocr" slot whenever it has an image, in that order - so a
-        # message with both gets both, message slot first, matching the
-        # text-above-image stacking in _build_row. This is what Tab/
-        # Shift-Tab navigate (see keyboard_nav.py) and what
-        # get_focused_slot/the resume focus-restore path address a box by,
-        # since a single item index is no longer enough to identify one.
+        # copy of the message's own text) or "ocr{N}" (the Nth attached
+        # image's OCR text). A message gets a "message" slot whenever it
+        # has any text, then one "ocrN" slot per attached image in
+        # attachment order - so a message with a caption and images gets
+        # all of them, message slot first, matching the text-above-images
+        # stacking in _build_row. This is what Tab/Shift-Tab navigate (see
+        # keyboard_nav.py) and what get_focused_slot/the resume
+        # focus-restore path address a box by, since a single item index
+        # is no longer enough to identify one.
         self._slots: List[Tuple[int, str]] = []
         for idx, item in enumerate(items):
             if item.initial_message_text is not None:
                 self._slots.append((idx, "message"))
-            if item.image_path is not None:
-                self._slots.append((idx, "ocr"))
+            for image_index in range(len(item.image_paths)):
+                self._slots.append((idx, f"ocr{image_index}"))
         self._slot_positions: Dict[Tuple[int, str], int] = {
             slot: pos for pos, slot in enumerate(self._slots)
         }
@@ -186,8 +187,9 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         self._materialized_range: Optional[Tuple[int, int]] = None
         self._row_frames: Dict[int, tk.Widget] = {}
         # All per-box bookkeeping below is keyed by (item_index, role) -
-        # see self._slots - since a row can now have up to two independent
-        # boxes (and matching immutable originals) rather than at most one.
+        # see self._slots - since a row can now have any number of
+        # independent boxes (and matching immutable originals) rather than
+        # at most two.
         self._text_widgets: Dict[Tuple[int, str], tk.Text] = {}
         self._text_containers: Dict[Tuple[int, str], tk.Widget] = {}
         self._images = ImageLoader()
@@ -198,11 +200,12 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         # starting blank.
         self._saved_texts: Dict[Tuple[int, str], str] = {}
         if initial_saved_texts is not None and len(initial_saved_texts) == len(items):
-            for idx, (message_text, ocr_text) in enumerate(initial_saved_texts):
+            for idx, (message_text, ocr_texts) in enumerate(initial_saved_texts):
                 if message_text is not None:
                     self._saved_texts[(idx, "message")] = message_text
-                if ocr_text is not None:
-                    self._saved_texts[(idx, "ocr")] = ocr_text
+                for image_index, ocr_text in enumerate(ocr_texts):
+                    if ocr_text is not None:
+                        self._saved_texts[(idx, f"ocr{image_index}")] = ocr_text
         self._update_job: Optional[str] = None
         self._initial_position_job: Optional[str] = None
         # Monotonic counter stamped on every _log_event call, purely so log
@@ -380,13 +383,11 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         row = self._row_frames.pop(index, None)
         if row is None:
             return
-        for role in ("message", "ocr"):
-            key = (index, role)
-            text_widget = self._text_widgets.pop(key, None)
-            if text_widget is not None:
-                self._saved_texts[key] = text_widget.get("1.0", "end-1c")
+        for key in [k for k in self._text_widgets if k[0] == index]:
+            text_widget = self._text_widgets.pop(key)
+            self._saved_texts[key] = text_widget.get("1.0", "end-1c")
             self._text_containers.pop(key, None)
-        self._images.unregister(index)
+        self._images.unregister_row(index)
         row.destroy()
 
     def _offset_of(self, index: int) -> int:
@@ -632,15 +633,22 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
             return widget.get("1.0", "end-1c")
         return self._saved_texts.get((index, role))
 
-    def collect_edited_texts(self) -> List[Tuple[Optional[str], Optional[str]]]:
-        """Current (edited_message_text, edited_ocr_text) pair for every
-        item, in transcript order - see _get_box_text for what each value
-        means. Used both for Finalize and for periodic session autosaving -
-        the two need the same snapshot, just written to different
-        places."""
+    def collect_edited_texts(self) -> List[Tuple[Optional[str], List[Optional[str]]]]:
+        """Current (edited_message_text, edited_ocr_texts) pair for every
+        item, in transcript order - edited_ocr_texts is one entry per
+        item.image_paths, in attachment order - see _get_box_text for what
+        each value means. Used both for Finalize and for periodic session
+        autosaving - the two need the same snapshot, just written to
+        different places."""
         return [
-            (self._get_box_text(idx, "message"), self._get_box_text(idx, "ocr"))
-            for idx in range(len(self._items))
+            (
+                self._get_box_text(idx, "message"),
+                [
+                    self._get_box_text(idx, f"ocr{image_index}")
+                    for image_index in range(len(item.image_paths))
+                ],
+            )
+            for idx, item in enumerate(self._items)
         ]
 
     def get_focused_slot(self) -> Optional[Tuple[int, str]]:
