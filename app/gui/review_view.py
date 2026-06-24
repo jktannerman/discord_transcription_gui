@@ -420,10 +420,19 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         focused = self.focus_get()
         for key in [k for k in self._text_widgets if k[0] == index]:
             text_widget = self._text_widgets.pop(key)
-            self._saved_texts[key] = text_widget.get("1.0", "end-1c")
+            text = text_widget.get("1.0", "end-1c")
+            self._saved_texts[key] = text
             self._saved_cursor[key] = text_widget.index("insert")
-            if text_widget is focused:
+            had_focus = text_widget is focused
+            if had_focus:
                 self._refocus_slot = key
+            self._log_event(
+                "box_teardown",
+                key=key,
+                widget=str(text_widget),
+                had_focus=had_focus,
+                **logging_config.text_fingerprint(text),
+            )
             self._text_containers.pop(key, None)
             detach = self._undo_detach.pop(key, None)
             if detach is not None:

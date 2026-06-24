@@ -5,12 +5,13 @@ both a rotating file under ``config.APP_DATA_DIR`` and the console, so a run
 can be replayed/grepped afterwards without re-running the GUI.
 """
 
+import hashlib
 import json
 import logging
 import logging.handlers
 import sys
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from . import config
 
@@ -134,3 +135,16 @@ def extra(**fields: Any) -> dict[str, dict[str, Any]]:
     """Build the 'extra' kwarg for structured fields, e.g.
     logger.info("ocr done", extra=extra(image=name, paragraphs=3))."""
     return {"extra_fields": fields}
+
+
+def text_fingerprint(text: Optional[str]) -> dict[str, Any]:
+    """Compact, log-friendly stand-in for a text box's full content: its
+    length plus a short hash, so two log lines can be compared for exact
+    equality (e.g. "is this box's content the same before and after a row
+    rebuild?") without dumping - and potentially truncating - the full text
+    into every line. None is reported as ``{"len": None, "hash": None}``,
+    distinct from an empty string (``{"len": 0, "hash": <hash of "">}``) -
+    the two mean different things (never touched vs. cleared)."""
+    if text is None:
+        return {"len": None, "hash": None}
+    return {"len": len(text), "hash": hashlib.md5(text.encode("utf8")).hexdigest()[:8]}

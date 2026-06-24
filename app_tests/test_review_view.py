@@ -308,6 +308,46 @@ def test_resuming_session_restores_saved_edit_and_focus(root, sample_image):
     assert focus_calls == [(text_item, "message")]
 
 
+def test_resumed_edit_survives_being_paged_out_and_back_in_with_no_further_edits(root, sample_image):
+    """Regression test for a real data-loss bug: a resumed box's first
+    build correctly showed the saved edit (the case
+    test_resuming_session_restores_saved_edit_and_focus covers), but its
+    UndoLog was seeded empty with no record of *which* text it started
+    from. The next time that same box was torn down and rebuilt - here,
+    with zero further edits in between - _populate_text_box re-based on
+    the item's plain initial_message_text instead of the resumed edit and
+    replayed an empty op log on top, silently reverting to the unedited
+    default. Combines the two scenarios test_resuming_session_restores_
+    saved_edit_and_focus and test_edited_text_survives_a_row_being_paged_
+    out_and_back_in each cover separately - neither alone caught this,
+    since the bug only appears once both are true at once."""
+    # count=40 (not the smaller count the resume-focus test above uses) -
+    # with too few items, the whole transcript fits inside the
+    # virtualization buffer and text_item's row is never actually torn
+    # down by the page-away below, which would make this test pass
+    # regardless of whether the bug it's guarding against is present.
+    items = _items(sample_image, count=40)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    assert items[text_item].initial_message_text != "a resumed edit"
+    saved_texts = [{} for _ in items]
+    saved_texts[text_item] = {"message": "a resumed edit"}
+
+    frame, _ = _build_frame(root, items, initial_saved_texts=saved_texts)
+    key = (text_item, "message")
+    assert frame._text_widgets[key].get("1.0", "end-1c") == "a resumed edit"
+
+    # Page far away (tears the row down with no edits made this build) and
+    # back to the top again - no typing in between, matching the real
+    # repro (edit made in an earlier session, just scrolled past in this
+    # one).
+    frame._ensure_materialized(len(items) - 1)
+    frame._canvas.yview_moveto(0.0)
+    frame._reconcile()
+
+    assert key in frame._text_widgets
+    assert frame._text_widgets[key].get("1.0", "end-1c") == "a resumed edit"
+
+
 def _container_bounds(frame, index, role):
     """The (top, bottom) of a box's container in the same document-space
     coordinates _keep_cursor_in_viewport computes them in - see that

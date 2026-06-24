@@ -21,7 +21,10 @@ import re
 import tkinter as tk
 from typing import Optional, Tuple
 
+from .. import logging_config
 from .layout_constants import ROW_PACK_PADY_PX
+
+logger = logging_config.get_logger(__name__)
 
 _TRAILING_WORD_RE = re.compile(r"\S+\s*$")
 
@@ -44,22 +47,82 @@ class KeyboardNavMixin:
         widget.delete(delete_from, "insert")
         return "break"
 
+    def _key_for_widget(self, widget: tk.Text) -> Optional[Tuple[int, str]]:
+        """(item_index, role) of the box currently backed by `widget`, or
+        None if it isn't one of this frame's currently-materialized boxes -
+        used both by _record_undo_marker and by the logging in
+        _undo_text/_redo_text below."""
+        for key, candidate in self._text_widgets.items():
+            if candidate is widget:
+                return key
+        return None
+
     def _undo_text(self, event: tk.Event) -> str:
+        widget = event.widget
+        key = self._key_for_widget(widget)
+        log = self._undo_logs.get(key) if key is not None else None
+        op_count_before = len(log.ops) if log is not None else None
+        # Suppress the recording proxy (text_undo.py) while edit_undo()
+        # runs - its own internal delete/insert side effects would
+        # otherwise get captured as ordinary ops *in addition to* the bare
+        # "undo" marker _record_undo_marker appends below, double-recording
+        # this single undo and making a later replay apply it twice (see
+        # UndoLog.suppress's docstring).
+        if log is not None:
+            log.suppress = True
         try:
-            event.widget.edit_undo()
+            widget.edit_undo()
         except tk.TclError:
-            pass  # nothing to undo
+            logger.info(
+                "ctrl+z pressed, nothing to undo",
+                extra=logging_config.extra(key=key, widget=str(widget)),
+            )
         else:
-            self._record_undo_marker(event.widget, "undo")
+            self._record_undo_marker(widget, "undo")
+            logger.info(
+                "ctrl+z pressed, undo applied",
+                extra=logging_config.extra(
+                    key=key,
+                    widget=str(widget),
+                    op_count_before=op_count_before,
+                    op_count_after=len(log.ops) if log is not None else None,
+                    **logging_config.text_fingerprint(widget.get("1.0", "end-1c")),
+                ),
+            )
+        finally:
+            if log is not None:
+                log.suppress = False
         return "break"
 
     def _redo_text(self, event: tk.Event) -> str:
+        widget = event.widget
+        key = self._key_for_widget(widget)
+        log = self._undo_logs.get(key) if key is not None else None
+        op_count_before = len(log.ops) if log is not None else None
+        if log is not None:
+            log.suppress = True
         try:
-            event.widget.edit_redo()
+            widget.edit_redo()
         except tk.TclError:
-            pass  # nothing to redo
+            logger.info(
+                "ctrl+shift+z pressed, nothing to redo",
+                extra=logging_config.extra(key=key, widget=str(widget)),
+            )
         else:
-            self._record_undo_marker(event.widget, "redo")
+            self._record_undo_marker(widget, "redo")
+            logger.info(
+                "ctrl+shift+z pressed, redo applied",
+                extra=logging_config.extra(
+                    key=key,
+                    widget=str(widget),
+                    op_count_before=op_count_before,
+                    op_count_after=len(log.ops) if log is not None else None,
+                    **logging_config.text_fingerprint(widget.get("1.0", "end-1c")),
+                ),
+            )
+        finally:
+            if log is not None:
+                log.suppress = False
         return "break"
 
     def _record_undo_marker(self, widget: tk.Text, name: str) -> None:

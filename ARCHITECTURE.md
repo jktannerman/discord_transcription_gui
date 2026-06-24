@@ -4,6 +4,46 @@ Deeper technical detail than the README needs for "how do I run this" -
 review-screen internals (the most architecturally involved part of the app)
 and logging conventions, for whoever's about to change either.
 
+## General heuristic: test where features compose, not just each feature alone
+
+A real data-loss bug (see "A box's `UndoLog` must record what it actually
+started from" below) shipped, with passing tests, because two features -
+session resume and the review screen's virtualized row rebuild - were each
+tested thoroughly in isolation, but never *together*. Each test's author
+reasonably treated their own feature as the unit under test and used the
+simplest setup that exercised it; neither setup happened to also exercise
+the other feature, so the one combination where they interacted badly
+(a resumed box, rebuilt with no further edits) went unexercised by either.
+
+The general failure mode: a new feature gets layered on top of existing
+code that already has its own internal state machine (here, `_populate_
+text_box`'s build-fresh/rebuild-replay branching). It's not enough to ask
+"does my new feature work" - the question that actually would have caught
+this is "does my new feature still hold every invariant the *existing*
+state machine depends on." That second question only has a useful answer
+once you've identified what those invariants actually are (here: a
+rebuild may only assume what the box's own history recorded, never the
+item's static default) and written them down somewhere other than in the
+original author's head.
+
+Two concrete habits this argues for in this codebase specifically:
+
+- When adding a feature that touches state another feature already
+  manages (session resume touching the same per-box dicts virtualization
+  owns), write at least one test that exercises *both* in the same test,
+  in the order a real user would actually hit them - not just one test
+  per feature with the other feature absent. If two such tests already
+  exist separately (as they did here), that's a sign the combined test is
+  still missing, not that coverage is already adequate.
+- When a piece of code's correctness depends on an assumption about how
+  it got into its current state (e.g. "this log's ops are deltas from
+  `initial_text`"), encode that assumption as actual stored data (`UndoLog.
+  baseline`) rather than leaving it implicit in which branch happened to
+  run. An assumption that only lives in a comment or a docstring can drift
+  silently out of sync with the code the moment a new caller is added that
+  the original author didn't have in mind; an assumption recorded as data
+  the code itself reads back can't.
+
 ## Review screen internals
 
 The review screen (`app/gui/review_view.py`) is the most architecturally
@@ -104,6 +144,38 @@ debounce/Finalize-button machinery:
   the time the guard runs. `self._saved_cursor` isn't part of the
   autosaved session format - only `self._saved_texts` is - so a resumed
   box's cursor still starts at `"1.0"`, same as before this.
+- **A box's `UndoLog` must record what it actually started from, not
+  assume it was `initial_text`.** (`text_undo.py`'s `UndoLog.baseline`,
+  set in `row_building.py`'s `_populate_text_box`.) `_populate_text_box`
+  has always had two branches: a box's *first* build this session (no
+  `UndoLog` for its key yet) inserts `self._saved_texts.get(key)` if a
+  resumed/in-session edit exists, else the item's plain `initial_text`;
+  any *later* rebuild (the row was torn down and is being paged back in)
+  replays the recorded ops onto a fresh widget instead. For a long time
+  the rebuild branch re-based that replay on `initial_text` directly,
+  silently assuming a fresh `UndoLog`'s ops were always deltas from
+  `initial_text` - true for a box that started untouched, **false** for
+  one that started from a resumed edit. That box's *very next* rebuild
+  (an ordinary scroll-away-and-back, no further typing needed) discarded
+  the resumed edit and replayed onto the bare default instead - with zero
+  ops to replay in the common case, this reverted the box to its
+  unedited OCR text with no trace, and the next autosave tick persisted
+  that loss to disk. Real data loss, not theoretical: see the project
+  owner's transcription work for a confirmed instance. Fixed by having
+  `UndoLog` itself record `baseline` - whichever text the box's first
+  build this session actually used - and having the rebuild branch
+  replay onto `log.baseline`, never onto `initial_text` directly. Any
+  future change to this method must preserve that: the only thing a
+  rebuild may assume about a box's prior state is whatever the box's own
+  `UndoLog` recorded, never the item's static default.
+  `test_resumed_edit_survives_being_paged_out_and_back_in_with_no_further_
+  edits` (`app_tests/test_review_view.py`) is the regression test -
+  notably, the two narrower scenarios it combines (resume-then-use,
+  edit-then-page-away-and-back) each already had their own passing test
+  beforehand, and neither caught this: the bug only exists where both are
+  true at once, which is exactly the gap a single new test combining them
+  had to be added to close, rather than expecting either existing test to
+  generalize to it on its own.
 - **Slot-addressed boxes.** Since a row can now have a "message" box (a
   copy of the message's own text) and any number of OCR boxes - one per
   attached image, since a single message can have more than one - a

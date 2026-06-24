@@ -194,7 +194,7 @@ Some initial courses of action:
 Add/improve tests that will help prevent problems like this in future.
 
 
-Upon tabbing/shift-tabbing into a text input box, please ensure that the entire box is cleanly onscreen. Previous attempted fixes have failed to resolve this issue, but the remaining behaviour seems to be centered around resuming a session where the focus is on a text input box which is a significant way down the page. It may be due to a disagreement in how positions are calculated; the canonical specification is given in `./gui_transcription/ARCHITECTURE.md`. Jumping to the top of the page and then navigating continuously down from there fixes the issue each session, but this is inconvenient.
+Upon tabbing/shift-tabbing into a text input box, please ensure that the entire box is cleanly onscreen. Previous attempted fixes have failed to resolve this issue, but the remaining behaviour seems to be centered around resuming a session where the focus is on a text input box which is a significant way down the page. It may be due to a disagreement in how positions are calculated; the canonical specification is given in `./gui_transcription/ARCHITECTURE.md`. Jumping to the top of the page and then navigating continuously down from there fixes the issue each session, but this is inconvenient, and jumping to a new location breaks things again.
 
 
 checkbox that can be checked to restore original state; automatically unchecks when user has made edits; can be rechecked to restore edited mode; only overwritten when user makes edits to unchecked
@@ -202,14 +202,14 @@ checkbox that can be checked to restore original state; automatically unchecks w
 To each text input box that corresponds to a chatlog image, please add a checkbox that behaves as follows:
 
 - The checkbox should be at the top of an invisible column placed at the right edge of the text input box, so that it is in the top right corner of the box. However, it should be to the left of the scrollbar (if there is a scrollbar). The column should be just wide enough to fit the checkbox.
-- The checkbox should be unchecked if the current contents of the text input box match the (regex-modified) original OCR transcription.
+- The checkbox should be unchecked if the current contents of the text input box match the (regex-modified) original OCR transcription, checked otherwise.
 - Upon the user making any changes, the checkbox should become checked automatically.
 - Upon the user unchecking the checkbox, the contents of the text input box should return to the (regex-modified) original OCR text. This must not overwrite the user-edited transcription in the save.
 - Upon the user rechecking the checkbox, the contents should return to the last version of the user-edited transcription.
-- The save of the user-edited transcription should be totally overwritten from fresh if and only if the user begins to edit the transcription when the checkbox is unchecked.
+- The save of the user-edited transcription should be totally overwritten from fresh if and only if the user begins to edit the transcription when the checkbox is unchecked and the .
 - Tab/Shift-Tab should not interact with the checkbox. 
 
-
+Ask any other questions about desired behaviour now, if needed.
 
 make it possible to open a given image in browser?
 
@@ -302,7 +302,14 @@ Are there any major gaps in test coverage or logging coverage?
 Are there any aspects that are noticeably missing, comparing this project to a professional one?
 
 
-This project has now seen several updates and revisions. Please consider its current overall structure:
+This project has now seen several updates and revisions. Please consider its current overall structure: is it still natural? Are there any obvious problems or potential improvements to be made?
 
-- Is it still natural? Are there any obvious problems or potential improvements to be made?
-- Are there any overcomplicated parts of the code which are contradictory or likely to lead to problems in the future?
+
+
+Now conduct a more low-level code review. Are there any overcomplicated parts of the code which are contradictory in intent or likely to lead to problems in the future? Is there any duplicated logic?
+
+*Simultaneously*, assess the comments and documentation. It is possible that they are somewhat too verbose. In particular, there is something of a pattern where they will reference previous bugfixes or the original version when it is not necessary to do so; this causes bloat. However, you should judge case-by-case whether a given comment or section of documentation is likely to help prevent future errors. 
+
+Please make notes on what could be changed in some scratchpad file as you go.
+
+

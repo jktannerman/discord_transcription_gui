@@ -70,8 +70,29 @@ def _match_saved_edits(
             dropped += 1
             continue
         matched += 1
-        valid_roles = set(review_items[idx].slot_roles)
+        item = review_items[idx]
+        valid_roles = set(item.slot_roles)
         built[idx] = {role: text for role, text in edit.items() if role in valid_roles}
+        # Per-box detail at DEBUG (matched/dropped counts alone can't show
+        # *which* box's saved text now equals this run's freshly-computed
+        # default - which would mean either it was never really edited, or
+        # an edit was lost upstream of this point - vs. one that genuinely
+        # differs) - logged once per resume, not per autosave tick, so the
+        # volume is bounded by transcript size rather than time.
+        for role, text in built[idx].items():
+            if text is None or role.startswith("spacer"):
+                continue
+            default_text = item.initial_text_for_role(role)
+            logger.debug(
+                "resumed box matched",
+                extra=logging_config.extra(
+                    message_id=message_id,
+                    role=role,
+                    saved=logging_config.text_fingerprint(text),
+                    current_default=logging_config.text_fingerprint(default_text),
+                    equals_current_default=(text == default_text),
+                ),
+            )
     logger.info(
         "resumed session edits matched by message_id",
         extra=logging_config.extra(
@@ -143,9 +164,38 @@ class App:
         # actual image folder rather than whatever's otherwise most-recent
         # on disk - consumed (reset to None) the next time show_setup() runs.
         self._resume_image_folder_override: Optional[str] = None
+        # {message_id: {role: text}} as of the most recent autosave tick -
+        # diagnostic only (see _diff_autosave), not used for anything the
+        # app actually relies on. Lets each autosave log exactly which
+        # boxes' persisted edit changed since the previous tick, rather
+        # than just a running item_count that can't show *which* edit
+        # appeared, changed, or vanished.
+        self._last_autosave_snapshot: dict[str, dict[str, Optional[str]]] = {}
 
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.show_setup()
         self.root.deiconify()
+
+    def _on_close(self) -> None:
+        """Logs a final snapshot of whatever's currently in memory, then
+        flushes it to disk via one last _run_autosave() call before the
+        window actually closes - closing used to just leave whatever the
+        last *periodic* tick happened to catch as the on-disk state, with
+        up to AUTOSAVE_INTERVAL_MS worth of edits/scrolling never making it
+        to disk at all if the window closed in between."""
+        frame = getattr(self, "_review_frame", None)
+        if frame is not None and frame.winfo_exists():
+            logger.info(
+                "window closing while review screen is open - flushing a final autosave",
+                extra=logging_config.extra(
+                    materialized_range=frame._materialized_range,
+                    focused_slot=frame.get_focused_slot(),
+                    last_autosaved_count=len(self._last_autosave_snapshot),
+                ),
+            )
+            self._run_autosave(tag="window_close")
+            self._cancel_autosave()  # the call above just rescheduled a tick that will never fire
+        self.root.destroy()
 
     # -- frame management -------------------------------------------------
 
@@ -323,12 +373,16 @@ class App:
         self._cancel_autosave()
         self._run_autosave()
 
-    def _run_autosave(self) -> None:
+    def _run_autosave(self, tag: str = "autosave_tick") -> None:
         """Snapshot the review screen's current edits/focus/scroll position
         to disk, then reschedule itself - runs continuously while the
         review screen is up (see _start_autosave/_cancel_autosave), every
         config.AUTOSAVE_INTERVAL_MS, so closing the app at any point during
-        review leaves a resumable session behind."""
+        review leaves a resumable session behind. Also called once more,
+        with tag="window_close", from _on_close - so the diff this logs
+        (see _diff_autosave) is clearly distinguishable from a periodic
+        tick's, and so that final call's snapshot is what actually ends up
+        on disk, not just what gets logged."""
         frame = getattr(self, "_review_frame", None)
         if frame is not None and frame.winfo_exists():
             run = self._run
@@ -342,6 +396,9 @@ class App:
             for idx, edited in enumerate(frame.collect_edited_texts()):
                 if any(text is not None for text in edited.values()):
                     edited_texts_by_id[self._review_items[idx].message_id] = edited
+
+            self._diff_autosave(self._last_autosave_snapshot, edited_texts_by_id, tag=tag)
+            self._last_autosave_snapshot = edited_texts_by_id
 
             session = {
                 "html_path": str(run.html_path),
@@ -360,6 +417,49 @@ class App:
             }
             state.save_session(str(run.html_path), session)
         self._autosave_job = self.root.after(config.AUTOSAVE_INTERVAL_MS, self._run_autosave)
+
+    def _diff_autosave(
+        self, previous: dict[str, dict[str, Optional[str]]], current: dict[str, dict[str, Optional[str]]], tag: str
+    ) -> None:
+        """Log exactly which (message_id, role) edits appeared, disappeared,
+        or changed value between the previous autosave snapshot and this
+        one - a plain item_count (the only thing logged here before) can't
+        show *which* box changed or distinguish "a new edit was made" from
+        "an existing edit silently reverted". Diagnostic only - never
+        changes what gets saved, just narrates it. `tag` distinguishes a
+        periodic tick from the one-off snapshot taken in _on_close, since
+        both call this."""
+        for message_id in current.keys() - previous.keys():
+            for role, text in current[message_id].items():
+                logger.info(
+                    "autosave diff: new edit",
+                    extra=logging_config.extra(
+                        tag=tag, message_id=message_id, role=role,
+                        **logging_config.text_fingerprint(text),
+                    ),
+                )
+        for message_id in previous.keys() - current.keys():
+            logger.info(
+                "autosave diff: edit entry removed entirely",
+                extra=logging_config.extra(
+                    tag=tag, message_id=message_id, roles=sorted(previous[message_id].keys()),
+                ),
+            )
+        for message_id in current.keys() & previous.keys():
+            old_edit = previous[message_id]
+            new_edit = current[message_id]
+            for role in old_edit.keys() | new_edit.keys():
+                old_text = old_edit.get(role)
+                new_text = new_edit.get(role)
+                if old_text != new_text:
+                    logger.info(
+                        "autosave diff: edit changed",
+                        extra=logging_config.extra(
+                            tag=tag, message_id=message_id, role=role,
+                            old=logging_config.text_fingerprint(old_text),
+                            new=logging_config.text_fingerprint(new_text),
+                        ),
+                    )
 
     def _on_ocr_done(self, file_info: dict) -> None:
         run = self._run

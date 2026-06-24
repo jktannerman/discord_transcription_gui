@@ -20,6 +20,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Optional, Tuple
 
+from .. import logging_config
 from ..pipeline import ReviewItem
 from . import theme
 from .image_loading import THUMBNAIL_SIZE, fitted_image_size
@@ -32,6 +33,8 @@ from .layout_constants import (
     TEXT_BOX_MARGIN_PX,
 )
 from .text_undo import UndoLog, attach_undo_recording, replay_onto
+
+logger = logging_config.get_logger(__name__)
 
 # Inner horizontal padding for an editable text box's own content (applied
 # symmetrically by Tk's Text.padx), so wrapped/long lines don't run right up
@@ -215,6 +218,19 @@ class RowBuildingMixin:
         the label's, for a "message" box, or that image's, for an "ocrN"
         box - see _fixed_text_box_height."""
         key = (index, role)
+        if key in self._text_widgets:
+            # Should be impossible - _sync_materialized_rows only builds an
+            # index that isn't already in self._row_frames - but if it ever
+            # happens, the old widget's content (anything typed into it
+            # since its last teardown) is about to be silently orphaned:
+            # _destroy_row never runs for it, so it's never captured into
+            # self._saved_texts. Logged loudly rather than just overwriting
+            # self._text_widgets[key] without a trace.
+            logger.warning(
+                "building a box for a key that already has a live widget - "
+                "the old widget's content is about to be orphaned",
+                extra=logging_config.extra(key=key, old_widget=str(self._text_widgets[key])),
+            )
         # Fixed-height container (same pack_propagate(False) trick as the
         # left column's placeholders) so the text box's height is exactly
         # _fixed_text_box_height's verdict, computed once up front, rather
@@ -273,6 +289,12 @@ class RowBuildingMixin:
         Tab/Shift-Tab and just as covered by row-teardown/resume edit
         persistence."""
         key = (index, role)
+        if key in self._text_widgets:
+            logger.warning(
+                "building a box for a key that already has a live widget - "
+                "the old widget's content is about to be orphaned",
+                extra=logging_config.extra(key=key, old_widget=str(self._text_widgets[key])),
+            )
         text_container = ttk.Frame(parent, height=SPACER_BOX_HEIGHT_PX)
         text_container.pack(side="top", fill="x", pady=(0, pady_bottom))
         text_container.pack_propagate(False)
@@ -302,23 +324,98 @@ class RowBuildingMixin:
         resumed session looks like, since undo history isn't persisted to
         disk (see text_undo.py) - so it's seeded directly from
         self._saved_texts (a saved edit, including one resumed from disk)
-        or `initial_text`, with no undo history of its own yet. Otherwise
-        this box's row was torn down and is being rebuilt after being
-        paged back in: the widget starts from `initial_text` (its
-        original, pre-edit content) and replays every op recorded against
-        it so far, which both reproduces the edited text and rebuilds an
-        equivalent native undo/redo stack - see text_undo.replay_onto."""
+        or `initial_text`, with no undo history of its own yet; whichever
+        one was used is recorded as log.baseline. Otherwise this box's row
+        was torn down and is being rebuilt after being paged back in: the
+        widget starts from log.baseline - NOT initial_text directly, see
+        UndoLog's docstring for why that distinction is exactly what a
+        real data-loss bug turned on - and replays every op recorded
+        against it so far, which both reproduces the edited text and
+        rebuilds an equivalent native undo/redo stack - see
+        text_undo.replay_onto."""
         log = self._undo_logs.get(key)
         if log is None:
             log = UndoLog()
             self._undo_logs[key] = log
             saved = self._saved_texts.get(key)
-            text_widget.insert("1.0", saved if saved is not None else initial_text)
+            source = "saved_texts" if saved is not None else "initial_text"
+            text_to_insert = saved if saved is not None else initial_text
+            log.baseline = text_to_insert
+            text_widget.insert("1.0", text_to_insert)
             text_widget.edit_reset()  # don't let the initial insert be undoable
+            self._log_event(
+                "box_build_fresh",
+                key=key,
+                widget=str(text_widget),
+                source=source,
+                **logging_config.text_fingerprint(text_to_insert),
+            )
         else:
-            text_widget.insert("1.0", initial_text)
+            # Replay onto log.baseline (what this box actually started from
+            # the first time it was built this session - a resumed edit, or
+            # initial_text if there was none) rather than onto initial_text
+            # directly - log.ops are deltas relative to whichever baseline
+            # was actually used, and re-basing onto initial_text instead
+            # would silently discard a resumed edit on this box's very next
+            # rebuild whenever there were zero further ops to replay on top
+            # of it (see UndoLog's docstring).
+            if log.baseline is None:
+                # Should be impossible - log.baseline is always set in the
+                # branch above, the only place a log is ever created - but
+                # inserting "None" itself (str(None)) into the box would be
+                # a worse failure than falling back to initial_text, so
+                # this degrades instead of corrupting the box's content.
+                logger.error(
+                    "existing UndoLog has no recorded baseline - falling "
+                    "back to initial_text, which may discard a resumed edit",
+                    extra=logging_config.extra(key=key),
+                )
+            baseline = log.baseline if log.baseline is not None else initial_text
+            text_widget.insert("1.0", baseline)
             text_widget.edit_reset()  # don't let this insert be undoable either
-            replay_onto(text_widget, log)
+            self._log_event(
+                "box_build_replay_start",
+                key=key,
+                widget=str(text_widget),
+                op_count=len(log.ops),
+                **logging_config.text_fingerprint(baseline),
+            )
+            replay_onto(
+                text_widget,
+                log,
+                on_op=lambda name, args, k=key: self._log_event(
+                    "box_replay_op", key=k, op=name, args=repr(args)[:200]
+                ),
+            )
+            result_text = text_widget.get("1.0", "end-1c")
+            self._log_event(
+                "box_build_replay_done",
+                key=key,
+                **logging_config.text_fingerprint(result_text),
+            )
+            # Regression alarm, not a test: if this rebuild landed back on
+            # the item's bare default while self._saved_texts disagrees -
+            # the box had a different edit recorded as recently as its
+            # last teardown - something upstream has silently discarded
+            # that edit, the exact failure this method's baseline-tracking
+            # exists to prevent. Heuristic (a coincidental match is
+            # possible in principle) but cheap and loud, so a future
+            # regression of this shape surfaces in app.log immediately
+            # instead of requiring the kind of multi-hour forensic
+            # reconstruction this bug originally took to diagnose.
+            saved = self._saved_texts.get(key)
+            if result_text == initial_text and saved is not None and saved != initial_text:
+                logger.error(
+                    "box rebuilt back to its bare default despite a different "
+                    "saved edit on record - possible silent data loss",
+                    extra=logging_config.extra(
+                        key=key,
+                        result=logging_config.text_fingerprint(result_text),
+                        saved_texts_on_record=logging_config.text_fingerprint(saved),
+                        log_baseline=logging_config.text_fingerprint(log.baseline),
+                        op_count=len(log.ops),
+                    ),
+                )
 
         # The "insert" mark has right gravity, so inserting at "1.0" (where
         # it already sits on a fresh widget) leaves it at the *end* of the
@@ -334,7 +431,13 @@ class RowBuildingMixin:
         text_widget.mark_set("insert", self._saved_cursor.get(key, "1.0"))
         text_widget.see("insert")
         text_widget.edit_modified(False)  # don't count any of the above as a user edit
-        self._undo_detach[key] = attach_undo_recording(text_widget, log)
+        self._undo_detach[key] = attach_undo_recording(
+            text_widget,
+            log,
+            on_op=lambda name, args, k=key: self._log_event(
+                "box_op_recorded", key=k, op=name, args=repr(args)[:200], total_ops=len(log.ops)
+            ),
+        )
 
         text_widget.bind("<Control-BackSpace>", self._delete_word_backward)
         text_widget.bind("<Tab>", self._on_tab)
@@ -434,6 +537,13 @@ class RowBuildingMixin:
         this guard, a row built only because it entered the virtualization
         buffer (not because the user scrolled it into view) would yank the
         canvas to reveal it anyway."""
+        had_focus = text_widget is self.focus_get()
+        self._log_event(
+            "box_modified",
+            key=key,
+            had_focus=had_focus,
+            **logging_config.text_fingerprint(text_widget.get("1.0", "end-1c")),
+        )
         text_widget.edit_modified(False)
-        if text_widget is self.focus_get():
+        if had_focus:
             self._scroll_box_into_view(key)
