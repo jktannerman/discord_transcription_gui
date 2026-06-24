@@ -27,15 +27,20 @@ class _NavStub(KeyboardNavMixin):
     """Exercises _move_focus/_focused_slot without building any real Tk
     widgets or a display - everything _move_focus touches (self._slots,
     self._text_widgets, self._finalize_button, self.focus_get(),
-    self._ensure_materialized) is faked out below; _ensure_materialized,
-    _scroll_into_view, and _log_event are no-ops since this stub treats
-    every row as already materialized."""
+    self._ensure_materialized) is faked out below; _ensure_materialized and
+    _log_event are no-ops since this stub treats every row as already
+    materialized. self._text_containers/_row_frames are left empty
+    deliberately - the real _scroll_box_into_view (unstubbed) bails out
+    early on its container/row None-checks before touching anything else,
+    so nothing here needs to fake up real Tk geometry."""
 
     def __init__(self, items):
         self._items = items
         self._slots = [(idx, role) for idx, item in enumerate(items) for role in item.slot_roles]
         self._slot_positions = {slot: pos for pos, slot in enumerate(self._slots)}
         self._text_widgets = {slot: _FakeTextWidget(self, slot) for slot in self._slots}
+        self._text_containers = {}
+        self._row_frames = {}
         self._finalize_button = _FakeTextWidget(self, "finalize_button")
         self._focused = None
 
@@ -43,9 +48,6 @@ class _NavStub(KeyboardNavMixin):
         return self._focused
 
     def _ensure_materialized(self, index):
-        pass
-
-    def _scroll_into_view(self, index):
         pass
 
     def _log_event(self, *args, **kwargs):

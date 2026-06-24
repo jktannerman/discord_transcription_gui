@@ -4,7 +4,7 @@ Mixed into ReviewFrame rather than taken as a standalone object, since
 every method here reaches into ReviewFrame's bookkeeping dicts
 (self._row_frames, self._text_widgets, self._text_containers,
 self._saved_texts, self._images, self._canvas) and keyboard_nav.py's
-mixin methods (self._scroll_into_view, self._delete_word_backward, etc.)
+mixin methods (self._scroll_box_into_view, self._delete_word_backward, etc.)
 - threading all of that through as constructor args would just relocate
 the coupling, not remove it. This module owns *building* a row's widgets;
 review_view.py's ReviewFrame owns deciding *which* rows should exist and
@@ -30,6 +30,7 @@ from .layout_constants import (
     SPACER_BOX_HEIGHT_PX,
     TEXT_BOX_MARGIN_PX,
 )
+from .text_undo import UndoLog, attach_undo_recording, replay_onto
 
 # Inner horizontal padding for an editable text box's own content (applied
 # symmetrically by Tk's Text.padx), so wrapped/long lines don't run right up
@@ -103,6 +104,26 @@ class RowBuildingMixin:
                 self._build_spacer_text_box(
                     right, index, role, item.initial_spacer_texts[role], pady_bottom=gap,
                 )
+
+        if self._refocus_slot is not None and self._refocus_slot[0] == index:
+            slot = self._refocus_slot
+            self._refocus_slot = None
+            # Deferred to the next idle tick rather than called right here:
+            # this can run mid-_reconcile (inside _sync_materialized_rows),
+            # and _focus_text_box's scroll-into-view would otherwise get
+            # clobbered by _reconcile's own scroll-position correction
+            # (_remeasure_built_rows) that still runs after this returns.
+            # Guarded on nothing else having taken focus in the meantime
+            # (e.g. the user tabbed to a different box, or to the Finalize
+            # button, before this row was rebuilt) - NOT on focus_get() being
+            # None, since destroying a focused widget makes Tk hand focus to
+            # an ancestor frame rather than clearing it outright, so it's
+            # never actually None by the time this runs.
+            self.after_idle(
+                lambda s=slot: self._focus_text_box(*s)
+                if self._focused_slot() is None and self.focus_get() is not self._finalize_button
+                else None
+            )
 
         return row
 
@@ -271,21 +292,48 @@ class RowBuildingMixin:
         self._text_containers[key] = text_container
 
     def _populate_text_box(self, key: Tuple[int, str], text_widget: tk.Text, initial_text: str) -> None:
-        """Insert a box's starting text (a saved edit if this row was
-        previously visited and torn down, else its default) and wire up
+        """Insert a box's starting text and undo/redo history, and wire up
         the keyboard/undo/modified bindings shared by every editable box,
-        content or spacer alike."""
-        saved = self._saved_texts.get(key)
-        text_widget.insert("1.0", saved if saved is not None else initial_text)
+        content or spacer alike.
+
+        self._undo_logs being empty for `key` means this box has never
+        been built before this session - the common case, and also what a
+        resumed session looks like, since undo history isn't persisted to
+        disk (see text_undo.py) - so it's seeded directly from
+        self._saved_texts (a saved edit, including one resumed from disk)
+        or `initial_text`, with no undo history of its own yet. Otherwise
+        this box's row was torn down and is being rebuilt after being
+        paged back in: the widget starts from `initial_text` (its
+        original, pre-edit content) and replays every op recorded against
+        it so far, which both reproduces the edited text and rebuilds an
+        equivalent native undo/redo stack - see text_undo.replay_onto."""
+        log = self._undo_logs.get(key)
+        if log is None:
+            log = UndoLog()
+            self._undo_logs[key] = log
+            saved = self._saved_texts.get(key)
+            text_widget.insert("1.0", saved if saved is not None else initial_text)
+            text_widget.edit_reset()  # don't let the initial insert be undoable
+        else:
+            text_widget.insert("1.0", initial_text)
+            text_widget.edit_reset()  # don't let this insert be undoable either
+            replay_onto(text_widget, log)
+
         # The "insert" mark has right gravity, so inserting at "1.0" (where
         # it already sits on a fresh widget) leaves it at the *end* of the
         # new text rather than the start - then Tab-focusing this box later
         # would put the cursor (and the box's own auto-scroll-to-cursor) at
-        # the bottom, with the start of the text scrolled out of view.
-        text_widget.mark_set("insert", "1.0")
-        text_widget.see("1.0")
-        text_widget.edit_reset()  # don't let the initial insert be undoable
-        text_widget.edit_modified(False)  # don't count that insert as a user edit
+        # the bottom, with the start of the text scrolled out of view. Reset
+        # to wherever the cursor was when this row was last torn down
+        # (self._saved_cursor, see _destroy_row), falling back to "1.0" for
+        # a box that's never been visited (or whose row was never destroyed
+        # while focused) - Tk clamps an index past the end of shorter text
+        # rather than raising, so a stale saved index from longer text is
+        # harmless.
+        text_widget.mark_set("insert", self._saved_cursor.get(key, "1.0"))
+        text_widget.see("insert")
+        text_widget.edit_modified(False)  # don't count any of the above as a user edit
+        self._undo_detach[key] = attach_undo_recording(text_widget, log)
 
         text_widget.bind("<Control-BackSpace>", self._delete_word_backward)
         text_widget.bind("<Tab>", self._on_tab)
@@ -387,4 +435,4 @@ class RowBuildingMixin:
         canvas to reveal it anyway."""
         text_widget.edit_modified(False)
         if text_widget is self.focus_get():
-            self._scroll_into_view(key[0])
+            self._scroll_box_into_view(key)

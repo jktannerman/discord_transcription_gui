@@ -119,7 +119,6 @@ In particular, attention should be paid to the possibility that a given message 
 - done 
 write spec for exact line spacing rules
 
-
 After a user finishes transcribing all of the images, the output file is generated. At this stage, varying numbers of newlines are currently appended to each image transcription via regex. This is leftover behavior from the original transcription program, aimed to make the end product Google Doc more readable. However, in the current framework, we can do better.
 
 I am considering two options. The first is to add a new element after every text and image element. Unlike the others, this would contain only a right column input box, with no left column content; the text input box would contain a certain number of 'newline characters' that literally appear to the user as backslash, n, backslash, n. The user could edit this as they see fit in order to manually control the spacing between whatever is above and whatever is below. Nothing here that is not a backslash or an n should affect anything else.
@@ -144,24 +143,36 @@ Default newline specifications (a note should be made of these somewhere):
 When done, please one-time migrate any existing data to the new format, as necessary. There should only be one set. Note that, in addition to the lack of spacer data, the existing data is likely in an obsolete format that assumes only one image per message.
 
 
-focus not saved? or offscreen on resume? Needs to show cursor.
-
-
-
+- done
 When pressing Up or Down while in a textbox, if that would take the cursor partially or fully offscreen, the page should scroll so as to keep the cursor visible; for example, holding Down should align the bottom of the focused textbox with the bottom of the main part of the window.
 
 
-Page Up/Down should preserve the current focus where possible.
+- done
+focus not saved? or offscreen on resume? Needs to show cursor.
+- Page Up/Down should preserve the current focus where possible. 
+- After scrolling away, if an input box remains in focus and the user types in it, the position should snap back.
+- Furthermore, upon resuming a session, not only should the previously focused box remain in focus, but the cursor should be visible.
+
+
+- done
+Please make the undo/redo history in a given text input box persist upon switching to a different box and back, so that it is essentially separate for each. For simplicity, this should not persist across different sessions.
+
+
+- maybe don't need this with the delete key
+Upon tabbing/shift-tabbing into a spacer box specifically, please have the default cursor position be the end, rather than the start, as this makes
 
 
 
-Please make the right column input textboxes a little larger than the corresponding left column elements. They should be about one line taller upwards and one line taller downwards, in the relevant font size.
+- done
+Upon tabbing/shift-tabbing into a text input box, please ensure that the entire box is cleanly onscreen.
+
+
+- done
+For text messages specifically, please make the right column text input boxes a little taller than the corresponding immutable left column elements. They should be about one line taller upwards and one line taller downwards, in the relevant font size. This does not apply to spacer elements.
 
 
 Please add an option to restore the last session, even if it was finalised and written to an output file, in order to be able to redo something overlooked.
 
-
-undo/redo in a given text input window, persisting across switching windows, but not across different sessions.
 
 
 checkbox that can be checked to restore original state; automatically unchecks when user has made edits; can be rechecked to restore edited mode; only overwritten when user makes edits to unchecked
@@ -189,25 +200,36 @@ ctrl-f?? with regex?
 
 
 
+Please add a user-editable file where regex find-replace for common OCR errors can be defined. Later, this may be made part of the GUI.
+
+Examples of substitutions:
+
+`I's` should usually be `It's`
+`\n\n\b‘` should usually be `\n\n\b`
+
+
 
 
 flag/highlight common misspellings? (scan upper/lowercase) just actual spellcheck with red underlines??
 
-I's -> It's - 5
+I's -> It's - 7
 I'l -> It'll - 1
 Im -> I'm or similar  - 2
+im -> I'm
 singular dashes, like ‘ - 4
 commas instead of dots, A/B/C, - 3
 itis -> it is - 1
 tum -> turn - 2
 quiock -> quick - 1
 o -> or - 1
-| -> I - 2
+| -> I - 2 (but leave an escape option? currently automatic)
 litle -> little - 1
 Itall -> It all 
 © -> C - 3
-
-
+ll -> I'll - 1
+pio -> pip - 1
+willbe -> will be - 1
+leam -> learn
 
 
 Are the logs as useful as they could be? 
@@ -221,4 +243,3 @@ This project has now seen several updates and revisions. Please consider its cur
 
 - Is it still natural? Are there any obvious problems or potential improvements to be made?
 - Are there any overcomplicated parts of the code which are contradictory or likely to lead to problems in the future?
-

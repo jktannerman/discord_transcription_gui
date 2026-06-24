@@ -47,6 +47,8 @@ class KeyboardNavMixin:
             event.widget.edit_undo()
         except tk.TclError:
             pass  # nothing to undo
+        else:
+            self._record_undo_marker(event.widget, "undo")
         return "break"
 
     def _redo_text(self, event: tk.Event) -> str:
@@ -54,7 +56,25 @@ class KeyboardNavMixin:
             event.widget.edit_redo()
         except tk.TclError:
             pass  # nothing to redo
+        else:
+            self._record_undo_marker(event.widget, "redo")
         return "break"
+
+    def _record_undo_marker(self, widget: tk.Text, name: str) -> None:
+        """Append an "undo"/"redo" marker to `widget`'s UndoLog (see
+        text_undo.py), so that if this box's row is later torn down and
+        rebuilt, replaying its log reproduces this undo/redo too - not just
+        the insert/delete calls either side of it. Without this, a box torn
+        down right after an undo would replay back to the *un-undone* text,
+        since edit_undo()/edit_redo() act on Tk's internal undo stack
+        directly rather than via the widget's Tcl "insert"/"delete"
+        subcommands that text_undo.py's recording proxy observes."""
+        for key, candidate in self._text_widgets.items():
+            if candidate is widget:
+                log = self._undo_logs.get(key)
+                if log is not None:
+                    log.ops.append((name, ()))
+                return
 
     def _on_page_up(self, event: Optional[tk.Event] = None) -> str:
         self._log_event("input_page_up")
@@ -83,39 +103,61 @@ class KeyboardNavMixin:
                 return key
         return None
 
-    def _scroll_into_view(self, index: int) -> None:
+    def _scroll_box_into_view(self, key: Tuple[int, str]) -> None:
         """Adjust the canvas's scroll position only as much as needed to
-        bring items[index]'s row fully into the viewport, used after Tab
-        moves focus somewhere not currently visible. Computed entirely
-        from self._row_heights (the same authoritative source _reconcile
-        uses for layout) rather than queried widget geometry: row.winfo_y()
+        bring `key`'s own box - not just its row - fully into the
+        viewport. Used after Tab/Shift-Tab moves focus somewhere not fully
+        visible, and by _on_text_modified to keep a focused box onscreen
+        while typing.
+
+        A row can stack more than one box (a message's text box, one OCR
+        box per attached image, and a spacer box between/after each of
+        those - see _build_row) and can end up taller than the viewport
+        itself, so checking only the row's outer bounds - this method's
+        predecessor, which this replaced - could report a row as "already
+        fully visible" while the specific box a caller actually cares about
+        was still only partially onscreen, or even entirely covered: e.g.
+        the row's bottom-most box sitting just past the viewport edge while
+        the row's top-most box (also within the same row, so sharing the
+        same row-level bounds) was fully visible. Box bounds are computed
+        the same way _keep_cursor_in_viewport's are forced to: row.winfo_y()
         is relative to the repositioned _scroll_frame block (see
-        _reconcile), not the canvas's absolute coordinate space, so it
-        can't be compared directly against canvas.canvasy(0)."""
+        _reconcile), not the canvas's absolute coordinate space, so
+        self._offset_of(index) (the row's own document-space offset) is
+        combined with a winfo_rooty() delta for the box's offset *within*
+        that row, which isn't affected by that repositioning."""
+        index, role = key
+        container = self._text_containers.get(key)
+        row = self._row_frames.get(index)
+        if container is None or row is None:
+            return
         canvas = self._canvas
         total_height = sum(self._row_heights)
-        if total_height <= 0:
+        viewport_height = canvas.winfo_height()
+        if total_height <= 0 or viewport_height <= 1:
             return
 
-        viewport_height = canvas.winfo_height()
-        row_top = self._offset_of(index)
-        row_bottom = row_top + self._row_heights[index]
+        try:
+            box_top = self._offset_of(index) + (container.winfo_rooty() - row.winfo_rooty())
+        except tk.TclError:
+            return  # a widget along the way was destroyed mid-check
+        box_bottom = box_top + container.winfo_height()
         view_top = canvas.canvasy(0)
         view_bottom = canvas.canvasy(viewport_height)
 
         action = "none"
-        if row_top < view_top:
-            canvas.yview_moveto(row_top / total_height)
+        if box_top < view_top:
+            canvas.yview_moveto(max(box_top, 0) / total_height)
             action = "scroll_up"
-        elif row_bottom > view_bottom:
-            canvas.yview_moveto((row_bottom - viewport_height) / total_height)
+        elif box_bottom > view_bottom:
+            canvas.yview_moveto(max(box_bottom - viewport_height, 0) / total_height)
             action = "scroll_down"
 
         self._log_event(
-            "scroll_into_view",
-            index=index,
-            row_top=row_top,
-            row_bottom=row_bottom,
+            "scroll_box_into_view",
+            key=key,
+            box_top=round(box_top, 1),
+            box_bottom=round(box_bottom, 1),
             view_top=round(view_top, 1),
             view_bottom=round(view_bottom, 1),
             total_height=total_height,
@@ -210,7 +252,7 @@ class KeyboardNavMixin:
         widget = self._text_widgets[(index, role)]
         widget.focus_set()
         widget.see("insert")
-        self._scroll_into_view(index)
+        self._scroll_box_into_view((index, role))
 
     def _move_focus(self, delta: int) -> str:
         """Move focus to the next/previous box in self._slots (or to/from

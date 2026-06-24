@@ -91,7 +91,10 @@ via _ensure_materialized if it isn't already, landing on the Finalize
 button once there's no text box left to advance to; Page Up/Down scroll the
 whole window rather than (Tk's default) scrolling within whichever Text
 widget has focus; Ctrl+Z/Ctrl+Shift+Z undo/redo within a single text box,
-using Tk's built-in per-widget undo stack.
+using Tk's built-in per-widget undo stack - kept alive across that box's
+row being torn down and rebuilt by replaying its recorded edit history onto
+the fresh widget (see text_undo.py), though not across the app being
+restarted.
 
 _reconcile is debounced (see DEBOUNCE_MS): fast scrolling fires many
 wheel/scrollbar events in quick succession, and running it synchronously
@@ -114,6 +117,7 @@ from . import theme
 from .image_loading import ImageLoader
 from .keyboard_nav import KeyboardNavMixin
 from .row_building import RowBuildingMixin
+from .text_undo import UndoLog
 from .virtualization import compute_visible_range, estimate_row_height
 
 logger = logging_config.get_logger(__name__)
@@ -204,6 +208,32 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
                 for role, text in edited.items():
                     if text is not None:
                         self._saved_texts[(idx, role)] = text
+        # Cursor ("insert" mark) position captured alongside self._saved_texts
+        # when a box's row is torn down, so paging a focused box's row out and
+        # back in (e.g. a fast Page Up/Down burst that outruns the
+        # virtualization buffer - see _destroy_row) restores the cursor to
+        # where it was rather than resetting it to the box's start. Not
+        # persisted across a session save/resume - only self._saved_texts is -
+        # so a resumed box's cursor still starts at "1.0", same as before.
+        self._saved_cursor: Dict[Tuple[int, str], str] = {}
+        # One UndoLog per box, recording every insert/delete/undo/redo it's
+        # had since first built this session (see text_undo.py) - replayed
+        # onto a fresh widget when that box's row is rebuilt after being
+        # paged out, so Ctrl+Z keeps reaching back through edits made before
+        # the teardown rather than starting blank. Never seeded from a
+        # resumed session - only self._saved_texts is - so undo history
+        # genuinely doesn't persist across app launches, just within one.
+        self._undo_logs: Dict[Tuple[int, str], UndoLog] = {}
+        # detach() callback from text_undo.attach_undo_recording, one per
+        # currently-built box - called in _destroy_row just before that
+        # box's widget is destroyed, to release the Tcl command the
+        # recording proxy installed.
+        self._undo_detach: Dict[Tuple[int, str], Callable[[], None]] = {}
+        # The slot whose box had focus at the moment its row was torn down
+        # (see _destroy_row), restored once that row is rebuilt - see
+        # _build_row. None means either nothing was focused when a row was
+        # last destroyed, or that restore has already happened.
+        self._refocus_slot: Optional[Tuple[int, str]] = None
         self._update_job: Optional[str] = None
         self._initial_position_job: Optional[str] = None
         # Monotonic counter stamped on every _log_event call, purely so log
@@ -377,14 +407,26 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
 
     def _destroy_row(self, index: int) -> None:
         """Tear down the row widget(s) for items[index], saving any edited
-        text first so it can be restored if the row is paged back in."""
+        text first so it can be restored if the row is paged back in - and,
+        if one of its boxes currently has focus, its cursor position too
+        (self._saved_cursor) plus the slot itself (self._refocus_slot), so
+        _build_row can restore both once this row is rebuilt rather than
+        just silently dropping focus the way scrolling a focused widget
+        off-screen normally would."""
         row = self._row_frames.pop(index, None)
         if row is None:
             return
+        focused = self.focus_get()
         for key in [k for k in self._text_widgets if k[0] == index]:
             text_widget = self._text_widgets.pop(key)
             self._saved_texts[key] = text_widget.get("1.0", "end-1c")
+            self._saved_cursor[key] = text_widget.index("insert")
+            if text_widget is focused:
+                self._refocus_slot = key
             self._text_containers.pop(key, None)
+            detach = self._undo_detach.pop(key, None)
+            if detach is not None:
+                detach()
         self._images.unregister_row(index)
         row.destroy()
 

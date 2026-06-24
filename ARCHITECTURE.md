@@ -78,10 +78,32 @@ debounce/Finalize-button machinery:
   event loop) still catches it. That meant every newly-built row - including
   ones built only because they entered the virtualization buffer
   (`SCROLL_BUFFER_VIEWPORTS`), not because the user actually scrolled them
-  into view - triggered `_on_text_modified`'s `_scroll_into_view`, yanking
-  the canvas to reveal a row the user hadn't scrolled to. `_on_text_modified`
-  now only calls `_scroll_into_view` when the edited box actually has focus,
-  which a phantom build-time event never does.
+  into view - triggered `_on_text_modified`'s `_scroll_box_into_view`,
+  yanking the canvas to reveal a row the user hadn't scrolled to.
+  `_on_text_modified` now only calls `_scroll_box_into_view` when the
+  edited box actually has focus, which a phantom build-time event never
+  does.
+- **Focus/cursor survive a row being torn down, not just edits.** A fast
+  Page Up/Page Down burst can move the canvas several viewports between
+  `_reconcile` passes (each one debounced - see `DEBOUNCE_MS` - so a held
+  key doesn't reconcile on every event), easily skipping past
+  `SCROLL_BUFFER_VIEWPORTS`'s buffer and tearing down a row whose box
+  currently has the focus. `_destroy_row` now records that box's slot
+  (`self._refocus_slot`) and exact cursor index (`self._saved_cursor`,
+  alongside the existing `self._saved_texts`) before tearing it down;
+  `_build_row` restores both, via `after_idle` rather than inline, if/when
+  that same index is rebuilt later - deferred so the restore's own
+  scroll-into-view isn't immediately clobbered by `_reconcile`'s still-
+  pending `_remeasure_built_rows` correction (which runs after
+  `_sync_materialized_rows`/`_build_row` return, in the same `_reconcile`
+  call, if this fired from inside it). Guarded on nothing else having
+  since taken focus (`self._focused_slot() is None and self.focus_get() is
+  not self._finalize_button`) - deliberately not a `self.focus_get() is
+  None` check, since destroying a focused widget hands Tk's focus to an
+  ancestor frame rather than clearing it, so it's never actually `None` by
+  the time the guard runs. `self._saved_cursor` isn't part of the
+  autosaved session format - only `self._saved_texts` is - so a resumed
+  box's cursor still starts at `"1.0"`, same as before this.
 - **Slot-addressed boxes.** Since a row can now have a "message" box (a
   copy of the message's own text) and any number of OCR boxes - one per
   attached image, since a single message can have more than one - a
@@ -163,9 +185,23 @@ debounce/Finalize-button machinery:
   show it only once `canvas.yview()`'s bottom fraction reaches `1.0` (the
   true end of the scrollregion, or trivially true for a transcript that
   fits on screen with nothing to scroll past) - called from `_reconcile`
-  on every scroll-driven update and from `_scroll_into_view` so Tab'ing to
-  the last box reveals it immediately rather than waiting on the next
-  scroll event.
+  on every scroll-driven update and from `_scroll_box_into_view` so
+  Tab'ing to the last box reveals it immediately rather than waiting on
+  the next scroll event.
+- **Per-box, not per-row, scroll-into-view.** `_scroll_box_into_view`
+  (`keyboard_nav.py`) replaced an earlier `_scroll_into_view` that checked
+  only a row's outer bounds against the viewport. A row can stack more
+  than one box - a message's text box, one OCR box per attached image, and
+  a spacer box between/after each (`_build_row`) - and can end up taller
+  than the viewport itself, so the row-level check could find the row
+  "already fully visible" (because some box within it was) while the
+  specific box Tab/Shift-Tab had just focused, or the one the user was
+  typing into, was still only partially onscreen - in the worst case
+  almost entirely covered, with just a sliver poking into view, which the
+  old check's row-level bounds didn't catch as a reason to scroll at all.
+  Computed the same way `_keep_cursor_in_viewport`'s box bounds already
+  were: `self._offset_of(index)` (the row's document-space offset) plus a
+  `winfo_rooty()` delta for the box's offset *within* that row.
 
 ## Spacer slots
 

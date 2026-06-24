@@ -127,7 +127,11 @@ What's in scope for v1:
    *more* likely rather than less, causing a runaway cascade of transitions
    back toward the start of the transcript. Edits survive a row being paged
    out and back in, and the focused text box keeps focus across a transition
-   if it's still in the new window. Typing into a box that's still focused
+   if it's still in the new window - and even if it isn't (e.g. a fast
+   Page Up/Page Down burst that skips straight past the buffered range),
+   focus and the exact cursor position are restored once that row is paged
+   back in, rather than just staying lost for the rest of the session.
+   Typing into a box that's still focused
    but has been scrolled off-screen (the mouse wheel/scrollbar can move the
    viewport without touching focus at all) scrolls its row back into view
    automatically, rather than leaving keystrokes landing somewhere the user
@@ -189,7 +193,10 @@ What's in scope for v1:
    **Down** at the bottom of a box's own view aligns that box's bottom edge
    with the bottom of the window (and **Up** the top edge with the top),
    rather than only the cursor's own line peeking into view;
-   **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo within a single text box.
+   **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo within a single text box - history
+   is kept separately per box and survives that box's row being paged out
+   and back in, though (like everything else not written to the output
+   file) not a full app restart.
 5. **Finalize** — a button that floats over the bottom of the review
    screen, but only once you've scrolled all the way to the end of the
    transcript (or the whole transcript fits on screen with nothing to
@@ -252,6 +259,8 @@ gui_transcription/
       virtualization.py    # pure row-height/visible-range math (no Tk)
       image_loading.py     # lazy image load/unload for review rows
       keyboard_nav.py      # Tab/Page Up-Down/undo keyboard shortcuts
+      text_undo.py          # per-box undo/redo history that survives a
+                          # row being paged out and rebuilt (in-memory only)
       theme.py             # dark theme colors/fonts + ttk Style setup
   app_tests/              # pytest unit tests for all the non-GUI logic
   requirements.txt
@@ -297,7 +306,9 @@ also runs Tcl/Tk's one-time subsystem init. Run
 `py -3.13 -m pytest gui_transcription\app_tests -v -m gui` to include just
 those, or add `-m ""` to run the whole suite including them.
 
-136 tests (160 including the `gui`-marked ones) cover the cleanup regexes,
+145 tests (177 including the `gui`-marked ones, which now also cover a
+box's undo/redo history surviving its row being paged out and back in -
+`text_undo.py`) cover the cleanup regexes,
 HTML parsing/filtering (including the export postamble's declared timezone
 being applied to every message timestamp, the clear error raised when that
 timezone is missing or unparseable, the per-message Discord ID extracted

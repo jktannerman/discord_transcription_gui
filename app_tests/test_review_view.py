@@ -146,6 +146,73 @@ def test_edited_text_survives_a_row_being_paged_out_and_back_in(root, sample_ima
     assert restored == "an edit the user made"
 
 
+def test_undo_history_survives_a_row_being_paged_out_and_back_in(root, sample_image):
+    """The whole point of text_undo.py: Tk's undo stack lives on the Text
+    widget instance, which is destroyed and rebuilt fresh on every page
+    out/in - without replaying the recorded ops back onto the new widget,
+    Ctrl+Z here would have nothing to undo."""
+    items = _items(sample_image)
+    frame, _ = _build_frame(root, items)
+    first_text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    key = (first_text_item, "message")
+    original = items[first_text_item].initial_message_text
+
+    widget = frame._text_widgets[key]
+    widget.insert("end", " edited")
+
+    # Page far away (tears the edited row down) and back to the top again.
+    frame._ensure_materialized(len(items) - 1)
+    frame._canvas.yview_moveto(0.0)
+    frame._reconcile()
+
+    rebuilt = frame._text_widgets[key]
+    assert rebuilt.get("1.0", "end-1c") == original + " edited"
+
+    frame._undo_text(type("Event", (), {"widget": rebuilt})())
+
+    assert rebuilt.get("1.0", "end-1c") == original
+
+
+def test_focusing_a_box_scrolls_the_whole_box_fully_into_view_not_just_its_row(root, sample_image):
+    """Regression test: _scroll_into_view (this method's predecessor) only
+    checked a row's outer bounds. A multi-box row (caption + image, here)
+    can be taller than the viewport, so a box near the row's bottom could
+    end up only slightly overlapping the viewport edge - or almost entirely
+    covered - without triggering a scroll, since the row-level bounds
+    (spanning every box in it) could already satisfy that check.
+    _scroll_box_into_view checks the focused box's own bounds instead, so
+    it always ends up fully onscreen after a Tab/focus."""
+    items = _items(sample_image, count=6)
+    frame, _ = _build_frame(root, items)
+    caption_image_index = next(
+        i for i, item in enumerate(items) if item.initial_message_text and item.image_paths
+    )
+    key = (caption_image_index, "ocr0")
+
+    # Scroll so only a 5px sliver of this row's bottom box - its very top
+    # edge - pokes into view at the bottom of the viewport; the rest of the
+    # box sits below it, offscreen.
+    container_top, container_bottom = _container_bounds(frame, *key)
+    total_height = sum(frame._row_heights)
+    viewport_height = frame._canvas.winfo_height()
+    target_view_bottom = container_top + 5
+    frame._canvas.yview_moveto(max(target_view_bottom - viewport_height, 0) / total_height)
+    frame._reconcile()
+    root.update_idletasks()
+
+    view_bottom_before = frame._canvas.canvasy(frame._canvas.winfo_height())
+    assert container_top < view_bottom_before < container_bottom  # only a sliver overlaps
+
+    frame._focus_text_box(*key)
+    root.update_idletasks()
+
+    container_top, container_bottom = _container_bounds(frame, *key)
+    view_top = frame._canvas.canvasy(0)
+    view_bottom = frame._canvas.canvasy(frame._canvas.winfo_height())
+    assert container_top >= view_top - 1
+    assert container_bottom <= view_bottom + 1
+
+
 def test_collect_edited_texts_returns_initial_text_for_untouched_items(root, sample_image):
     items = _items(sample_image, count=5)
     frame, _ = _build_frame(root, items)
@@ -334,3 +401,93 @@ def test_keep_cursor_in_viewport_does_nothing_when_cursor_already_visible(root, 
     frame._keep_cursor_in_viewport(key, widget)
 
     assert frame._canvas.yview() == view_before
+
+
+def test_destroying_a_focused_rows_box_then_rebuilding_restores_focus_and_cursor(root, sample_image):
+    """Simulates the part of a fast Page Up/Down burst that previously just
+    dropped focus: _destroy_row tearing down a row whose box currently has
+    focus, followed (once scrolling settles) by _build_row materializing
+    that same row again. _build_row should notice (via self._refocus_slot)
+    that this row's box was the one that lost focus, and restore both focus
+    and the exact cursor position - not just re-show the row with the
+    cursor reset to its start."""
+    items = _items(sample_image, count=5)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    frame, _ = _build_frame(root, items)
+
+    key = (text_item, "message")
+    widget = frame._text_widgets[key]
+    widget.focus_force()  # focus_set() alone doesn't reliably win real OS focus in a test run
+    widget.mark_set("insert", "1.3")
+    root.update_idletasks()
+
+    focus_calls = []
+    original_focus_text_box = frame._focus_text_box
+    def _spy_focus_text_box(index, role):
+        focus_calls.append((index, role))
+        return original_focus_text_box(index, role)
+    frame._focus_text_box = _spy_focus_text_box
+
+    frame._destroy_row(text_item)
+    assert frame._refocus_slot == key
+    assert frame._saved_cursor[key] == "1.3"
+
+    frame._build_row(text_item)
+    root.update()  # let the after_idle-scheduled refocus run
+
+    assert focus_calls == [key]
+    assert frame._text_widgets[key].index("insert") == "1.3"
+
+
+def test_destroying_an_unfocused_rows_box_then_rebuilding_does_not_steal_focus(root, sample_image):
+    items = _items(sample_image, count=5)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    frame, _ = _build_frame(root, items)
+    key = (text_item, "message")
+    # Deliberately not focused - _destroy_row should leave self._refocus_slot
+    # untouched (None) for a row whose box never had focus.
+
+    frame._destroy_row(text_item)
+    assert frame._refocus_slot is None
+
+    frame._build_row(text_item)
+    root.update()
+
+    assert frame.focus_get() is None
+
+
+def test_typing_in_a_focused_box_scrolled_offscreen_scrolls_its_row_back_into_view(root, sample_image):
+    """Confirms _on_text_modified's existing snap-back-on-edit behavior:
+    scrolling away (e.g. the mouse wheel) never touches Tk's keyboard focus
+    by itself, so a still-focused, now-offscreen box should scroll its row
+    back into view the moment the user types into it."""
+    items = _items(sample_image, count=20)
+    frame, _ = _build_frame(root, items)
+    key = (0, "message")  # i % 3 == 0 -> text-only, per _items
+    widget = frame._text_widgets[key]
+    widget.focus_force()  # focus_set() alone doesn't reliably win real OS focus in a test run
+    root.update_idletasks()
+
+    # Scroll just past row 0's bottom - enough to leave it out of the
+    # *visible* viewport (so there's something to scroll back into view),
+    # but well within the buffered range _reconcile keeps materialized
+    # (SCROLL_BUFFER_VIEWPORTS=1 full viewport), so it survives the scroll.
+    total_height = sum(frame._row_heights)
+    frame._canvas.yview_moveto((frame._row_heights[0] + 10) / total_height)
+    frame._reconcile()
+    root.update_idletasks()
+    assert key in frame._text_widgets  # row 0 stays materialized (buffer covers it)
+
+    scroll_calls = []
+    original_scroll_box_into_view = frame._scroll_box_into_view
+    def _spy_scroll_box_into_view(box_key):
+        scroll_calls.append(box_key)
+        return original_scroll_box_into_view(box_key)
+    frame._scroll_box_into_view = _spy_scroll_box_into_view
+
+    widget.insert("insert", "x")
+    root.update()  # let the queued <<Modified>> event fire
+
+    # Tk can deliver <<Modified>> more than once for a single edit; what
+    # matters here is that every delivery scrolled this box, not the exact count.
+    assert scroll_calls and set(scroll_calls) == {key}
