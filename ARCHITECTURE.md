@@ -101,10 +101,13 @@ is just enough to orient a new contributor:
   column's placeholders) so it doesn't stretch to fill whatever space is
   left via Tk's `fill="both"`. `ReviewFrame._fixed_text_box_height` decides
   that height once, at build time, from a fixed rule rather than measuring
-  the text's actual wrapped line count: `TEXT_BOX_MIN_LINES` for a
-  "message" box, or its paired image's own on-screen height plus
-  `TEXT_BOX_IMAGE_MARGIN_PX` for an "ocr" box - either way capped at
-  `TEXT_BOX_MAX_HEIGHT_FRACTION` of the screen. A box gets an internal
+  the text's actual wrapped line count: its paired immutable element's own
+  on-screen height (the label's, for a "message" box; the image's, for an
+  "ocr" box) plus `TEXT_BOX_MARGIN_PX`, either way capped at
+  `TEXT_BOX_MAX_HEIGHT_FRACTION` of the screen. An earlier version gave a
+  "message" box a flat 3-line minimum instead, assuming most messages here
+  are short text - in practice many ran to several lines, so that
+  assumption is gone and both roles now use the same rule. A box gets an internal
   scrollbar that shows/hides itself automatically (`_set_text_scrollbar`,
   driven by the box's own `yscrollcommand`) whenever its content overflows
   that fixed height, whether from a long original message or from typing

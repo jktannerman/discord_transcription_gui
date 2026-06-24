@@ -99,7 +99,6 @@ pass changes only timing, never the result.
 """
 
 import tkinter as tk
-import tkinter.font as tkfont
 from tkinter import ttk
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -117,25 +116,19 @@ logger = logging_config.get_logger(__name__)
 # for why this is split out of the main app.log.
 trace_logger = logging_config.get_trace_logger()
 
-# Fixed height (in lines) for a "message"-role editable text box (a copy of
-# the message's own text), regardless of how much text it actually holds -
-# most messages here are short (often one line), and re-measuring a box's
-# height from its wrapped line count on every keystroke (the old
-# _size_text_container/_on_text_modified design) was the source of the
-# review screen's worst scroll-position bugs: it made a row's true height
-# unknowable until the box was built and typed in, which is exactly what
-# _remeasure_built_rows had to keep correcting for (see ARCHITECTURE.md). A
-# little taller than the common one-line case for comfortable editing;
-# anything longer gets an internal scrollbar (_set_text_scrollbar) instead
-# of growing the box.
-TEXT_BOX_MIN_LINES = 3
-
-# Extra headroom (px) added on top of the paired image's own fitted height
-# when sizing an "ocr"-role box (a copy of an image's OCR text) - so the box
-# isn't pixel-for-pixel identical to the image beside it. Like
-# TEXT_BOX_MIN_LINES, this is a fixed amount rather than anything measured
-# from the box's actual content.
-TEXT_BOX_IMAGE_MARGIN_PX = 12
+# Extra headroom (px) added on top of an editable text box's paired
+# immutable element's own height (the label's, for a "message" box; the
+# image's, for an "ocr" box - see _fixed_text_box_height) - so the box isn't
+# pixel-for-pixel identical to whatever it sits beside. This is a fixed
+# amount decided once at build time, not anything measured from the box's
+# own content: re-measuring a box's height from its wrapped line count on
+# every keystroke (the old _size_text_container/_on_text_modified design)
+# was the source of the review screen's worst scroll-position bugs - it
+# made a row's true height unknowable until the box was built and typed in,
+# which is exactly what _remeasure_built_rows had to keep correcting for
+# (see ARCHITECTURE.md). Content longer than the box's fixed height gets an
+# internal scrollbar (_set_text_scrollbar) instead of growing the box.
+TEXT_BOX_MARGIN_PX = 12
 
 # Inner horizontal padding for an editable text box's own content (applied
 # symmetrically by Tk's Text.padx), so wrapped/long lines don't run right up
@@ -221,13 +214,6 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         self._text_widgets: Dict[Tuple[int, str], tk.Text] = {}
         self._text_containers: Dict[Tuple[int, str], tk.Widget] = {}
         self._images = ImageLoader()
-        # Real per-line pixel height for the text box font, used to convert
-        # TEXT_BOX_MIN_LINES into a fixed px height for a "message" box -
-        # see _fixed_text_box_height. Needs a live Tk instance, so it's
-        # measured here rather than module-level.
-        self._text_line_height_px = tkfont.Font(
-            family=theme.TEXT_FONT_FAMILY, size=theme.TEXT_FONT_SIZE
-        ).metrics("linespace")
         # Text captured from a box just before its row is torn down, so
         # edits survive a row being paged out and back in. Absence means
         # "never edited/visited" - fall back to the item's initial_*_text.
@@ -443,8 +429,9 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         # two stacked boxes (and their immutable counterparts) don't touch.
         gap_below_message = 6 if (has_message and has_image) else 0
 
+        message_h = 0
         if has_message:
-            self._build_immutable_message_label(left, item, pady_bottom=gap_below_message)
+            message_h = self._build_immutable_message_label(left, item, pady_bottom=gap_below_message)
 
         image_h = 0
         if has_image:
@@ -452,23 +439,25 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
 
         if has_message:
             self._build_editable_text_box(
-                right, index, "message", item.initial_message_text,
+                right, index, "message", item.initial_message_text, message_h,
                 pady_bottom=gap_below_message,
             )
         if has_image:
             self._build_editable_text_box(
-                right, index, "ocr", item.initial_ocr_text or "", image_h=image_h,
+                right, index, "ocr", item.initial_ocr_text or "", image_h,
             )
 
         return row
 
     def _build_immutable_message_label(
         self, parent: tk.Widget, item: ReviewItem, pady_bottom: int
-    ) -> None:
+    ) -> int:
         """Build the immutable, plain-styled label holding a message's own
         original text (entry.text_lines) - used for a text-only row's
         "original" column, and (stacked above the image) for an image
-        row's caption too, now that both are edited the same way.
+        row's caption too, now that both are edited the same way. Returns
+        the label's measured height in px, used to size its paired editable
+        box (see _fixed_text_box_height).
 
         Font matches the editable text boxes (theme.TEXT_FONT_FAMILY/SIZE)
         rather than the ttk default Label font, for visual consistency
@@ -480,9 +469,11 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         The container's height isn't known until the label exists, so it's
         measured with pack_propagate left on (sizing naturally around the
         label, per its wraplength) before being pinned to a fixed
-        width/height, same as before - this measure-once-at-build-time step
-        is unrelated to (and much cheaper than) the per-keystroke remeasuring
-        this change removes from its paired editable box (see
+        width/height - same end state as the image case
+        (_build_image_placeholder), just measured rather than computed
+        upfront from a cheap header read. This measure-once-at-build-time
+        step is unrelated to (and much cheaper than) the per-keystroke
+        remeasuring removed from its paired editable box (see
         _fixed_text_box_height): the label is never edited, so there's
         nothing to remeasure here after the initial build."""
         preview = "\n".join(item.entry.text_lines).strip() or "(no text)"
@@ -493,8 +484,10 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
             font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE),
         ).pack(anchor="w", fill="x")
         container.update_idletasks()
-        container.configure(width=THUMBNAIL_SIZE[0], height=max(container.winfo_reqheight(), 1))
+        floor_px = max(container.winfo_reqheight(), 1)
+        container.configure(width=THUMBNAIL_SIZE[0], height=floor_px)
         container.pack_propagate(False)
+        return floor_px
 
     def _build_image_placeholder(self, parent: tk.Widget, item: ReviewItem, index: int) -> int:
         """Build the fixed-size image placeholder (actual pixels loaded
@@ -526,16 +519,17 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         index: int,
         role: str,
         initial_text: str,
+        paired_height: int,
         pady_bottom: int = 0,
-        image_h: int = 0,
     ) -> None:
         """Build one editable text box - role is "message" (a copy of the
         message's own text) or "ocr" (an image's OCR text) - and register
         it in the window's bookkeeping dicts, keyed by (index, role) since
         a row can now have one of these, the other, or both stacked
-        text-above-image to match the left column (_build_row). image_h is
-        the paired image's on-screen height (only meaningful, and only
-        passed, for an "ocr" box - see _fixed_text_box_height)."""
+        text-above-image to match the left column (_build_row). paired_height
+        is the on-screen height of this box's immutable counterpart in the
+        left column - the label's, for a "message" box, or the image's, for
+        an "ocr" box - see _fixed_text_box_height."""
         key = (index, role)
         # Fixed-height container (same pack_propagate(False) trick as the
         # left column's placeholders) so the text box's height is exactly
@@ -543,7 +537,7 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         # than stretching to fill whatever vertical space is left in
         # `parent` or being re-measured from content as the user types (see
         # _fixed_text_box_height's docstring for why the latter was removed).
-        text_container = ttk.Frame(parent, height=self._fixed_text_box_height(role, image_h))
+        text_container = ttk.Frame(parent, height=self._fixed_text_box_height(paired_height))
         text_container.pack(side="top", fill="x", pady=(0, pady_bottom))
         text_container.pack_propagate(False)
 
@@ -606,13 +600,19 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
             viewport = self.winfo_screenheight()
         return int(viewport * TEXT_BOX_MAX_HEIGHT_FRACTION)
 
-    def _fixed_text_box_height(self, role: str, image_h: int) -> int:
+    def _fixed_text_box_height(self, paired_height: int) -> int:
         """A box's height (px), decided once at build time from a fixed
-        rule rather than measured from its actual content: TEXT_BOX_MIN_LINES
-        for a "message" box, or its paired image's own on-screen height plus
-        TEXT_BOX_IMAGE_MARGIN_PX for an "ocr" box - either way capped at
-        _max_text_box_height_px, with any overflow handled by the box's own
-        internal scrollbar (_set_text_scrollbar) rather than the box growing.
+        rule rather than measured from its actual content: its paired
+        immutable element's own on-screen height (the label's, for a
+        "message" box; the image's, for an "ocr" box) plus
+        TEXT_BOX_MARGIN_PX, capped at _max_text_box_height_px - any overflow
+        is handled by the box's own internal scrollbar (_set_text_scrollbar)
+        rather than the box growing. Both roles use the same rule (an
+        earlier version gave "message" boxes a flat minimum instead, on the
+        assumption that most messages here are short - in practice many are
+        not, so that assumption is gone and a "message" box now tracks its
+        label's real height the same way an "ocr" box already tracked its
+        image's).
 
         This replaces an earlier design (_size_text_container, removed) that
         measured the text's actual wrapped line count and resized the box to
@@ -625,10 +625,7 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         cheap header read - removes that correction's reason to exist
         instead of just estimating it more carefully."""
         max_px = self._max_text_box_height_px()
-        if role == "ocr":
-            target_px = image_h + TEXT_BOX_IMAGE_MARGIN_PX
-        else:
-            target_px = TEXT_BOX_MIN_LINES * self._text_line_height_px
+        target_px = paired_height + TEXT_BOX_MARGIN_PX
         return max(1, min(target_px, max_px))
 
     def _set_text_scrollbar(

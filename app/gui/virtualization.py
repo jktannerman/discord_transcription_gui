@@ -22,22 +22,20 @@ _TEXT_ROW_CHARS_PER_LINE = _TEXT_ROW_WRAPLENGTH // 7  # ~7px/char at this font s
 _TEXT_ROW_LINE_HEIGHT = 18
 _TEXT_ROW_PADDING = 24
 
-# Mirrors review_view.ReviewFrame._fixed_text_box_height's two fixed-height
-# rules (review_view.py can't be imported from here - it's the one that
-# imports this Tk-free module - so these constants are kept in sync by hand
-# rather than shared): a "message" box is a flat _MESSAGE_BOX_MIN_LINES
-# tall regardless of its content, and an "ocr" box is its paired image's own
-# height plus _IMAGE_BOX_MARGIN_PX. Getting this estimate close to the real
-# eventual height matters more than usual now that the box's height is no
-# longer just a floor under a content-driven size - it's the dominant term
-# for an image row's total height, so a stale/wrong constant here (as
-# _IMAGE_ROW_OVERHEAD, the flat fudge-factor this replaced, became once box
-# auto-growth was removed) overestimates every such row by the same large,
-# constant amount, which is exactly the kind of error that turns into a
-# visible scroll jump once ReviewFrame._remeasure_built_rows corrects it
-# away after the row is actually built.
-_MESSAGE_BOX_MIN_LINES = 3
-_IMAGE_BOX_MARGIN_PX = 12
+# Mirrors review_view.ReviewFrame._fixed_text_box_height's rule
+# (review_view.py can't be imported from here - it's the one that imports
+# this Tk-free module - so this constant is kept in sync by hand rather
+# than shared): an editable box's height is its paired immutable element's
+# own on-screen height (the label's estimate below, for a "message" box;
+# the image's, for an "ocr" box) plus _TEXT_BOX_MARGIN_PX. Getting this
+# estimate close to the real eventual height matters more than usual now
+# that a box's height is no longer just a floor under a content-driven
+# size - it's the dominant term in a row's total height, so a stale/wrong
+# constant here overestimates or underestimates every such row by the same
+# large, constant amount, which is exactly the kind of error that turns
+# into a visible scroll jump once ReviewFrame._remeasure_built_rows
+# corrects it away after the row is actually built.
+_TEXT_BOX_MARGIN_PX = 12
 
 # Extra vertical space (px) a row's own ttk.Frame(relief="groove",
 # borderwidth=1, padding=6) adds on top of its tallest column - 6px padding
@@ -82,7 +80,10 @@ def estimate_row_height(item: ReviewItem) -> int:
     _ROW_FRAME_OVERHEAD_PX for the row's own padding/border. A message with
     both a caption and an image gets _GAP_BELOW_MESSAGE_PX added to
     whichever column total includes the caption element, same as the real
-    layout."""
+    layout. Since the right column is always its left counterpart plus
+    _TEXT_BOX_MARGIN_PX per stacked element, the right column is always the
+    taller of the two - the max() is kept anyway so this stays correct even
+    if that margin is ever changed to zero or removed."""
     has_message = item.initial_message_text is not None
     has_image = item.image_path is not None
     gap = _GAP_BELOW_MESSAGE_PX if (has_message and has_image) else 0
@@ -90,12 +91,13 @@ def estimate_row_height(item: ReviewItem) -> int:
     left = 0
     right = 0
     if has_message:
-        left += _estimate_message_text_height(item) + gap
-        right += _MESSAGE_BOX_MIN_LINES * _TEXT_ROW_LINE_HEIGHT + gap
+        label_h = _estimate_message_text_height(item)
+        left += label_h + gap
+        right += label_h + _TEXT_BOX_MARGIN_PX + gap
     if has_image:
         _, image_h = fitted_image_size(item.image_path)
         left += image_h
-        right += image_h + _IMAGE_BOX_MARGIN_PX
+        right += image_h + _TEXT_BOX_MARGIN_PX
 
     return max(left, right) + _ROW_FRAME_OVERHEAD_PX
 
