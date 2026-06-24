@@ -148,6 +148,13 @@ def test_update_visible_calls_log_event_for_each_load_and_unload():
 
 
 # -- ImageLoader._load_image / _unload_image (real Tk widgets) --------------
+#
+# Only these three tests build a real Tk root - the brief window it creates
+# can flash on screen (most visibly the first Tk() call in a process, which
+# also runs Tcl/Tk's one-time subsystem init), so they're marked "gui" and
+# excluded from the default run (see pyproject.toml's addopts) rather than
+# the whole module, since everything above this point needs no real Tk at
+# all. Run with `-m gui` to include them.
 
 
 @pytest.fixture
@@ -161,6 +168,7 @@ def tk_root():
     root.destroy()
 
 
+@pytest.mark.gui
 def test_load_image_success_sets_photo_on_label(tk_root, small_image):
     loader = ImageLoader()
     label = tk.Label(tk_root)
@@ -171,6 +179,7 @@ def test_load_image_success_sets_photo_on_label(tk_root, small_image):
     assert label.cget("image") != ""
 
 
+@pytest.mark.gui
 def test_load_image_failure_shows_fallback_text_and_marks_loaded_to_avoid_retry_storm(tk_root, tmp_path):
     loader = ImageLoader()
     label = tk.Label(tk_root)
@@ -181,6 +190,7 @@ def test_load_image_failure_shows_fallback_text_and_marks_loaded_to_avoid_retry_
     assert "could not preview" in label.cget("text")
 
 
+@pytest.mark.gui
 def test_unload_image_clears_photo_and_restores_placeholder_text(tk_root, small_image):
     loader = ImageLoader()
     label = tk.Label(tk_root)

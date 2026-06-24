@@ -17,6 +17,15 @@ from gui_transcription.app.chatlog import MessageEntry
 from gui_transcription.app.gui.review_view import ReviewFrame
 from gui_transcription.app.pipeline import ReviewItem
 
+# Unlike the other GUI-backed test files, this one can't withdraw() its
+# root - a withdrawn window never gets real pixel geometry, which these
+# tests need to verify actual row layout - so it's the one that visibly
+# (briefly) appears on screen. Marked "gui" and excluded from the default
+# run (see pyproject.toml's addopts) so it doesn't interrupt other work on
+# the same machine; run explicitly with `-m gui` when you want to exercise
+# the windowing core's actual layout, not just its decision logic.
+pytestmark = pytest.mark.gui
+
 
 @pytest.fixture
 def root():

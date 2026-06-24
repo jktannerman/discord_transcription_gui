@@ -14,6 +14,11 @@ from gui_transcription.app import config
 from gui_transcription.app.gui import main_window
 from gui_transcription.app.gui.main_window import App
 
+# Every test here builds a real App (and so a real Tk root) - excluded from
+# the default run (see pyproject.toml's addopts) since the brief window it
+# creates can flash on screen; run with `-m gui` to include it.
+pytestmark = pytest.mark.gui
+
 
 class _FakeSetupFrame:
     def __init__(

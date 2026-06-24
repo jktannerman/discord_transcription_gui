@@ -1,5 +1,5 @@
-pytesseract
-pyperclip
-beautifulsoup4
-lxml
-Pillow
+pytesseract==0.3.13
+pyperclip==1.10.0
+beautifulsoup4==4.13.5
+lxml==6.0.2
+Pillow==11.3.0

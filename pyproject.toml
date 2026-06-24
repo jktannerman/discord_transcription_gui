@@ -8,11 +8,11 @@ version = "1.0.0"
 description = "Tkinter GUI for transcribing a Discord export's images via OCR"
 requires-python = ">=3.13"
 dependencies = [
-    "pytesseract",
-    "pyperclip",
-    "beautifulsoup4",
-    "lxml",
-    "Pillow",
+    "pytesseract==0.3.13",
+    "pyperclip==1.10.0",
+    "beautifulsoup4==4.13.5",
+    "lxml==6.0.2",
+    "Pillow==11.3.0",
 ]
 
 [project.scripts]
@@ -20,3 +20,9 @@ discord-transcription-gui = "app.main:main"
 
 [tool.setuptools]
 packages = ["app", "app.gui"]
+
+[tool.pytest.ini_options]
+markers = [
+    "gui: opens a real (non-withdrawn) Tk window to test real layout/geometry - briefly visible on screen, so excluded by default; run with `-m gui` (or `-m \"\"` for the whole suite including these).",
+]
+addopts = "-m \"not gui\""

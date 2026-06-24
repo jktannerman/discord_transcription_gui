@@ -90,7 +90,11 @@ What's in scope for v1 (by design, agreed with the project owner):
    filtering, only as the stable key resumed sessions match saved edits
    against (see "Setup screen" above). A message whose container is
    missing the ID raises a clear error rather than silently falling back
-   to a less stable identity.
+   to a less stable identity. Either error is caught where parsing runs
+   (`App._on_ocr_done`) and shown in the same error dialog OCR failures
+   use, rather than being left to escape uncaught from a background Tk
+   callback - which would otherwise leave the app stuck on the OCR
+   progress screen with no indication anything went wrong.
 4. **Review screen** — an infinite-scroll window listing every approved
    message in order, mirroring the original chatlog. Every row has the same
    two-column shape, both columns stacked text-above-image when a message
@@ -209,9 +213,16 @@ gui_transcription/
       setup_view.py        # setup screen: file/folder pickers, start date,
                           # cache checkbox, approved-users list
       progress_view.py    # OCR progress bar
-      review_view.py       # the review screen: virtualized row window,
-                          # Finalize button (delegates layout/images/
-                          # keyboard nav to the three modules below)
+      review_view.py       # the review screen's windowing core (reconcile/
+                          # paging/scroll-correction) + Finalize button -
+                          # delegates row construction, images, and
+                          # keyboard nav to the four modules below
+      row_building.py      # builds a single row's widgets (labels, image
+                          # placeholders, editable text boxes/scrollbars)
+      layout_constants.py  # row/text-box sizing constants shared by
+                          # row_building.py and virtualization.py, so the
+                          # real layout and its pre-build estimate can't
+                          # drift out of sync with each other
       virtualization.py    # pure row-height/visible-range math (no Tk)
       image_loading.py     # lazy image load/unload for review rows
       keyboard_nav.py      # Tab/Page Up-Down/undo keyboard shortcuts
@@ -251,7 +262,16 @@ py -3.13 -m app.main
 py -3.13 -m pytest gui_transcription\app_tests -v
 ```
 
-111 tests cover the cleanup regexes, HTML parsing/filtering (including the
+This skips every test that builds a real Tk window by default (marked
+`gui` in `pyproject.toml` - all of `test_review_view.py`, `test_main_window_
+ocr_error.py`, and `test_main_window_on_start.py`, plus three tests in
+`test_image_loading.py`), since even a withdrawn one can briefly flash on
+screen - most noticeably the very first `Tk()` call in a process, which
+also runs Tcl/Tk's one-time subsystem init. Run
+`py -3.13 -m pytest gui_transcription\app_tests -v -m gui` to include just
+those, or add `-m ""` to run the whole suite including them.
+
+150 tests cover the cleanup regexes, HTML parsing/filtering (including the
 export postamble's declared timezone being applied to every message
 timestamp, the clear error raised when that timezone is missing or
 unparseable, the per-message Discord ID extracted from each
@@ -275,13 +295,28 @@ display), and resume's message-id-based edit/focus matching
 (`app/gui/main_window.py`'s `_match_saved_edits`/`_match_focus_slot` -
 edits surviving messages appended or inserted mid-transcript in a
 re-export, orphaned edits for now-filtered-out messages being dropped, and
-a stale focus slot falling back to no restore). The GUI itself only has a
-manual smoke test (window
-construction, the review screen with synthetic text-only/image-only/
-image-with-caption items, an edit-then-finalize pass against a temp
-output file, and a resumed session's saved edits/focus restoring
-correctly) — there's no automated test driving real Tk button clicks or a
-live Tesseract install.
+a stale focus slot falling back to no restore), `App._on_start`'s
+validation branches (missing fields, an invalid start date, an empty
+approved-users list) and its pending-session resume prompt, the malformed-
+chatlog error path (`App._on_ocr_done` surfacing a clear dialog instead of
+letting the error escape uncaught from a background Tk callback), image
+preview sizing/visibility (`app/gui/image_loading.py`'s aspect-fit math and
+its load/unload viewport-boundary decision, plus real load/failure/unload
+behavior against actual Tk widgets), the editable text box height rule
+(`app/gui/row_building.py`'s `_fixed_text_box_height` capping logic), and
+the review screen's windowing core itself (`ReviewFrame._reconcile`'s
+idempotency, paging to the end of a long transcript, a far-away Tab/resume
+target materializing correctly, edits surviving a row being paged out and
+back in, and the Finalize button's visibility toggle) - previously this
+rested entirely on manual smoke-testing, since it's the most
+architecturally involved (and historically bug-prone) part of the app; see
+`ARCHITECTURE.md`. There's still no automated test driving real Tk button
+*clicks* (only direct method calls standing in for them) or a live
+Tesseract install - the rest of the GUI (`setup_view.py`'s widget wiring)
+is still only covered by a manual smoke test (window construction, the
+review screen with synthetic text-only/image-only/image-with-caption
+items, an edit-then-finalize pass against a temp output file, and a
+resumed session's saved edits/focus restoring correctly).
 
 ## Known gaps / next steps
 

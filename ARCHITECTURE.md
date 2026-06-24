@@ -9,7 +9,18 @@ and logging conventions, for whoever's about to change either.
 The review screen (`app/gui/review_view.py`) is the most architecturally
 involved part of this app. Its module docstring is the canonical
 explanation and worth reading in full before changing it; the summary here
-is just enough to orient a new contributor:
+is just enough to orient a new contributor.
+
+Building a single row's widgets (`_build_row` and the label/image
+placeholder/editable-text-box helpers it calls) lives in
+`app/gui/row_building.py`'s `RowBuildingMixin`, mixed into `ReviewFrame`
+the same way `keyboard_nav.py`'s `KeyboardNavMixin` already is - it
+doesn't carry the same "disagreed with itself across files" risk the
+windowing core below does, since each row's widgets are self-contained
+once built. `review_view.py` itself keeps only that windowing core
+(`_reconcile`/`_sync_materialized_rows`/`_remeasure_built_rows`/
+`_offset_of`/`_ensure_materialized`/`_destroy_row`) plus the scroll/
+debounce/Finalize-button machinery:
 
 - **Row virtualization.** Only a small window of rows (around the visible
   viewport) is ever built as real Tk widgets - `ReviewFrame._reconcile`
@@ -48,12 +59,15 @@ is just enough to orient a new contributor:
   `estimate_row_height` now computes each column's height the same way
   `_build_row` actually lays it out (left: label and/or image, stacked;
   right: message and/or ocr box, mirroring `_fixed_text_box_height`'s
-  rules; both plus `_GAP_BELOW_MESSAGE_PX` when a caption sits above an
-  image) and takes the taller of the two, rather than a flat constant -
-  see `virtualization.py`'s module-level comments for why these constants
-  have to be kept in sync with `_fixed_text_box_height` by hand instead of
-  imported, since `review_view.py` is the one that imports from
-  `virtualization.py`, not the other way around.
+  rules; both plus `GAP_BELOW_MESSAGE_PX` when a caption sits above an
+  image) and takes the taller of the two, rather than a flat constant.
+  The margin/gap/row-overhead constants both sides need (`TEXT_BOX_MARGIN_
+  PX`, `GAP_BELOW_MESSAGE_PX`, `ROW_FRAME_OVERHEAD_PX`) live in their own
+  Tk-free `app/gui/layout_constants.py` module that both `row_building.py`
+  (the real layout) and `virtualization.py` (the estimate) import - this
+  replaced an earlier design where each side hardcoded its own copy of the
+  same numbers "kept in sync by hand," which is exactly the kind of drift
+  that caused this estimate/reality mismatch in the first place.
 - **`<<Modified>>` fires on a box's initial population, not just real user
   edits.** `_build_editable_text_box` inserts a box's initial text and
   immediately calls `edit_modified(False)`, intending to stop that insert
@@ -82,7 +96,7 @@ is just enough to orient a new contributor:
   resume's saved focus position addresses a box by (see the README's
   "Setup screen" description) - a plain item index couldn't disambiguate
   which of a row's two boxes to refocus.
-- **Per-row left-column sizing.** Every row's left column is the same fixed
+- **Per-row left-column sizing.** (`row_building.RowBuildingMixin`.) Every row's left column is the same fixed
   width (`THUMBNAIL_SIZE[0]` in `app/gui/image_loading.py`), whether it
   holds an image, the immutable original-text label, or both stacked
   text-above-image - so every row's column pairs line up neatly across the
@@ -96,10 +110,11 @@ is just enough to orient a new contributor:
   measures it with the container's `pack_propagate` left on before pinning
   both dimensions, rather than computing it upfront the way
   `fitted_image_size` does for images.
-- **Per-box text box sizing.** Each editable text box lives in its own
-  fixed-height container (`pack_propagate(False)`, same trick as the left
-  column's placeholders) so it doesn't stretch to fill whatever space is
-  left via Tk's `fill="both"`. `ReviewFrame._fixed_text_box_height` decides
+- **Per-box text box sizing.** (`row_building.RowBuildingMixin`, mixed into
+  `ReviewFrame` - see the note at the top of this section.) Each editable
+  text box lives in its own fixed-height container (`pack_propagate(False)`,
+  same trick as the left column's placeholders) so it doesn't stretch to
+  fill whatever space is left via Tk's `fill="both"`. `_fixed_text_box_height` decides
   that height once, at build time, from a fixed rule rather than measuring
   the text's actual wrapped line count: its paired immutable element's own
   on-screen height (the label's, for a "message" box; the image's, for an
