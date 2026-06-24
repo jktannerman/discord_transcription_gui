@@ -35,6 +35,25 @@ is just enough to orient a new contributor:
   calls the same cheap, header-only `fitted_image_size` read already used to
   size the real placeholder, instead of a flat constant, so there's far
   less left for `_remeasure_built_rows` to ever need to correct.
+
+  The fixed-height text box policy (see "Per-box text box sizing" below)
+  removed most of what was left to estimate, but also moved the goalposts:
+  once a box's height stopped being a content-driven floor and became the
+  dominant term in an image row's total height, `estimate_row_height`'s old
+  flat per-row overhead constant (sized for the previous auto-growing box's
+  typical chrome) became a large, *systematic* overestimate instead of a
+  cosmetic one - every image row over by the same ~190px, visible as
+  occasional counterintuitive scroll jumps in `scroll_trace.log`'s
+  `remeasure_mismatch` events even after the text-box-height change.
+  `estimate_row_height` now computes each column's height the same way
+  `_build_row` actually lays it out (left: label and/or image, stacked;
+  right: message and/or ocr box, mirroring `_fixed_text_box_height`'s
+  rules; both plus `_GAP_BELOW_MESSAGE_PX` when a caption sits above an
+  image) and takes the taller of the two, rather than a flat constant -
+  see `virtualization.py`'s module-level comments for why these constants
+  have to be kept in sync with `_fixed_text_box_height` by hand instead of
+  imported, since `review_view.py` is the one that imports from
+  `virtualization.py`, not the other way around.
 - **`<<Modified>>` fires on a box's initial population, not just real user
   edits.** `_build_editable_text_box` inserts a box's initial text and
   immediately calls `edit_modified(False)`, intending to stop that insert
