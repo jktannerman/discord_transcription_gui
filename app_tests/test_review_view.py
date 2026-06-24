@@ -58,18 +58,18 @@ def _items(sample_image, count=40):
     for i in range(count):
         if i % 3 == 0:
             items.append(ReviewItem(
-                entry=MessageEntry(message_id=str(i), text_lines=[f"text only {i}"], image_name=None),
-                image_path=None, initial_message_text=f"text only {i}", initial_ocr_text=None,
+                entry=MessageEntry(message_id=str(i), text_lines=[f"text only {i}"], image_names=[]),
+                image_paths=[], initial_message_text=f"text only {i}", initial_ocr_texts=[],
             ))
         elif i % 3 == 1:
             items.append(ReviewItem(
-                entry=MessageEntry(message_id=str(i), text_lines=[], image_name="sample.png"),
-                image_path=sample_image, initial_message_text=None, initial_ocr_text=f"ocr {i}",
+                entry=MessageEntry(message_id=str(i), text_lines=[], image_names=["sample.png"]),
+                image_paths=[sample_image], initial_message_text=None, initial_ocr_texts=[f"ocr {i}"],
             ))
         else:
             items.append(ReviewItem(
-                entry=MessageEntry(message_id=str(i), text_lines=[f"caption {i}"], image_name="sample.png"),
-                image_path=sample_image, initial_message_text=f"caption {i}", initial_ocr_text=f"ocr {i}",
+                entry=MessageEntry(message_id=str(i), text_lines=[f"caption {i}"], image_names=["sample.png"]),
+                image_paths=[sample_image], initial_message_text=f"caption {i}", initial_ocr_texts=[f"ocr {i}"],
             ))
     return items
 
@@ -159,11 +159,10 @@ def test_collect_edited_texts_returns_initial_text_for_untouched_items(root, sam
     collected = frame.collect_edited_texts()
 
     assert len(collected) == len(items)
-    for (message_text, ocr_text), item in zip(collected, items):
+    for (message_text, ocr_texts), item in zip(collected, items):
         if item.initial_message_text is not None:
             assert message_text == item.initial_message_text
-        if item.image_path is not None:
-            assert ocr_text == (item.initial_ocr_text or "")
+        assert ocr_texts == [text or "" for text in item.initial_ocr_texts]
 
 
 def test_finalize_button_visible_for_a_transcript_that_fits_on_screen(root, sample_image):
@@ -201,8 +200,8 @@ def test_resuming_session_restores_saved_edit_and_focus(root, sample_image):
     there in a live app."""
     items = _items(sample_image, count=5)
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
-    saved_texts = [(None, None)] * len(items)
-    saved_texts[text_item] = ("a resumed edit", None)
+    saved_texts = [(None, [None] * len(item.image_paths)) for item in items]
+    saved_texts[text_item] = ("a resumed edit", [None] * len(items[text_item].image_paths))
 
     finalized = []
     frame = ReviewFrame(

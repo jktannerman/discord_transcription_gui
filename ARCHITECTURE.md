@@ -57,12 +57,13 @@ debounce/Finalize-button machinery:
   occasional counterintuitive scroll jumps in `scroll_trace.log`'s
   `remeasure_mismatch` events even after the text-box-height change.
   `estimate_row_height` now computes each column's height the same way
-  `_build_row` actually lays it out (left: label and/or image, stacked;
-  right: message and/or ocr box, mirroring `_fixed_text_box_height`'s
-  rules; both plus `GAP_BELOW_MESSAGE_PX` when a caption sits above an
-  image) and takes the taller of the two, rather than a flat constant.
-  The margin/gap/row-overhead constants both sides need (`TEXT_BOX_MARGIN_
-  PX`, `GAP_BELOW_MESSAGE_PX`, `ROW_FRAME_OVERHEAD_PX`) live in their own
+  `_build_row` actually lays it out (left: label and/or images, stacked;
+  right: message box and/or one OCR box per image, mirroring
+  `_fixed_text_box_height`'s rules; every stacked element but the last -
+  caption, then each image - plus `GAP_BETWEEN_STACKED_PX`) and takes the
+  taller of the two, rather than a flat constant. The margin/gap/row-
+  overhead constants both sides need (`TEXT_BOX_MARGIN_PX`,
+  `GAP_BETWEEN_STACKED_PX`, `ROW_FRAME_OVERHEAD_PX`) live in their own
   Tk-free `app/gui/layout_constants.py` module that both `row_building.py`
   (the real layout) and `virtualization.py` (the estimate) import - this
   replaced an earlier design where each side hardcoded its own copy of the
@@ -82,20 +83,29 @@ debounce/Finalize-button machinery:
   now only calls `_scroll_into_view` when the edited box actually has focus,
   which a phantom build-time event never does.
 - **Slot-addressed boxes.** Since a row can now have a "message" box (a
-  copy of the message's own text), an "ocr" box (an image's OCR text), or
-  both, a single item index is no longer enough to identify one box.
-  Every per-box dict in `ReviewFrame` (`_text_widgets`, `_text_containers`,
-  `_box_floor_px`, `_saved_texts`) is keyed by `(item_index, role)` instead,
-  and `self._slots` is the flat, transcript-ordered list of every
+  copy of the message's own text) and any number of OCR boxes - one per
+  attached image, since a single message can have more than one - a
+  plain item index is no longer enough to identify one box. Every per-box
+  dict in `ReviewFrame` (`_text_widgets`, `_text_containers`,
+  `_box_floor_px`, `_saved_texts`) is keyed by `(item_index, role)`
+  instead, where `role` is `"message"` or `"ocr{N}"` (the Nth attached
+  image's OCR box, 0-indexed in attachment order) - encoding the image
+  index into the role string this way, rather than widening every key to
+  a 3-tuple, kept the change confined to how `role` strings are
+  generated/parsed rather than touching every dict's key shape.
+  `self._slots` is the flat, transcript-ordered list of every
   `(item_index, role)` pair that exists across all items - built once in
-  `__init__` from each item's `initial_message_text`/`image_path` (a
-  "message" slot whenever the former isn't None, an "ocr" slot whenever
-  the latter isn't), message before ocr. This is what Tab/Shift-Tab
-  navigate (`keyboard_nav.py`'s `_move_focus`, stepping through
-  `self._slots` by `self._slot_positions[slot]`) and what session
-  resume's saved focus position addresses a box by (see the README's
-  "Setup screen" description) - a plain item index couldn't disambiguate
-  which of a row's two boxes to refocus.
+  `__init__` from each item's `initial_message_text`/`image_paths` (a
+  "message" slot whenever the former isn't None, then one `"ocr{i}"` slot
+  per entry in the latter), message before every image's OCR slot. This
+  is what Tab/Shift-Tab navigate (`keyboard_nav.py`'s `_move_focus`,
+  stepping through `self._slots` by `self._slot_positions[slot]`) and what
+  session resume's saved focus position addresses a box by (see the
+  README's "Setup screen" description) - a plain item index couldn't
+  disambiguate which of a row's boxes to refocus. `ImageLoader` mirrors
+  this with its own `(item_index, image_index)`-keyed slots (see
+  `app/gui/image_loading.py`), since a row can likewise now load/unload
+  more than one image.
 - **Per-row left-column sizing.** (`row_building.RowBuildingMixin`.) Every row's left column is the same fixed
   width (`THUMBNAIL_SIZE[0]` in `app/gui/image_loading.py`), whether it
   holds an image, the immutable original-text label, or both stacked

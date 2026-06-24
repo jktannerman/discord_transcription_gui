@@ -84,8 +84,13 @@ What's in scope for v1 (by design, agreed with the project owner):
    convert every message's timestamp to a true UTC epoch (matching how the
    start date and the next run's recorded start date are both handled in
    UTC too). A chatlog export missing that postamble line raises a clear
-   error rather than silently guessing a timezone. Each kept message also
-   keeps Discord's own per-message ID (the export's `data-message-id`,
+   error rather than silently guessing a timezone. A message's attached
+   images are read from every `chatlog__attachment` block it has, not just
+   the first - Discord allows more than one image per message, and each
+   gets its own OCR pass and its own editable box on the review screen (see
+   "Review screen" below), in the same order they appear in the export.
+   Each kept message also keeps Discord's own per-message ID (the export's
+   `data-message-id`,
    read from its `chatlog__message-container` wrapper) - not used for
    filtering, only as the stable key resumed sessions match saved edits
    against (see "Setup screen" above). A message whose container is
@@ -97,19 +102,21 @@ What's in scope for v1 (by design, agreed with the project owner):
    progress screen with no indication anything went wrong.
 4. **Review screen** — an infinite-scroll window listing every approved
    message in order, mirroring the original chatlog. Every row has the same
-   two-column shape, both columns stacked text-above-image when a message
+   two-column shape, both columns stacked text-above-images when a message
    has both (matching Discord's own layout): an immutable left column (the
-   message's own original text, its image, or both) paired with the
+   message's own original text, its image(s), or both) paired with the
    matching editable box(es) on the right — a copy of the message's own
-   text whenever it has any, and/or a box pre-filled with its image's OCR
-   text (all paragraphs joined together, with empty paragraphs - including
-   the trailing blank line Tesseract routinely leaves at the end of a
-   page - dropped rather than left as stray blank lines in the box and the
-   eventual output) whenever it has an image,
-   independently editable, so a message with both a caption and an image
-   gets two separate boxes rather than one covering both. Copy, paste, and
-   arbitrary edits are all allowed in every text box, nothing is parsed or
-   restricted. Only a bounded window of rows (12 by default) is
+   text whenever it has any, and one box per attached image pre-filled with
+   that image's own OCR text (all paragraphs joined together, with empty
+   paragraphs - including the trailing blank line Tesseract routinely
+   leaves at the end of a page - dropped rather than left as stray blank
+   lines in the box and the eventual output). A message can have more than
+   one image attachment (Discord allows several per message) - each gets
+   its own independently-editable OCR box, stacked in attachment order, the
+   same way a caption and an image each get their own box rather than one
+   covering both. Copy, paste, and arbitrary edits are all allowed in every
+   text box, nothing is parsed or restricted. Only a bounded window of rows
+   (12 by default) is
    ever built as actual widgets at once; scrolling near either edge of that
    window pages the next/previous half-window in and tears the opposite
    half down, so scrolling stays responsive no matter how long the
@@ -144,27 +151,27 @@ What's in scope for v1 (by design, agreed with the project owner):
    so it still reads as visually distinct from the editable copy beside
    it. Each editable text box's height is fixed up front rather than
    resized to fit its content as you type: it matches its paired immutable
-   element's own on-screen height — the label's, for a "message" box (a
-   copy of the message's own text), or the image's, for an "ocr" box (an
-   image's OCR text) — plus a small margin, capped at roughly 70% of the
-   screen's height. It never grows past that fixed height for a long
-   message or a lot of typing — it gets its own internal scrollbar instead
-   (appearing/disappearing automatically based on whether the text actually
-   overflows the box). Scrolling the mouse wheel while hovering over a
-   text box that has its own scrollbar scrolls *that box* until it hits the
-   end of its content, then further scrolling in the same direction falls
-   through to scrolling the whole review window, same as if the box
-   weren't there.
+   element's own on-screen height — the label's, for the "message" box (a
+   copy of the message's own text), or that image's, for one of the "ocr"
+   boxes (an image's OCR text, one per attachment) — plus a small margin,
+   capped at roughly 70% of the screen's height. It never grows past that
+   fixed height for a long message or a lot of typing — it gets its own
+   internal scrollbar instead (appearing/disappearing automatically based
+   on whether the text actually overflows the box). Scrolling the mouse
+   wheel while hovering over a text box that has its own scrollbar scrolls
+   *that box* until it hits the end of its content, then further scrolling
+   in the same direction falls through to scrolling the whole review
+   window, same as if the box weren't there.
 
    Keyboard shortcuts on the review screen: **Ctrl+Backspace** deletes the
    previous word; **Tab**/**Shift+Tab** move between text boxes in
-   transcript order (a message with both a message-text and an OCR box
-   visits the message-text one first, matching their top-to-bottom order
-   on screen; paging the window in if needed), landing on the Finalize
-   button once there's no further box; **Page Up**/**Page Down** scroll
-   the whole window, overriding Tk's default of scrolling within whichever
-   text box has focus; **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo within a
-   single text box.
+   transcript order (a message visits its message-text box first, if it
+   has one, then one OCR box per attached image, in attachment order,
+   matching their top-to-bottom order on screen; paging the window in if
+   needed), landing on the Finalize button once there's no further box;
+   **Page Up**/**Page Down** scroll the whole window, overriding Tk's
+   default of scrolling within whichever text box has focus;
+   **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo within a single text box.
 5. **Finalize** — a button that floats over the bottom of the review
    screen, but only once you've scrolled all the way to the end of the
    transcript (or the whole transcript fits on screen with nothing to
@@ -271,31 +278,42 @@ also runs Tcl/Tk's one-time subsystem init. Run
 `py -3.13 -m pytest gui_transcription\app_tests -v -m gui` to include just
 those, or add `-m ""` to run the whole suite including them.
 
-150 tests cover the cleanup regexes, HTML parsing/filtering (including the
-export postamble's declared timezone being applied to every message
-timestamp, the clear error raised when that timezone is missing or
-unparseable, the per-message Discord ID extracted from each
-`chatlog__message-container`'s `data-message-id`, and the clear error
-raised when that container is missing), OCR paragraph splitting and
-backend dispatch, the JSON log formatter, JSON state
-persistence (run dates, OCR cache and in-progress sessions both kept
-per-chatlog/per-folder indefinitely rather than as a single global slot,
-recent-path history), start-date validation, review-item building/output-writing
-(including a text-only message's editable spacing copy standing in for its
-immutable original when written out, and a message with both a caption
-and an image getting two independently-edited text blocks), the OCR batch
-runner/cache short-circuit, the atomic-write-plus-backup-rotation/recovery
-behavior of every state file (`app/state.py`), and the finalize pass (cleanup + run-date +
+136 tests (160 including the `gui`-marked ones) cover the cleanup regexes,
+HTML parsing/filtering (including the export postamble's declared timezone
+being applied to every message timestamp, the clear error raised when that
+timezone is missing or unparseable, the per-message Discord ID extracted
+from each `chatlog__message-container`'s `data-message-id`, the clear
+error raised when that container is missing, and - run against a real
+DiscordChatExporter export fixture, `example_inputs/short_test_input.html`
+- every image attachment a message has being picked up rather than just
+the first), OCR paragraph splitting and backend dispatch, the JSON log
+formatter, JSON state persistence (run dates, OCR cache and in-progress
+sessions both kept per-chatlog/per-folder indefinitely rather than as a
+single global slot, recent-path history), start-date validation,
+review-item building/output-writing (including a text-only message's
+editable spacing copy standing in for its immutable original when written
+out, a message with both a caption and an image getting two
+independently-edited text blocks, and a message with multiple images
+getting one independently-edited OCR block per image, each falling back to
+its own original OCR text when not edited), the OCR batch runner/cache
+short-circuit, the atomic-write-plus-backup-rotation/recovery behavior of
+every state file (`app/state.py`), and the finalize pass (cleanup + run-date +
 clipboard + BREAK-marker bookmarking), the review screen's slot-based
 keyboard navigation (`_move_focus` stepping through `(item_index, role)`
-slots in transcript order, message-before-ocr for a row with both), its
-row-height estimation/visible-range math (`app/gui/virtualization.py`,
-the part of the windowing logic that's pure enough to unit-test without a
-display), and resume's message-id-based edit/focus matching
+slots in transcript order, message before one "ocrN" slot per attached
+image), its row-height estimation/visible-range math
+(`app/gui/virtualization.py`, the part of the windowing logic that's pure
+enough to unit-test without a display, including a row with multiple
+images estimating taller than one with a single image), and resume's
+message-id-based edit/focus matching
 (`app/gui/main_window.py`'s `_match_saved_edits`/`_match_focus_slot` -
 edits surviving messages appended or inserted mid-transcript in a
-re-export, orphaned edits for now-filtered-out messages being dropped, and
-a stale focus slot falling back to no restore), `App._on_start`'s
+re-export, orphaned edits for now-filtered-out messages being dropped, a
+saved message's per-image OCR edits being aligned back onto its current
+images by position (padding with "not edited" if a re-export gave that
+message more images than the saved session knew about, and ignoring any
+extras if it gave it fewer), and a stale focus slot falling back to no
+restore), `App._on_start`'s
 validation branches (missing fields, an invalid start date, an empty
 approved-users list) and its pending-session resume prompt, the malformed-
 chatlog error path (`App._on_ocr_done` surfacing a clear dialog instead of
@@ -314,9 +332,10 @@ architecturally involved (and historically bug-prone) part of the app; see
 *clicks* (only direct method calls standing in for them) or a live
 Tesseract install - the rest of the GUI (`setup_view.py`'s widget wiring)
 is still only covered by a manual smoke test (window construction, the
-review screen with synthetic text-only/image-only/image-with-caption
-items, an edit-then-finalize pass against a temp output file, and a
-resumed session's saved edits/focus restoring correctly).
+review screen with synthetic text-only/image-only/image-with-caption/
+multiple-images-on-one-message items, an edit-then-finalize pass against a
+temp output file, and a resumed session's saved edits/focus restoring
+correctly).
 
 ## Known gaps / next steps
 

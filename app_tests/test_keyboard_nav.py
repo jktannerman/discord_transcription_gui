@@ -37,8 +37,8 @@ class _NavStub(KeyboardNavMixin):
         for idx, item in enumerate(items):
             if item.initial_message_text is not None:
                 self._slots.append((idx, "message"))
-            if item.image_path is not None:
-                self._slots.append((idx, "ocr"))
+            for image_index in range(len(item.image_paths)):
+                self._slots.append((idx, f"ocr{image_index}"))
         self._slot_positions = {slot: pos for pos, slot in enumerate(self._slots)}
         self._text_widgets = {slot: _FakeTextWidget(self, slot) for slot in self._slots}
         self._finalize_button = _FakeTextWidget(self, "finalize_button")
@@ -59,33 +59,46 @@ class _NavStub(KeyboardNavMixin):
 
 def _text_item():
     return ReviewItem(
-        entry=MessageEntry(message_id="msg-text", text_lines=["hi"], image_name=None),
-        image_path=None, initial_message_text="hi", initial_ocr_text=None,
+        entry=MessageEntry(message_id="msg-text", text_lines=["hi"], image_names=[]),
+        image_paths=[], initial_message_text="hi", initial_ocr_texts=[],
     )
 
 
 def _image_item():
     return ReviewItem(
-        entry=MessageEntry(message_id="msg-image", text_lines=[], image_name="card.png"),
-        image_path=Path("card.png"), initial_message_text=None, initial_ocr_text="",
+        entry=MessageEntry(message_id="msg-image", text_lines=[], image_names=["card.png"]),
+        image_paths=[Path("card.png")], initial_message_text=None, initial_ocr_texts=[""],
     )
 
 
 def _image_with_caption_item():
     return ReviewItem(
-        entry=MessageEntry(message_id="msg-image-caption", text_lines=["caption"], image_name="card.png"),
-        image_path=Path("card.png"), initial_message_text="caption", initial_ocr_text="",
+        entry=MessageEntry(message_id="msg-image-caption", text_lines=["caption"], image_names=["card.png"]),
+        image_paths=[Path("card.png")], initial_message_text="caption", initial_ocr_texts=[""],
+    )
+
+
+def _two_images_item():
+    return ReviewItem(
+        entry=MessageEntry(message_id="msg-two-images", text_lines=[], image_names=["a.png", "b.png"]),
+        image_paths=[Path("a.png"), Path("b.png")], initial_message_text=None,
+        initial_ocr_texts=["", ""],
     )
 
 
 def test_slots_built_message_before_ocr_for_an_item_with_both():
     nav = _NavStub([_image_with_caption_item()])
-    assert nav._slots == [(0, "message"), (0, "ocr")]
+    assert nav._slots == [(0, "message"), (0, "ocr0")]
 
 
 def test_slots_skip_roles_an_item_does_not_have():
     nav = _NavStub([_text_item(), _image_item()])
-    assert nav._slots == [(0, "message"), (1, "ocr")]
+    assert nav._slots == [(0, "message"), (1, "ocr0")]
+
+
+def test_slots_built_one_per_image_in_attachment_order():
+    nav = _NavStub([_two_images_item()])
+    assert nav._slots == [(0, "ocr0"), (0, "ocr1")]
 
 
 def test_move_focus_forward_from_nothing_focused_lands_on_first_slot():
@@ -97,7 +110,7 @@ def test_move_focus_forward_from_nothing_focused_lands_on_first_slot():
 def test_move_focus_backward_from_nothing_focused_lands_on_last_slot():
     nav = _NavStub([_text_item(), _image_item()])
     nav._move_focus(-1)
-    assert nav.focus_get().key == (1, "ocr")
+    assert nav.focus_get().key == (1, "ocr0")
 
 
 def test_move_focus_forward_advances_through_slots_in_order():
@@ -105,9 +118,17 @@ def test_move_focus_forward_advances_through_slots_in_order():
     nav._move_focus(1)
     assert nav.focus_get().key == (0, "message")
     nav._move_focus(1)
-    assert nav.focus_get().key == (0, "ocr")
+    assert nav.focus_get().key == (0, "ocr0")
     nav._move_focus(1)
     assert nav.focus_get().key == (1, "message")
+
+
+def test_move_focus_advances_through_every_image_slot_of_a_multi_image_message():
+    nav = _NavStub([_two_images_item()])
+    nav._move_focus(1)
+    assert nav.focus_get().key == (0, "ocr0")
+    nav._move_focus(1)
+    assert nav.focus_get().key == (0, "ocr1")
 
 
 def test_move_focus_forward_off_the_end_focuses_finalize_button():
@@ -122,7 +143,7 @@ def test_move_focus_backward_from_finalize_button_focuses_last_slot():
     nav = _NavStub([_text_item(), _image_item()])
     nav._finalize_button.focus_set()
     nav._move_focus(-1)
-    assert nav.focus_get().key == (1, "ocr")
+    assert nav.focus_get().key == (1, "ocr0")
 
 
 def test_move_focus_backward_off_the_start_stays_put():
