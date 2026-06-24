@@ -1,8 +1,9 @@
 from gui_transcription.app.cleanup import clean_transcript
 
-
-def test_pipe_replaced_with_capital_i():
-    assert clean_transcript("Health: ||||") == "Health: IIII"
+# The "|" -> "I" OCR-misread fix that used to be covered here moved to
+# ocr_corrections.py (see app/ocr_corrections.txt and
+# test_ocr_corrections.py) - it now runs per-image, before the user ever
+# sees the text, rather than over the whole output file at Finalize time.
 
 
 def test_deliberately_large_gap_is_not_collapsed():

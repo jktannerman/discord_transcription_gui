@@ -27,7 +27,7 @@ from typing import Callable, Optional
 
 import pyperclip
 
-from . import cleanup, config, logging_config, ocr, state
+from . import cleanup, config, logging_config, ocr, ocr_corrections, state
 from .chatlog import MessageEntry
 
 logger = logging_config.get_logger(__name__)
@@ -251,6 +251,7 @@ def build_review_items(
     entries: list[MessageEntry],
     file_info: dict[str, list[str]],
     image_folder: Path,
+    corrections: Optional[list[ocr_corrections.Correction]] = None,
 ) -> list[ReviewItem]:
     """Pair each approved message with its images (if any), its editable
     text box(es) (a copy of the message's own original text, unstripped,
@@ -261,8 +262,19 @@ def build_review_items(
     documented in ARCHITECTURE.md's "Spacer slots" section. A die-roll
     command/result pair is detected from each message's own *original*
     text (not whatever the user later edits it to), so editing a message's
-    transcribed text never changes its default spacing."""
+    transcribed text never changes its default spacing.
+
+    Each image's joined OCR text additionally gets ocr_corrections.py's
+    regex fixes applied here, before it's stored as initial_ocr_texts -
+    the last point in the pipeline where text is still guaranteed to be
+    "freshly OCR'd" rather than possibly user-edited (see that module's
+    docstring for why that distinction matters). `corrections` defaults to
+    loading app/ocr_corrections.txt; only overridden by tests that want to
+    check this step's wiring without depending on that file's actual
+    (user-editable, expected-to-change) contents."""
     is_command = [_is_dice_command(entry) for entry in entries]
+    if corrections is None:
+        corrections = ocr_corrections.load_corrections()
 
     items: list[ReviewItem] = []
     for i, entry in enumerate(entries):
@@ -286,9 +298,8 @@ def build_review_items(
             # empty paragraphs (wherever they fall, not just at the end)
             # avoids that without changing how real paragraph breaks are
             # rendered.
-            initial_ocr_texts.append(
-                "\n\n".join(stripped for para in paragraphs if (stripped := para.strip()))
-            )
+            joined = "\n\n".join(stripped for para in paragraphs if (stripped := para.strip()))
+            initial_ocr_texts.append(ocr_corrections.apply_corrections(joined, corrections))
 
         image_count = len(entry.image_names)
         spacer_texts: dict[str, str] = {}

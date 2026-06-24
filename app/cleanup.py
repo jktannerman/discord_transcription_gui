@@ -1,6 +1,6 @@
 """Post-run regex cleanup pass, originally extracted unchanged from the
-original script - now trimmed down to the parts spacer slots didn't
-replace (see clean_transcript)."""
+original script - now trimmed down to the parts spacer slots and
+ocr_corrections.py didn't replace (see clean_transcript)."""
 
 import re
 
@@ -17,8 +17,16 @@ def clean_transcript(text: str) -> str:
     # up here by collapsing %roll/%draw runs and capping excess blank lines
     # to 3, which would silently clobber a spacer count the user
     # deliberately chose, so neither regex runs anymore.
-    cleaned = re.sub(r"\|", "I", text)  # usually mistranscribed
-    cleaned = re.sub(r"\\n", "", cleaned)  # stray misformatted newlines
+    #
+    # The "|" -> "I" OCR-misread fix that used to run here moved to
+    # ocr_corrections.py/pipeline.build_review_items, which runs on each
+    # image's text individually, before the user ever sees it, rather than
+    # over the whole accumulated output file (including already-finalized
+    # text from past runs) every time Finalize is clicked. What's left
+    # below is structural - literal "\n" artifacts and the BREAK-marker
+    # bookmark - not OCR text-quality fixes, so it stays here rather than
+    # moving with it.
+    cleaned = re.sub(r"\\n", "", text)  # stray misformatted newlines
     cleaned = re.sub(
         rf"({re.escape(config.BREAK_MARKER)}(\s|\r|\n)*)+\Z", "", cleaned
     )  # trailing BREAK markers

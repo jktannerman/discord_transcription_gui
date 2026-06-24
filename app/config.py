@@ -24,6 +24,13 @@ DEFAULT_APPROVED_USERS: tuple[str, ...] = tuple()
 
 BREAK_MARKER = "[BREAK]"
 
+# User-editable regex find/replace rules for common OCR misreads (see
+# ocr_corrections.py) - kept next to the source rather than in
+# APP_DATA_DIR, since it's app config the project owner seeds and tunes
+# over time (and is sensible to keep under version control), not per-user
+# runtime state.
+OCR_CORRECTIONS_FILE = Path(__file__).resolve().parent / "ocr_corrections.txt"
+
 APP_DATA_DIR = Path.home() / ".discord_transcription_gui"
 RUN_DATE_FILE = APP_DATA_DIR / "run_dates.json"
 # {image_folder: {image_name: [paragraphs]}} - one entry per image folder,

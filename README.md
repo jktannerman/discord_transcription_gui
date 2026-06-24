@@ -205,14 +205,37 @@ What's in scope for v1:
    writes every message's final lines (edited text if you changed it,
    original OCR/message text otherwise, with each spacer box's blank-line
    count written out as real newlines in between) to the output file in
-   one pass, then runs the remaining post-run cleanup (OCR misreads like
-   stray `|`s, leftover literal `\n`s, and trailing `[BREAK]` markers -
-   blank-line spacing is no longer touched here, since spacer boxes
-   already wrote exactly what you left in them), records the new run-end
+   one pass, then runs the remaining post-run cleanup (leftover literal
+   `\n`s and trailing `[BREAK]` markers - blank-line spacing is no longer
+   touched here, since spacer boxes already wrote exactly what you left in
+   them; common OCR misreads are now fixed earlier, before you ever see
+   the text - see "OCR corrections" below), records the new run-end
    date, copies the newly-added text to the clipboard, appends a fresh
    `[BREAK]` marker as a bookmark for the next run, and clears the
    autosaved session - there's nothing left to resume once a run has
    actually been finalized.
+
+## OCR corrections
+
+`app/ocr_corrections.txt` is a user-editable, plain-text list of regex
+find/replace rules for common Tesseract misreads (e.g. a stray `|` instead
+of a capital `I`) - not Python code, so it can be tuned by hand without
+touching the app itself. Entries are blank-line-separated blocks of:
+
+```
+<find regex>
+<replacement - \1 etc. refer to the find regex's capture groups>
+# any number of comment lines (must start with "#")
+```
+
+Each entry is applied, in file order, to an image's freshly-OCR'd text
+exactly once - right when it becomes that image's starting OCR-box content
+on the review screen - never to a box once you've edited it, and never to
+a message's own original text (which was never OCR'd in the first place).
+A missing or empty file just means no corrections run. See the comments
+in `app/ocr_corrections.txt` itself for the current rule set. Not yet
+exposed in the GUI - per the "Known gaps" section below, that's deferred,
+same as the rest of `config.py`'s settings.
 
 ## Appearance
 
@@ -234,8 +257,11 @@ gui_transcription/
                           # with .bak rotation, every read falls back to
                           # the .bak if the primary file is missing/corrupt
     ocr.py                # Tesseract OCR behind a swappable backend interface
+    ocr_corrections.py     # loads/applies ocr_corrections.txt's regex fixes
+    ocr_corrections.txt    # user-editable OCR-misread find/replace rules
     chatlog.py            # HTML parsing + date/author filtering
-    cleanup.py            # post-run regex cleanup pass
+    cleanup.py            # post-run regex cleanup pass (structural only -
+                          # OCR-misread fixes moved to ocr_corrections.py)
     pipeline.py           # OCR batch runner, review-item building,
                           # bulk output writing, finalization
     logging_config.py     # JSON file + console logging setup
@@ -306,9 +332,13 @@ also runs Tcl/Tk's one-time subsystem init. Run
 `py -3.13 -m pytest gui_transcription\app_tests -v -m gui` to include just
 those, or add `-m ""` to run the whole suite including them.
 
-145 tests (177 including the `gui`-marked ones, which now also cover a
+159 tests (192 including the `gui`-marked ones, which now also cover a
 box's undo/redo history surviving its row being paged out and back in -
-`text_undo.py`) cover the cleanup regexes,
+`text_undo.py` - and a focused box always scrolling fully into view, not
+just its row) cover the cleanup regexes, the OCR-misread corrections
+pass (`ocr_corrections.py`'s file parsing/validation and regex application,
+plus its wiring into `build_review_items` - applied to OCR text only,
+never to a message's own text),
 HTML parsing/filtering (including the export postamble's declared timezone
 being applied to every message timestamp, the clear error raised when that
 timezone is missing or unparseable, the per-message Discord ID extracted

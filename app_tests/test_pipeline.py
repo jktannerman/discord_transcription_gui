@@ -1,8 +1,10 @@
+import re
 from pathlib import Path
 
 import pytest
 
 from gui_transcription.app.chatlog import MessageEntry
+from gui_transcription.app.ocr_corrections import Correction
 from gui_transcription.app.pipeline import (
     build_review_items,
     lines_for_item,
@@ -88,6 +90,22 @@ def test_build_review_items_image_message_joins_paragraphs():
     # box to.
     assert items[0].initial_message_text is None
     assert items[0].slot_roles == ["ocr0", "spacer_end"]
+
+
+def test_build_review_items_applies_corrections_to_ocr_text_only():
+    """ocr_corrections.py's fixes are applied to each image's joined OCR
+    text (build_review_items' corrections param, here overridden so this
+    doesn't depend on app/ocr_corrections.txt's actual, user-editable
+    contents) - but never to a message's own original text, which never
+    went through OCR in the first place."""
+    corrections = [Correction(re.compile(r"\bfoo\b"), "bar", "")]
+    entries = [MessageEntry(message_id="m", text_lines=["foo here too"], image_names=["card.png"])]
+    file_info = {"card.png": ["foo there"]}
+
+    items = build_review_items(entries, file_info, image_folder=Path("/images"), corrections=corrections)
+
+    assert items[0].initial_ocr_texts == ["bar there"]
+    assert items[0].initial_message_text == "foo here too"
 
 
 def test_build_review_items_image_with_caption_gets_both_boxes():

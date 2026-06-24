@@ -170,6 +170,26 @@ Upon tabbing/shift-tabbing into a text input box, please ensure that the entire 
 - done
 For text messages specifically, please make the right column text input boxes a little taller than the corresponding immutable left column elements. They should be about one line taller upwards and one line taller downwards, in the relevant font size. This does not apply to spacer elements.
 
+- done
+Please add a user-editable file where regex find-replace for common OCR errors can be defined. These substitutions should be made *before* loading the OCR text into an input box. However, they should not be applied to a transcription that a user has edited. Later, this may be made part of the GUI.
+
+Examples of substitutions to begin with:
+
+`\bI's\b` should usually be `It's`
+`\bi's\b` should usually be `it's`
+`\bIm\b` should usually be `I'm`
+`\n\n\b‘` should usually be `\n\n`, unless it is followed by a matching closing quote mark reasonably soon (need help with this specific regex)
+`\b([A-Z])\,` should usually be `(\1).`
+`©` should usually be `C`
+`\btum(s|ed|ing)?\b` should usually be `turn(\1)` (this regex may not be correct)
+
+The format of the file should probably have the regex to find on one line, the regex to replace it with on the next line, and any comments on the line after that, for readability.
+
+
+
+Upon tabbing/shift-tabbing into a text input box, please ensure that the entire box is cleanly onscreen.
+
+
 
 Please add an option to restore the last session, even if it was finalised and written to an output file, in order to be able to redo something overlooked.
 
@@ -200,14 +220,6 @@ ctrl-f?? with regex?
 
 
 
-Please add a user-editable file where regex find-replace for common OCR errors can be defined. Later, this may be made part of the GUI.
-
-Examples of substitutions:
-
-`I's` should usually be `It's`
-`\n\n\b‘` should usually be `\n\n\b`, unless it is followed by a closing 
-
-
 
 
 
@@ -215,9 +227,8 @@ flag/highlight common misspellings? (scan upper/lowercase) just actual spellchec
 
 I's -> It's - 7
 I'l -> It'll - 1
-Im -> I'm or similar  - 2
-im -> I'm
-singular dashes, like ‘ - 4
+Im -> I'm or similar  - 4
+singular quote marks, like ‘ - 4
 commas instead of dots, A/B/C, - 3
 itis -> it is - 1
 tum -> turn - 2
@@ -230,7 +241,8 @@ Itall -> It all
 ll -> I'll - 1
 pio -> pip - 1
 willbe -> will be - 1
-leam -> learn
+leam -> learn - 1
+priorties -> priorities - 1
 
 
 Are the logs as useful as they could be? 
