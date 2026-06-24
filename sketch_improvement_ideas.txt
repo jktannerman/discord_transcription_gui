@@ -205,7 +205,8 @@ Please add a user-editable file where regex find-replace for common OCR errors c
 Examples of substitutions:
 
 `I's` should usually be `It's`
-`\n\n\b‘` should usually be `\n\n\b`
+`\n\n\b‘` should usually be `\n\n\b`, unless it is followed by a closing 
+
 
 
 
