@@ -13,6 +13,7 @@ from .image_loading import THUMBNAIL_SIZE, fitted_image_size
 from .layout_constants import (
     GAP_BETWEEN_STACKED_PX,
     ROW_FRAME_OVERHEAD_PX,
+    ROW_PACK_PADY_PX,
     SPACER_BOX_HEIGHT_PX,
     TEXT_BOX_MARGIN_PX,
 )
@@ -70,7 +71,13 @@ def estimate_row_height(item: ReviewItem) -> int:
     both of the row's columns (the immutable left column: label and/or
     images; the editable right column: one box per slot, content or
     spacer) independently and takes the taller of the two, then adds
-    ROW_FRAME_OVERHEAD_PX for the row's own padding/border. Each stacked
+    ROW_FRAME_OVERHEAD_PX for the row's own padding/border, plus
+    2*ROW_PACK_PADY_PX for the vertical pack() gap *outside* the row's own
+    Frame (see that constant's docstring - winfo_height() can't see it,
+    so it has to be added back by hand here and in
+    ReviewFrame._remeasure_built_rows, or the document-space model this
+    feeds drifts away from the real screen position one row at a time).
+    Each stacked
     element but the last gets GAP_BETWEEN_STACKED_PX added to whichever
     column total includes it, same as the real layout. A spacer role has
     no left-column counterpart at all (only the right column gets
@@ -96,7 +103,7 @@ def estimate_row_height(item: ReviewItem) -> int:
         else:
             right += SPACER_BOX_HEIGHT_PX + gap
 
-    return max(left, right) + ROW_FRAME_OVERHEAD_PX
+    return max(left, right) + ROW_FRAME_OVERHEAD_PX + 2 * ROW_PACK_PADY_PX
 
 
 def compute_visible_range(

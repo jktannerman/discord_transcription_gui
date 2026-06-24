@@ -116,6 +116,7 @@ from ..pipeline import ReviewItem
 from . import theme
 from .image_loading import ImageLoader
 from .keyboard_nav import KeyboardNavMixin
+from .layout_constants import ROW_PACK_PADY_PX
 from .row_building import RowBuildingMixin
 from .text_undo import UndoLog
 from .virtualization import compute_visible_range, estimate_row_height
@@ -509,7 +510,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
 
     def _remeasure_built_rows(self, scroll_top: float, newly_built: List[int]) -> float:
         """Overwrite self._row_heights for newly-built rows with their real
-        winfo_height(), and return the exact pixel delta that the canvas's
+        on-screen height, and return the exact pixel delta that the canvas's
         scroll offset must be corrected by (sum of real-minus-estimated
         height, for rows whose pre-correction offset sits above
         scroll_top) to keep the same content on screen. This delta is
@@ -517,13 +518,22 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         for the scrollregion - unlike the previous design's reverse-
         engineered "anchor row moved by N px" math, so applying it can
         never request an out-of-range scroll fraction (see module
-        docstring)."""
+        docstring).
+
+        "Real on-screen height" is winfo_height() plus 2*ROW_PACK_PADY_PX,
+        not winfo_height() alone - that constant's docstring (layout_
+        constants.py) explains why: the vertical pack() gap outside a row's
+        own Frame is real screen space winfo_height() can't see, and
+        leaving it out here silently drifted self._row_heights (and
+        everything keyboard_nav.py derives from it, like
+        _scroll_box_into_view) away from the real screen position by a
+        couple of px for every row scrolled past."""
         if not newly_built:
             return 0.0
         old_heights = list(self._row_heights)
         delta = 0.0
         for idx in newly_built:
-            real = self._row_frames[idx].winfo_height()
+            real = self._row_frames[idx].winfo_height() + 2 * ROW_PACK_PADY_PX
             old = old_heights[idx]
             if real and real != old:
                 row_offset = sum(old_heights[:idx])

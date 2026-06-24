@@ -54,7 +54,25 @@ def attach_undo_recording(text_widget: tk.Text, log: UndoLog) -> Callable[[], No
     tcl.call("rename", widget_path, shadow_path)
 
     def _proxy(*args):
-        result = tcl.call((shadow_path,) + args)
+        try:
+            result = tcl.call((shadow_path,) + args)
+        except tk.TclError:
+            # Renaming the widget's command this way intercepts *every*
+            # subcommand sent to it, not just insert/delete - including
+            # ones Tk's own internal bindings call expecting to fail
+            # sometimes, e.g. `$widget index sel.first` when there's no
+            # selection, normally wrapped in the binding's own
+            # `catch {...}`. A native Tcl command failing there is no
+            # problem - but here, the failure surfaces as a genuine Python
+            # exception raised by *this* function, and tkinter's command
+            # redirection propagates that exception all the way out of
+            # mainloop() regardless of any surrounding Tcl-level catch
+            # (a long-standing tkinter quirk, also hit by idlelib's
+            # WidgetRedirector, which this module's docstring already
+            # points to). Swallowing it and returning "" mirrors what a
+            # plain Tcl catch around the real (un-redirected) command would
+            # have done with the result anyway.
+            return ""
         if args and args[0] in ("insert", "delete"):
             log.ops.append((args[0], args[1:]))
         return result

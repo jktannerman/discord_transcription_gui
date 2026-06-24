@@ -28,6 +28,19 @@ ROW_FRAME_BORDERWIDTH_PX = 1
 # Padding top+bottom plus a couple px for the groove border.
 ROW_FRAME_OVERHEAD_PX = ROW_FRAME_PADDING_PX * 2 + 2
 
+# Vertical gap (px) pack() leaves *outside* a row's own Frame, above and
+# below it (row_building.RowBuildingMixin._build_row's pack(pady=...)) -
+# distinct from ROW_FRAME_OVERHEAD_PX, which is chrome *inside* the row's own
+# bounding box and so already included in its winfo_height(). This gap is
+# real on-screen vertical space a row consumes that winfo_height() can't see
+# at all, on either side - omitting it from a row's recorded height (in both
+# estimate_row_height and ReviewFrame._remeasure_built_rows) was what let the
+# document-space model (self._row_heights, self._offset_of) drift away from
+# the real screen position by 2*ROW_PACK_PADY_PX for every row scrolled past,
+# silently breaking keyboard_nav.py's scroll-into-view math the more boxes a
+# Tab/Shift-Tab session crossed.
+ROW_PACK_PADY_PX = 4
+
 # Height (px) of a spacer slot's text box - exactly one line of
 # theme.TEXT_FONT_SIZE plus its own internal pady/border chrome, fixed via
 # `height=1` on the real tk.Text widget rather than computed from a paired

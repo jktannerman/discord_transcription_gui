@@ -21,6 +21,8 @@ import re
 import tkinter as tk
 from typing import Optional, Tuple
 
+from .layout_constants import ROW_PACK_PADY_PX
+
 _TRAILING_WORD_RE = re.compile(r"\S+\s*$")
 
 
@@ -125,7 +127,14 @@ class KeyboardNavMixin:
         _reconcile), not the canvas's absolute coordinate space, so
         self._offset_of(index) (the row's own document-space offset) is
         combined with a winfo_rooty() delta for the box's offset *within*
-        that row, which isn't affected by that repositioning."""
+        that row, which isn't affected by that repositioning. Plus
+        ROW_PACK_PADY_PX: self._offset_of(index) is where row `index`'s
+        full pack-allocated slot starts, not where its Frame's own visible
+        top edge (row.winfo_rooty(), what the winfo_rooty() delta above is
+        actually anchored to) sits - that's ROW_PACK_PADY_PX further down,
+        past the row's own leading pack pady (see that constant's
+        docstring in layout_constants.py). Omitting it left every box's
+        computed position short by that fixed amount, on every row."""
         index, role = key
         container = self._text_containers.get(key)
         row = self._row_frames.get(index)
@@ -138,7 +147,10 @@ class KeyboardNavMixin:
             return
 
         try:
-            box_top = self._offset_of(index) + (container.winfo_rooty() - row.winfo_rooty())
+            box_top = (
+                self._offset_of(index) + ROW_PACK_PADY_PX
+                + (container.winfo_rooty() - row.winfo_rooty())
+            )
         except tk.TclError:
             return  # a widget along the way was destroyed mid-check
         box_bottom = box_top + container.winfo_height()
@@ -189,9 +201,12 @@ class KeyboardNavMixin:
         to scroll - no separate direction argument needed.
 
         Box position is computed the same way the rest of this module is
-        forced to (see _scroll_into_view's docstring): self._offset_of(index)
-        for the row's own document-space offset, plus a winfo_rooty() delta
-        for the box's offset *within* that row, which - unlike the row's own
+        forced to (see _scroll_box_into_view's docstring): self._offset_of
+        (index) for the row's own document-space offset, plus
+        ROW_PACK_PADY_PX for the row's own leading pack pady (real screen
+        space row.winfo_rooty() sits past, but that offset_of(index) alone
+        doesn't know about), plus a winfo_rooty() delta for the box's
+        offset *within* that row, which - unlike the row's own
         winfo_y() - isn't affected by _scroll_frame being repositioned on
         every reconcile, since that repositioning doesn't change a box's
         position relative to its own row."""
@@ -206,7 +221,10 @@ class KeyboardNavMixin:
             bbox = widget.bbox("insert")
             if bbox is None:
                 return
-            container_top = self._offset_of(index) + (container.winfo_rooty() - row.winfo_rooty())
+            container_top = (
+                self._offset_of(index) + ROW_PACK_PADY_PX
+                + (container.winfo_rooty() - row.winfo_rooty())
+            )
             cursor_top = container_top + (widget.winfo_rooty() - container.winfo_rooty()) + bbox[1]
         except tk.TclError:
             return  # a widget along the way was destroyed mid-check

@@ -42,7 +42,7 @@ I'm
 
 \b([A-Z]),
 (\1).
-# OCR sometimes drops the parentheses and period and adds a comma on a
+# OCR sometimes adds a comma instead of a period on a
 # single-capital-letter abbreviation, e.g. misreading "(A)." as "A,".
 
 ©

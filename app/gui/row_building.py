@@ -27,6 +27,7 @@ from .layout_constants import (
     GAP_BETWEEN_STACKED_PX,
     ROW_FRAME_BORDERWIDTH_PX,
     ROW_FRAME_PADDING_PX,
+    ROW_PACK_PADY_PX,
     SPACER_BOX_HEIGHT_PX,
     TEXT_BOX_MARGIN_PX,
 )
@@ -62,7 +63,7 @@ class RowBuildingMixin:
         copy of the message's own text whenever it has any, and one OCR
         text box per attached image, in attachment order."""
         item = self._items[index]
-        pack_kwargs = {"fill": "x", "pady": 4, "padx": 4}
+        pack_kwargs = {"fill": "x", "pady": ROW_PACK_PADY_PX, "padx": 4}
         if before is not None:
             pack_kwargs["before"] = before
 
