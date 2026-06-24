@@ -38,6 +38,48 @@ from .setup_view import SetupFrame
 logger = logging_config.get_logger(__name__)
 
 
+def _match_saved_edits(
+    review_items: list["pipeline.ReviewItem"], saved_texts: dict
+) -> list[tuple[Optional[str], Optional[str]]]:
+    """Translate a session's message_id-keyed saved edits onto the
+    freshly-parsed review_items' current positions. Saved entries whose
+    message_id no longer appears (the message was filtered out, or removed
+    from a later re-export) are simply dropped - silently, since this is
+    the expected outcome of normal chatlog growth, not an error."""
+    by_id = {item.message_id: idx for idx, item in enumerate(review_items)}
+    built: list[tuple[Optional[str], Optional[str]]] = [(None, None) for _ in review_items]
+    matched = dropped = 0
+    for message_id, edit in saved_texts.items():
+        idx = by_id.get(message_id)
+        if idx is None:
+            dropped += 1
+            continue
+        matched += 1
+        built[idx] = (edit.get("message"), edit.get("ocr"))
+    logger.info(
+        "resumed session edits matched by message_id",
+        extra=logging_config.extra(
+            matched_count=matched, dropped_count=dropped, current_item_count=len(review_items)
+        ),
+    )
+    return built
+
+
+def _match_focus_slot(
+    review_items: list["pipeline.ReviewItem"], focus_slot: Optional[list]
+) -> Optional[tuple[int, str]]:
+    """Translate a saved (message_id, role) focus slot onto its current
+    index, or None if that message no longer appears (falls back to the
+    saved scroll fraction / document top, same as any other unresolvable
+    focus slot)."""
+    if focus_slot is None:
+        return None
+    message_id, role = focus_slot
+    by_id = {item.message_id: idx for idx, item in enumerate(review_items)}
+    idx = by_id.get(message_id)
+    return (idx, role) if idx is not None else None
+
+
 @dataclass
 class RunContext:
     """The inputs a single run (OCR -> review -> finalize) was started with.
@@ -275,6 +317,19 @@ class App:
         if frame is not None and frame.winfo_exists():
             run = self._run
             focused_slot = frame.get_focused_slot()
+            focus_message_id = None
+            if focused_slot is not None:
+                idx, role = focused_slot
+                focus_message_id = [self._review_items[idx].message_id, role]
+
+            edited_texts_by_id = {}
+            for idx, (message_text, ocr_text) in enumerate(frame.collect_edited_texts()):
+                if message_text is not None or ocr_text is not None:
+                    edited_texts_by_id[self._review_items[idx].message_id] = {
+                        "message": message_text,
+                        "ocr": ocr_text,
+                    }
+
             session = {
                 "html_path": str(run.html_path),
                 "image_folder": str(run.image_folder),
@@ -286,8 +341,8 @@ class App:
                     else None
                 ),
                 "use_cache": run.use_cache,
-                "edited_texts": frame.collect_edited_texts(),
-                "focus_slot": list(focused_slot) if focused_slot is not None else None,
+                "edited_texts": edited_texts_by_id,
+                "focus_slot": focus_message_id,
                 "scroll_fraction": frame.get_scroll_top_fraction(),
             }
             state.save_session(str(run.html_path), session)
@@ -317,29 +372,23 @@ class App:
         initial_scroll_fraction = None
         if resume is not None:
             saved_texts = resume.get("edited_texts")
-            valid_shape = (
-                isinstance(saved_texts, list)
-                and len(saved_texts) == len(self._review_items)
-                and all(
-                    isinstance(entry, (list, tuple)) and len(entry) == 2
-                    for entry in saved_texts
-                )
-            )
-            if valid_shape:
-                initial_saved_texts = saved_texts
-                focus_slot = resume.get("focus_slot")
-                if focus_slot is not None:
-                    initial_focus_slot = (focus_slot[0], focus_slot[1])
+            if isinstance(saved_texts, dict):
+                initial_saved_texts = _match_saved_edits(self._review_items, saved_texts)
+                initial_focus_slot = _match_focus_slot(self._review_items, resume.get("focus_slot"))
                 initial_scroll_fraction = resume.get("scroll_fraction")
+            elif isinstance(saved_texts, list):
+                # Pre-message-id session format: a positional list has
+                # nothing to match against by message_id, so there's
+                # nothing here that can be reapplied - not an error, just
+                # an old on-disk shape. Silent, no popup.
+                logger.info(
+                    "saved session uses old positional edited_texts format, "
+                    "starting fresh"
+                )
             else:
                 logger.warning(
-                    "saved session item count/shape mismatch, discarding saved edits",
-                    extra=logging_config.extra(current_item_count=len(self._review_items)),
-                )
-                messagebox.showwarning(
-                    "Resume",
-                    "The chatlog appears to have changed since the saved session - "
-                    "starting the review fresh instead of restoring saved edits.",
+                    "saved session edited_texts has unexpected shape, discarding",
+                    extra=logging_config.extra(saved_texts_type=type(saved_texts).__name__),
                 )
 
         frame = ReviewFrame(

@@ -3,15 +3,31 @@
 Mirrors the filtering logic in the original script: only messages from an
 approved set of author IDs (entered on the setup screen, not hardcoded -
 see pipeline.parse_approved_user_ids), timestamped after ``start_time``, are
-kept. Each accepted message is reduced to its plain text lines plus the
-filename of any attached image (if present) — OCR and the interactive
-correction step are handled separately in pipeline.py.
+kept. Each accepted message is reduced to its Discord message ID, plain
+text lines, and the filename of any attached image (if present) — OCR and
+the interactive correction step are handled separately in pipeline.py. The
+message ID is Discord's own stable per-message identifier (read from the
+export's ``data-message-id`` attribute), kept so a resumed review session
+can match its saved edits back onto the right message even if a later
+re-export of the same chatlog appends or inserts messages and shifts every
+list position.
+
+DiscordChatExporter timestamps every message in the *exporting device's*
+local timezone by default (not UTC, and not necessarily this machine's
+timezone either) - but it also records exactly which offset that was as a
+"Timezone: UTC+H[:MM]" line in the export's postamble (see
+_parse_export_timezone). Reading that explicit offset, rather than assuming
+either UTC or whatever timezone happens to be running this tool, is what
+lets every message timestamp be converted to a true UTC epoch second
+unambiguously - matching how pipeline.parse_start_date/finalize_run already
+treat start/end dates as UTC.
 """
 
 import datetime
-import time
+import re
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import unquote
 
 from bs4 import BeautifulSoup
 
@@ -19,11 +35,39 @@ from . import config, logging_config
 
 logger = logging_config.get_logger(__name__)
 
+_TIMEZONE_RE = re.compile(r"UTC([+-])(\d{1,2})(?::?(\d{2}))?")
+
 
 @dataclass
 class MessageEntry:
+    message_id: str
     text_lines: list[str]
     image_name: Optional[str]
+
+
+def _parse_export_timezone(parsed_html: BeautifulSoup) -> datetime.timezone:
+    """The offset every timestamp in this export is recorded in, read from
+    its postamble's "Timezone: UTC+H[:MM]" line - see the module docstring
+    for why this can't just be assumed to be UTC or the local machine's own
+    timezone. Raises ValueError (naming the problem, not a silent guess) if
+    the postamble is missing or doesn't contain a recognizable offset."""
+    for entry in parsed_html.find_all(attrs={"class": "postamble__entry"}):
+        text = entry.get_text()
+        if not text.startswith("Timezone:"):
+            continue
+        match = _TIMEZONE_RE.search(text)
+        if not match:
+            raise ValueError(f"Could not parse export timezone from {text!r}.")
+        sign = 1 if match.group(1) == "+" else -1
+        hours, minutes = int(match.group(2)), int(match.group(3) or 0)
+        return datetime.timezone(sign * datetime.timedelta(hours=hours, minutes=minutes))
+
+    raise ValueError(
+        "Could not find this export's timezone (a \"Timezone: UTC...\" line "
+        "in the chatlog's postamble) - DiscordChatExporter records every "
+        "message's timestamp in the exporting device's local timezone by "
+        "default, so this is needed to interpret them correctly."
+    )
 
 
 def parse_message_groups(
@@ -35,6 +79,7 @@ def parse_message_groups(
     from, or None to keep messages from every author (the "all users" mode).
     """
     parsed_html = BeautifulSoup(html_text, features="lxml")
+    export_tz = _parse_export_timezone(parsed_html)
     groups = parsed_html.find_all(attrs={"class": "chatlog__message-group"})
 
     skip_counts = {"no_date": 0, "too_early": 0, "no_author": 0, "unapproved_author": 0}
@@ -49,7 +94,7 @@ def parse_message_groups(
         raw_message_time = datetime.datetime.strptime(
             date_element.get_text(), config.TIMESTAMP_FORMAT
         )
-        message_time = int(time.mktime(raw_message_time.timetuple()))
+        message_time = int(raw_message_time.replace(tzinfo=export_tz).timestamp())
         if message_time < start_time:
             skip_counts["too_early"] += 1
             continue
@@ -79,6 +124,15 @@ def parse_message_groups(
 
 
 def _parse_message(message) -> MessageEntry:
+    container = message.find_parent(attrs={"class": "chatlog__message-container"})
+    if container is None or "data-message-id" not in container.attrs:
+        raise ValueError(
+            "Could not find a chatlog__message-container with a "
+            "data-message-id for this message - the export HTML may be "
+            "from an unsupported DiscordChatExporter version."
+        )
+    message_id = container.attrs["data-message-id"]
+
     text = message.find(attrs={"class": "chatlog__markdown-preserve"})
     text_lines = text.get_text().split("\n") if text else []
 
@@ -86,10 +140,14 @@ def _parse_message(message) -> MessageEntry:
     image_name = None
     if image:
         file_name = image.attrs["src"]
-        image_name = file_name.split("/")[-1]
+        # Decode after splitting off the basename, not before - a literal
+        # "%2F" in a path segment shouldn't be misread as a "/" separator.
+        image_name = unquote(file_name.split("/")[-1])
 
     logger.debug(
         "parsed message",
-        extra=logging_config.extra(line_count=len(text_lines), image_name=image_name),
+        extra=logging_config.extra(
+            message_id=message_id, line_count=len(text_lines), image_name=image_name
+        ),
     )
-    return MessageEntry(text_lines=text_lines, image_name=image_name)
+    return MessageEntry(message_id=message_id, text_lines=text_lines, image_name=image_name)

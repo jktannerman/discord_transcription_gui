@@ -669,7 +669,15 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         keystrokes to a focused-but-off-screen widget - typing was the
         easiest visible signal that the user is "at" this box and would
         want to see it, without needing a separate scroll-position watcher
-        for an otherwise-rare case."""
+        for an otherwise-rare case. Gated on the widget actually having
+        focus, since <<Modified>> also fires for a freshly-built row's own
+        initial text insert (see _build_editable_text_box) - that insert's
+        own edit_modified(False) reset doesn't suppress it, because Tk
+        queues <<Modified>> for the next idle tick rather than firing it
+        synchronously, by which point this binding already exists. Without
+        this guard, a row built only because it entered the virtualization
+        buffer (not because the user scrolled it into view) would yank the
+        canvas to reveal it anyway."""
         index = key[0]
         text_widget.edit_modified(False)
         self._size_text_container(container, text_widget, self._box_floor_px[key])
@@ -684,7 +692,8 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
             canvas.configure(
                 scrollregion=(0, 0, max(canvas.winfo_width(), 1), sum(self._row_heights))
             )
-        self._scroll_into_view(index)
+        if text_widget is self.focus_get():
+            self._scroll_into_view(index)
 
     def _destroy_row(self, index: int) -> None:
         """Tear down the row widget(s) for items[index], saving any edited
@@ -799,9 +808,19 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
             old = old_heights[idx]
             if real and real != old:
                 row_offset = sum(old_heights[:idx])
-                if row_offset < scroll_top:
+                above_scroll_top = row_offset < scroll_top
+                if above_scroll_top:
                     delta += real - old
                 self._row_heights[idx] = real
+                self._log_event(
+                    "remeasure_mismatch",
+                    index=idx,
+                    estimated_height=old,
+                    real_height=real,
+                    row_offset=row_offset,
+                    scroll_top=scroll_top,
+                    above_scroll_top=above_scroll_top,
+                )
         return delta
 
     def _reconcile(self) -> None:
@@ -837,8 +856,10 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         delta = self._remeasure_built_rows(scroll_top, newly_built)
 
         total_height = sum(self._row_heights)
+        corrected_scroll_top = scroll_top
         if delta and total_height > 0:
-            canvas.yview_moveto(max(0.0, min(scroll_top + delta, total_height)) / total_height)
+            corrected_scroll_top = max(0.0, min(scroll_top + delta, total_height))
+            canvas.yview_moveto(corrected_scroll_top / total_height)
 
         canvas_width = max(canvas.winfo_width(), 1)
         canvas.configure(scrollregion=(0, 0, canvas_width, total_height))
@@ -851,7 +872,15 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         self._update_visible_images()
         self._update_finalize_button_visibility()
         self._log_event(
-            "reconcile", first_idx=first_idx, last_idx=last_idx, total_height=total_height
+            "reconcile",
+            old_range=old_range,
+            first_idx=first_idx,
+            last_idx=last_idx,
+            total_height=total_height,
+            newly_built=newly_built,
+            scroll_top_before=scroll_top,
+            delta=delta,
+            scroll_top_after=corrected_scroll_top,
         )
 
     def _update_finalize_button_visibility(self) -> None:

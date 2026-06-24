@@ -9,13 +9,22 @@ import textwrap
 from typing import List, Tuple
 
 from ..pipeline import ReviewItem
-from .image_loading import THUMBNAIL_SIZE
+from .image_loading import THUMBNAIL_SIZE, fitted_image_size
 
-# Estimated height (px) for an image row before it's ever been built and
-# measured - only needs to be roughly right, since it only affects scrollbar
-# proportion/buffering for rows the user hasn't scrolled near yet, and gets
-# replaced with the real winfo_height() the moment the row is materialized.
-_ESTIMATED_IMAGE_ROW_HEIGHT = THUMBNAIL_SIZE[1] + 220
+# Row overhead (px) added on top of an image's own fitted height to estimate
+# its row's total height before it's ever been built and measured - row
+# padding/border plus the OCR text box's minimum chrome. The image height
+# itself comes from fitted_image_size's cheap header-only read (already used
+# to size the real placeholder in review_view.py), not a flat per-row
+# constant - most images here are landscape (width-, not height-,
+# constrained against THUMBNAIL_SIZE), so a flat estimate sized for the
+# worst-case portrait image overestimated most rows by 500+px. That
+# overestimate got corrected away once a row was actually built (see
+# ReviewFrame._remeasure_built_rows), but the correction itself shifts the
+# scroll position to compensate - so a large, consistently-wrong estimate
+# turned an ordinary scroll into a visible jump once the next batch of rows
+# was measured.
+_IMAGE_ROW_OVERHEAD = 220
 
 # Used to turn a text-only row's character count into an estimated wrapped
 # line count, matching _build_row's wraplength for that row's immutable-
@@ -58,7 +67,8 @@ def estimate_row_height(item: ReviewItem) -> int:
     if item.image_path is None:
         return _estimate_message_text_height(item)
 
-    height = _ESTIMATED_IMAGE_ROW_HEIGHT
+    _, image_h = fitted_image_size(item.image_path)
+    height = image_h + _IMAGE_ROW_OVERHEAD
     if item.initial_message_text is not None:
         height += _estimate_message_text_height(item)
     return height

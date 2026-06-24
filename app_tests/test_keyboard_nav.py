@@ -59,21 +59,21 @@ class _NavStub(KeyboardNavMixin):
 
 def _text_item():
     return ReviewItem(
-        entry=MessageEntry(text_lines=["hi"], image_name=None),
+        entry=MessageEntry(message_id="msg-text", text_lines=["hi"], image_name=None),
         image_path=None, initial_message_text="hi", initial_ocr_text=None,
     )
 
 
 def _image_item():
     return ReviewItem(
-        entry=MessageEntry(text_lines=[], image_name="card.png"),
+        entry=MessageEntry(message_id="msg-image", text_lines=[], image_name="card.png"),
         image_path=Path("card.png"), initial_message_text=None, initial_ocr_text="",
     )
 
 
 def _image_with_caption_item():
     return ReviewItem(
-        entry=MessageEntry(text_lines=["caption"], image_name="card.png"),
+        entry=MessageEntry(message_id="msg-image-caption", text_lines=["caption"], image_name="card.png"),
         image_path=Path("card.png"), initial_message_text="caption", initial_ocr_text="",
     )
 

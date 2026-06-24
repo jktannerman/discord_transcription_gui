@@ -55,13 +55,40 @@ What's in scope for v1 (by design, agreed with the project owner):
    review screen, with every saved edit, the focused text box, and the
    scroll position all restored. Declining discards that chatlog's saved
    session outright (other chatlogs' saved sessions are unaffected).
+
+   Resuming re-runs HTML parsing/OCR from the saved inputs rather than
+   serializing the parsed messages themselves, but saved edits are matched
+   back onto the freshly-parsed messages by Discord's own per-message ID
+   (read from the export's `data-message-id`, not by list position - see
+   "HTML parsing" below) - so a chatlog re-exported with more messages
+   appended or inserted anywhere in the transcript still has every prior
+   edit land back on the right message. An edit whose message no longer
+   appears (e.g. its author was later removed from the approved list) is
+   simply dropped rather than misapplied to a different message, silently
+   (logged, not surfaced as a popup, since this is an expected outcome of
+   normal chatlog growth rather than an error) - similarly, a saved focus
+   position whose message has disappeared just isn't restored rather than
+   landing on the wrong box.
 2. **OCR pass** (background thread, progress bar) — walks the image folder,
    skips non-image files and anything older than the start date, and runs
    Tesseract on the rest. Results are cached to disk as JSON so a re-run
    (e.g. to redo just the correction pass) doesn't repeat OCR work.
 3. **HTML parsing** — parses the export, keeping only messages after the
    start date from the approved users entered on the setup screen (or every
-   user, if "all users" was checked).
+   user, if "all users" was checked). DiscordChatExporter timestamps every
+   message in the *exporting device's* local timezone by default, not UTC -
+   but it also records exactly which offset that was as a "Timezone:
+   UTC+H[:MM]" line in the export's postamble, which is read and used to
+   convert every message's timestamp to a true UTC epoch (matching how the
+   start date and the next run's recorded start date are both handled in
+   UTC too). A chatlog export missing that postamble line raises a clear
+   error rather than silently guessing a timezone. Each kept message also
+   keeps Discord's own per-message ID (the export's `data-message-id`,
+   read from its `chatlog__message-container` wrapper) - not used for
+   filtering, only as the stable key resumed sessions match saved edits
+   against (see "Setup screen" above). A message whose container is
+   missing the ID raises a clear error rather than silently falling back
+   to a less stable identity.
 4. **Review screen** — an infinite-scroll window listing every approved
    message in order, mirroring the original chatlog. Every row has the same
    two-column shape, both columns stacked text-above-image when a message
@@ -172,7 +199,11 @@ gui_transcription/
                           # bulk output writing, finalization
     logging_config.py     # JSON file + console logging setup
     gui/
-      main_window.py      # setup screen + run orchestration on the Tk side
+      main_window.py      # run orchestration + session persistence on the
+                          # Tk side - constructs setup_view.py/progress_view.py/
+                          # review_view.py in turn as each stage starts
+      setup_view.py        # setup screen: file/folder pickers, start date,
+                          # cache checkbox, approved-users list
       progress_view.py    # OCR progress bar
       review_view.py       # the review screen: virtualized row window,
                           # Finalize button (delegates layout/images/
@@ -297,8 +328,13 @@ py -3.13 -m app.main
 py -3.13 -m pytest gui_transcription\app_tests -v
 ```
 
-97 tests cover the cleanup regexes, HTML parsing/filtering, OCR paragraph
-splitting and backend dispatch, the JSON log formatter, JSON state
+111 tests cover the cleanup regexes, HTML parsing/filtering (including the
+export postamble's declared timezone being applied to every message
+timestamp, the clear error raised when that timezone is missing or
+unparseable, the per-message Discord ID extracted from each
+`chatlog__message-container`'s `data-message-id`, and the clear error
+raised when that container is missing), OCR paragraph splitting and
+backend dispatch, the JSON log formatter, JSON state
 persistence (run dates, OCR cache and in-progress sessions both kept
 per-chatlog/per-folder indefinitely rather than as a single global slot,
 recent-path history), start-date validation, review-item building/output-writing
@@ -309,10 +345,15 @@ runner/cache short-circuit, the atomic-write-plus-backup-rotation/recovery
 behavior of every state file (`app/state.py`), and the finalize pass (cleanup + run-date +
 clipboard + BREAK-marker bookmarking), the review screen's slot-based
 keyboard navigation (`_move_focus` stepping through `(item_index, role)`
-slots in transcript order, message-before-ocr for a row with both), and
-its row-height estimation/visible-range math (`app/gui/virtualization.py`,
+slots in transcript order, message-before-ocr for a row with both), its
+row-height estimation/visible-range math (`app/gui/virtualization.py`,
 the part of the windowing logic that's pure enough to unit-test without a
-display). The GUI itself only has a manual smoke test (window
+display), and resume's message-id-based edit/focus matching
+(`app/gui/main_window.py`'s `_match_saved_edits`/`_match_focus_slot` -
+edits surviving messages appended or inserted mid-transcript in a
+re-export, orphaned edits for now-filtered-out messages being dropped, and
+a stale focus slot falling back to no restore). The GUI itself only has a
+manual smoke test (window
 construction, the review screen with synthetic text-only/image-only/
 image-with-caption items, an edit-then-finalize pass against a temp
 output file, and a resumed session's saved edits/focus restoring
@@ -340,12 +381,6 @@ counts), review-screen build/finalize events, and caught exceptions.
   - neighboring rows' positions are only corrected on the next scroll-driven
   reconcile, not instantly, though this has no visible effect since the row
   being typed in doesn't move on screen either way.
-- Resuming a session re-runs HTML parsing/OCR from the saved inputs rather
-  than serializing the parsed messages themselves, so it's only matched
-  back up to the saved edits/focus by item count - if the underlying HTML
-  export changes between sessions (e.g. a fresh re-export with more
-  messages), the counts won't line up and the saved edits are discarded
-  with a warning instead of being (potentially incorrectly) reapplied.
 - Only one generation of backup is kept per state file (`*.bak`), not a
   full history - a crash can still lose up to one autosave interval's
   worth of review edits (5 seconds, `AUTOSAVE_INTERVAL_MS`) if it happens

@@ -21,7 +21,6 @@ Split into pieces the GUI can drive explicitly:
 import datetime
 import os
 import re
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -65,6 +64,15 @@ def parse_approved_user_ids(text: str) -> set[str]:
 def parse_start_date(date_str: str) -> int:
     """Parse a 'YYYY-MM-DD[-HH-MM-SS]' string into a unix timestamp.
 
+    The components are interpreted as UTC, not the local machine's
+    timezone - matching how finalize_run records the date this field is
+    normally pre-filled from (datetime.fromtimestamp(..., tz=utc)) and how
+    chatlog.parse_message_groups now converts each message's own timestamp
+    to a true UTC epoch via the export's declared timezone. Comparing two
+    epoch seconds computed the same well-defined way is what makes the
+    comparison correct regardless of what timezone either the exporting
+    device or this machine happens to be in.
+
     Raises ValueError with a readable message on bad input, rather than the
     original script's unguarded ``int(x)`` crash.
     """
@@ -85,12 +93,12 @@ def parse_start_date(date_str: str) -> int:
         )
 
     try:
-        date = datetime.datetime(*numeric_parts)
+        date = datetime.datetime(*numeric_parts, tzinfo=datetime.timezone.utc)
     except ValueError as exc:
         logger.warning("invalid start date input", extra=logging_config.extra(date_str=date_str))
         raise ValueError(f"Could not parse date {date_str!r}: {exc}")
 
-    timestamp = int(time.mktime(date.timetuple()))
+    timestamp = int(date.timestamp())
     logger.info("parsed start date", extra=logging_config.extra(date_str=date_str, timestamp=timestamp))
     return timestamp
 
@@ -157,14 +165,13 @@ def run_ocr_batch(
 
 def write_message_lines(output_path: Path, lines_to_write: list[str]) -> None:
     """Append one message's lines to the output file, matching the original
-    padding/format (blank-line separators, literal '\\n' restored to real
-    newlines in corrected text)."""
+    padding/format (blank-line separators)."""
     with open(output_path, "a", encoding="utf8") as f:
         if lines_to_write:
             f.write("\n\n\n\n")
 
         for line in lines_to_write:
-            f.write(line.replace("\\n", "\n"))
+            f.write(line)
 
         if lines_to_write:
             f.write("\n\n")
@@ -188,6 +195,10 @@ class ReviewItem:
     image_path: Optional[Path]
     initial_message_text: Optional[str]
     initial_ocr_text: Optional[str]
+
+    @property
+    def message_id(self) -> str:
+        return self.entry.message_id
 
 
 def build_review_items(

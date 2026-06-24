@@ -100,8 +100,16 @@ class ImageLoader:
             should_be_loaded = row_bottom >= visible_top and row_top <= visible_bottom
 
             if should_be_loaded and not slot.loaded:
+                logger.debug(
+                    "loading image",
+                    extra=logging_config.extra(index=idx, row_top=row_top, row_bottom=row_bottom),
+                )
                 self._load_image(slot)
             elif not should_be_loaded and slot.loaded:
+                logger.debug(
+                    "unloading image",
+                    extra=logging_config.extra(index=idx, row_top=row_top, row_bottom=row_bottom),
+                )
                 self._unload_image(slot)
 
     def _load_image(self, slot: ImageSlot) -> None:

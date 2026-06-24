@@ -58,7 +58,7 @@ def test_parse_approved_user_ids_empty_text_returns_empty_set():
 
 
 def test_build_review_items_text_only_message():
-    entries = [MessageEntry(text_lines=["hello", "world"], image_name=None)]
+    entries = [MessageEntry(message_id="m", text_lines=["hello", "world"], image_name=None)]
     items = build_review_items(entries, file_info={}, image_folder=Path("/images"))
 
     assert len(items) == 1
@@ -72,7 +72,7 @@ def test_build_review_items_text_only_message():
 
 
 def test_build_review_items_image_message_joins_paragraphs():
-    entries = [MessageEntry(text_lines=[], image_name="card.png")]
+    entries = [MessageEntry(message_id="m", text_lines=[], image_name="card.png")]
     file_info = {"card.png": ["first paragraph ", " second paragraph"]}
     items = build_review_items(entries, file_info, image_folder=Path("/images"))
 
@@ -85,7 +85,7 @@ def test_build_review_items_image_message_joins_paragraphs():
 
 
 def test_build_review_items_image_with_caption_gets_both_boxes():
-    entries = [MessageEntry(text_lines=["look at this"], image_name="card.png")]
+    entries = [MessageEntry(message_id="m", text_lines=["look at this"], image_name="card.png")]
     file_info = {"card.png": ["ocr text"]}
     items = build_review_items(entries, file_info, image_folder=Path("/images"))
 
@@ -94,14 +94,14 @@ def test_build_review_items_image_with_caption_gets_both_boxes():
 
 
 def test_build_review_items_image_missing_from_cache_uses_empty_text():
-    entries = [MessageEntry(text_lines=[], image_name="missing.png")]
+    entries = [MessageEntry(message_id="m", text_lines=[], image_name="missing.png")]
     items = build_review_items(entries, file_info={}, image_folder=Path("/images"))
 
     assert items[0].initial_ocr_text == ""
 
 
 def test_lines_for_item_uses_initial_text_by_default():
-    entries = [MessageEntry(text_lines=["caption"], image_name="card.png")]
+    entries = [MessageEntry(message_id="m", text_lines=["caption"], image_name="card.png")]
     items = build_review_items(
         entries, {"card.png": ["the ocr text"]}, image_folder=Path("/images")
     )
@@ -111,7 +111,7 @@ def test_lines_for_item_uses_initial_text_by_default():
 
 
 def test_lines_for_item_uses_edited_ocr_text_when_given():
-    entries = [MessageEntry(text_lines=[], image_name="card.png")]
+    entries = [MessageEntry(message_id="m", text_lines=[], image_name="card.png")]
     items = build_review_items(
         entries, {"card.png": ["original"]}, image_folder=Path("/images")
     )
@@ -121,7 +121,7 @@ def test_lines_for_item_uses_edited_ocr_text_when_given():
 
 
 def test_lines_for_item_image_with_caption_uses_both_edited_texts():
-    entries = [MessageEntry(text_lines=["original caption"], image_name="card.png")]
+    entries = [MessageEntry(message_id="m", text_lines=["original caption"], image_name="card.png")]
     items = build_review_items(
         entries, {"card.png": ["original ocr"]}, image_folder=Path("/images")
     )
@@ -133,7 +133,7 @@ def test_lines_for_item_image_with_caption_uses_both_edited_texts():
 
 
 def test_lines_for_item_text_only_message_uses_edited_text_when_given():
-    entries = [MessageEntry(text_lines=["just text"], image_name=None)]
+    entries = [MessageEntry(message_id="m", text_lines=["just text"], image_name=None)]
     items = build_review_items(entries, file_info={}, image_folder=Path("/images"))
 
     lines = lines_for_item(items[0], edited_message_text="user-adjusted spacing")
@@ -141,7 +141,7 @@ def test_lines_for_item_text_only_message_uses_edited_text_when_given():
 
 
 def test_lines_for_item_text_only_message_uses_initial_text_by_default():
-    entries = [MessageEntry(text_lines=["just text"], image_name=None)]
+    entries = [MessageEntry(message_id="m", text_lines=["just text"], image_name=None)]
     items = build_review_items(entries, file_info={}, image_folder=Path("/images"))
 
     lines = lines_for_item(items[0])
@@ -153,8 +153,8 @@ def test_write_all_items_writes_each_message_in_order(tmp_path):
     output_path.write_text("", encoding="utf8")
 
     entries = [
-        MessageEntry(text_lines=["first message"], image_name=None),
-        MessageEntry(text_lines=[], image_name="card.png"),
+        MessageEntry(message_id="m1", text_lines=["first message"], image_name=None),
+        MessageEntry(message_id="m2", text_lines=[], image_name="card.png"),
     ]
     items = build_review_items(
         entries, {"card.png": ["card text"]}, image_folder=tmp_path

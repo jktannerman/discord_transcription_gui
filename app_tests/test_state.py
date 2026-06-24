@@ -140,8 +140,8 @@ def test_session_round_trip(tmp_path, monkeypatch):
         "start_time": 12345,
         "approved_author_ids": ["111", "222"],
         "use_cache": True,
-        "edited_texts": [None, "edited text"],
-        "focus_index": 1,
+        "edited_texts": {"222222222222222222": {"message": None, "ocr": "edited text"}},
+        "focus_slot": ["222222222222222222", "ocr"],
         "scroll_fraction": 0.5,
     }
 
