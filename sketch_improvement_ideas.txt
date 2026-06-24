@@ -108,26 +108,52 @@ Please assess the current structure and give thoughts on possible paths forward,
 There should be a better way to handle this. The priority is speed; I don't mind if text input boxes are created slightly too small initially, so long as any unexpectedly overflowing text can be absorbed by a scrollbar appearing inside. Right now, I am considering making it so the height of the text input boxes are based purely on the height of the relevant image as it would be displayed in the left column; either exactly the same height, or perhaps a little larger, above and below; to a maximum of the current maximum height. If the user adds new lines, the textbox should not increase in height; a scrollbar should again appear inside.
 
 
-Note that there are many aspects of the original transcription program that are rather clumsy. In particular:
+- done?
+future-proofing: what happens if a message has multiple images attached to it? need to test
 
-- The regex find-replaces at the end were ad-hoc and seem clumsy to me, but it was not clear how to do better. Do not feel too bound to the original algorithm, so long as the results are essentially the same. I may need to write a spec that goes over the intended behaviour, with examples.
-- I am not completely confident in my usage of BeautifulSoup to parse the Discord chatlog HTML. I have placed two new objects in the `original_transcription_program` folder: `pq_wm_0001_p2.html`, and `pq_wm_0001_p2.html_Files`, a folder containing the related images. You may look at those and attempt to improve on the HTML parsing process.
+I am not completely confident in my usage of BeautifulSoup to parse the Discord chatlog HTML. In the `example_inputs` folder: consider `pq_wm_0001_p2.html`, and `pq_wm_0001_p2.html_Files`, a folder containing the related images. You may look at those and attempt to improve on the HTML parsing process. 
+
+In particular, attention should be paid to the possibility that a given message may have multiple images attached. 
+
+
+
+When done, please migrate any existing data to the new format, as necessary. There should only be one set.
+
+
+focus not saved? or offscreen on resume? Needs to show cursor.
+
+
+
+When pressing Up or Down while in a textbox, if that would take the cursor offscreen, the page should scroll so as to keep the cursor visible; for example, holding Down should align the bottom of the focused textbox with the bottom of the main part of the window.
+
+
+Page Up/Down should preserve the current focus where possible.
+
+
+
+Please make the right column input textboxes a little larger than the corresponding left column elements. They should be about one line taller upwards and one line taller downwards, in the relevant font size.
 
 
 Please add an option to restore the last session, even if it was finalised and written to an output file, in order to be able to redo something overlooked.
 
 
-undo/redo in a given text input window
+undo/redo in a given text input window, persisting across switching windows, but not across different sessions.
 
 
 A very minor bug: the window bar does not appear black on startup. This is fixed on resizing the window or alt-tabbing. A bugfix was already attempted once, but it seems to have been insufficient.
 
 
-image size issues? add zoom?	
+image size issues? add zoom?
+
+
+
+
+
 
 item mode
 combat mode
 map mode
+book mode
 
 personalised clipboard?
 
@@ -135,16 +161,59 @@ personalised clipboard?
 ctrl-f?? with regex?
 
 
-future-proofing: what happens if a message has multiple images attached to it? need to test
-
 
 write spec for exact line spacing rules
 
 
-Are the logs as useful as they could be? Are there any gaps in coverage?
+After a user finishes transcribing all of the images, the output file is generated. At this stage, varying numbers of newlines are currently appended to each image transcription via regex. This is leftover behavior from the original transcription program, aimed to make the end product Google Doc more readable. However, in the current framework, we can do better.
+
+I am considering two options. The first is to add a new element after every text and image element. Unlike the others, this would contain only a right column input box, with no left column content; the text input box would contain a certain number of 'newline characters' that literally appear to the user as backslash, n, backslash, n. The user could edit this as they see fit in order to manually control the spacing between whatever is above and whatever is below. Nothing here that is not a backslash or an n should affect anything else.
+
+The second option is very similar. Instead of adding separate elements, it would directly scan the end of each text input box for copies of user-typed backslash-n copies, which would behave as described above. The advantage is of course that this would require far less space. The drawback is that it is potentially slightly messier logic-wise. Please give your thoughts regarding these two options, as well as any promising alternatives.
+
+Either way, all *actual* newline characters at the ends of image/text transcriptions should be ignored and stripped out, whether they appear before the backslash-n copies, after, or are mixed in between.
+
+If you have any other questions, ask.
+
+
+Default newline specifications (a note should be made of these somewhere):
+
+- Image transcriptions should usually be followed by three completely empty lines; this takes four newline characters, I believe.
+- If a message contains both text and an image, one completely empty line (two newlines) should separate the text from the the image, which should then work as above.
+- If a message contains only text, by default it should be followed by three completely empty lines.
+- - However, if a message is a die rolling command (currently characterised by beginning with `%roll \d*(d|l|h)\d+` or `%draw \d+ \d+`), no empty lines should separate it from the next message, which can be assumed to be the corresponding die-roll results.
+- - A message which is a die rolling result should by default be followed by three empty lines, but if the next message is also a die rolling command, it should be followed by only one empty line.
+
+
+
+flag/highlight common misspellings? (scan upper/lowercase) just actual spellcheck with red underlines??
+
+I's -> It's - 4
+I'l -> It'll - 1
+Im -> I'm or similar  - 2
+singular dashes, like ‘ - 4
+commas instead of dots, A/B/C, - 3
+itis -> it is - 1
+tum -> turn - 2
+quiock -> quick - 1
+o -> or - 1
+| -> I - 2
+litle -> little - 1
+Itall -> It all 
+© -> C - 3
+
+
+
+
+Are the logs as useful as they could be? 
+
+Are there any major gaps in test coverage or logging coverage?
+
+Are there any aspects that are noticeably missing, comparing this project to a professional one?
 
 
 This project has now seen several updates and revisions. Please consider its current overall structure:
 
 - Is it still natural? Are there any obvious problems or potential improvements to be made?
 - Are there any overcomplicated parts of the code which are contradictory or likely to lead to problems in the future?
+

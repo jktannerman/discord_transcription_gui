@@ -38,25 +38,31 @@ from .setup_view import SetupFrame
 logger = logging_config.get_logger(__name__)
 
 
+def _is_old_session_format(saved_texts: dict) -> bool:
+    """Whether saved_texts is in the pre-spacer-slot session format (each
+    per-message edit was a fixed {"message": ..., "ocr": [...]} shape) -
+    detected by the literal key "ocr", which is never a valid role name in
+    the current role->text format ("message", "ocr0", "ocr1", ...,
+    "spacer_*"). There's no version field in the session file to check
+    directly, so this structural fingerprint is what tells the two apart."""
+    return any(isinstance(edit, dict) and "ocr" in edit for edit in saved_texts.values())
+
+
 def _match_saved_edits(
     review_items: list["pipeline.ReviewItem"], saved_texts: dict
-) -> list[tuple[Optional[str], list[Optional[str]]]]:
+) -> list[dict[str, Optional[str]]]:
     """Translate a session's message_id-keyed saved edits onto the
     freshly-parsed review_items' current positions. Saved entries whose
     message_id no longer appears (the message was filtered out, or removed
     from a later re-export) are simply dropped - silently, since this is
     the expected outcome of normal chatlog growth, not an error.
 
-    A saved edit's "ocr" list is aligned to the matched item's *current*
-    image_paths by position, padding with None (meaning "not edited") if
-    the saved list is shorter, and ignoring any extra entries if it's
-    longer - covers a re-export changing how many images that exact
-    message has, which would otherwise misalign an OCR edit onto the wrong
-    image."""
+    A saved edit's roles are filtered down to the matched item's *current*
+    slot_roles - covers a re-export changing how many images (and so how
+    many "ocrN"/"spacer_imgN" slots) that exact message has, which would
+    otherwise misalign a saved edit onto the wrong slot."""
     by_id = {item.message_id: idx for idx, item in enumerate(review_items)}
-    built: list[tuple[Optional[str], list[Optional[str]]]] = [
-        (None, [None] * len(item.image_paths)) for item in review_items
-    ]
+    built: list[dict[str, Optional[str]]] = [{} for _ in review_items]
     matched = dropped = 0
     for message_id, edit in saved_texts.items():
         idx = by_id.get(message_id)
@@ -64,12 +70,8 @@ def _match_saved_edits(
             dropped += 1
             continue
         matched += 1
-        item = review_items[idx]
-        saved_ocr = edit.get("ocr") or []
-        aligned_ocr = [
-            saved_ocr[i] if i < len(saved_ocr) else None for i in range(len(item.image_paths))
-        ]
-        built[idx] = (edit.get("message"), aligned_ocr)
+        valid_roles = set(review_items[idx].slot_roles)
+        built[idx] = {role: text for role, text in edit.items() if role in valid_roles}
     logger.info(
         "resumed session edits matched by message_id",
         extra=logging_config.extra(
@@ -337,12 +339,9 @@ class App:
                 focus_message_id = [self._review_items[idx].message_id, role]
 
             edited_texts_by_id = {}
-            for idx, (message_text, ocr_texts) in enumerate(frame.collect_edited_texts()):
-                if message_text is not None or any(t is not None for t in ocr_texts):
-                    edited_texts_by_id[self._review_items[idx].message_id] = {
-                        "message": message_text,
-                        "ocr": ocr_texts,
-                    }
+            for idx, edited in enumerate(frame.collect_edited_texts()):
+                if any(text is not None for text in edited.values()):
+                    edited_texts_by_id[self._review_items[idx].message_id] = edited
 
             session = {
                 "html_path": str(run.html_path),
@@ -396,15 +395,20 @@ class App:
         initial_scroll_fraction = None
         if resume is not None:
             saved_texts = resume.get("edited_texts")
-            if isinstance(saved_texts, dict):
-                initial_saved_texts = _match_saved_edits(self._review_items, saved_texts)
-                initial_focus_slot = _match_focus_slot(self._review_items, resume.get("focus_slot"))
-                initial_scroll_fraction = resume.get("scroll_fraction")
-            else:
+            if not isinstance(saved_texts, dict):
                 logger.warning(
                     "saved session edited_texts has unexpected shape, discarding",
                     extra=logging_config.extra(saved_texts_type=type(saved_texts).__name__),
                 )
+            elif _is_old_session_format(saved_texts):
+                logger.warning(
+                    "saved session uses the pre-spacer-slot edited_texts format, discarding",
+                    extra=logging_config.extra(message_count=len(saved_texts)),
+                )
+            else:
+                initial_saved_texts = _match_saved_edits(self._review_items, saved_texts)
+                initial_focus_slot = _match_focus_slot(self._review_items, resume.get("focus_slot"))
+                initial_scroll_fraction = resume.get("scroll_fraction")
 
         frame = ReviewFrame(
             self.container,
@@ -418,7 +422,7 @@ class App:
         self._review_frame = frame
         self._start_autosave()
 
-    def _on_finalize_clicked(self, edited_texts: list[tuple[str | None, list[str | None]]]) -> None:
+    def _on_finalize_clicked(self, edited_texts: list[dict[str, str | None]]) -> None:
         logger.info("finalize clicked")
         run = self._run
         try:

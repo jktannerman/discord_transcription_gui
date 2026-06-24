@@ -33,12 +33,7 @@ class _NavStub(KeyboardNavMixin):
 
     def __init__(self, items):
         self._items = items
-        self._slots = []
-        for idx, item in enumerate(items):
-            if item.initial_message_text is not None:
-                self._slots.append((idx, "message"))
-            for image_index in range(len(item.image_paths)):
-                self._slots.append((idx, f"ocr{image_index}"))
+        self._slots = [(idx, role) for idx, item in enumerate(items) for role in item.slot_roles]
         self._slot_positions = {slot: pos for pos, slot in enumerate(self._slots)}
         self._text_widgets = {slot: _FakeTextWidget(self, slot) for slot in self._slots}
         self._finalize_button = _FakeTextWidget(self, "finalize_button")
@@ -88,17 +83,21 @@ def _two_images_item():
 
 def test_slots_built_message_before_ocr_for_an_item_with_both():
     nav = _NavStub([_image_with_caption_item()])
-    assert nav._slots == [(0, "message"), (0, "ocr0")]
+    assert nav._slots == [(0, "message"), (0, "spacer_msg_img"), (0, "ocr0"), (0, "spacer_end")]
 
 
 def test_slots_skip_roles_an_item_does_not_have():
     nav = _NavStub([_text_item(), _image_item()])
-    assert nav._slots == [(0, "message"), (1, "ocr0")]
+    assert nav._slots == [
+        (0, "message"), (0, "spacer_end"), (1, "ocr0"), (1, "spacer_end"),
+    ]
 
 
 def test_slots_built_one_per_image_in_attachment_order():
     nav = _NavStub([_two_images_item()])
-    assert nav._slots == [(0, "ocr0"), (0, "ocr1")]
+    assert nav._slots == [
+        (0, "ocr0"), (0, "spacer_img0"), (0, "ocr1"), (0, "spacer_end"),
+    ]
 
 
 def test_move_focus_forward_from_nothing_focused_lands_on_first_slot():
@@ -110,15 +109,21 @@ def test_move_focus_forward_from_nothing_focused_lands_on_first_slot():
 def test_move_focus_backward_from_nothing_focused_lands_on_last_slot():
     nav = _NavStub([_text_item(), _image_item()])
     nav._move_focus(-1)
-    assert nav.focus_get().key == (1, "ocr0")
+    assert nav.focus_get().key == (1, "spacer_end")
 
 
 def test_move_focus_forward_advances_through_slots_in_order():
+    # Includes the spacer slots: Tab visits them too, per the project
+    # owner's decision.
     nav = _NavStub([_image_with_caption_item(), _text_item()])
     nav._move_focus(1)
     assert nav.focus_get().key == (0, "message")
     nav._move_focus(1)
+    assert nav.focus_get().key == (0, "spacer_msg_img")
+    nav._move_focus(1)
     assert nav.focus_get().key == (0, "ocr0")
+    nav._move_focus(1)
+    assert nav.focus_get().key == (0, "spacer_end")
     nav._move_focus(1)
     assert nav.focus_get().key == (1, "message")
 
@@ -128,6 +133,8 @@ def test_move_focus_advances_through_every_image_slot_of_a_multi_image_message()
     nav._move_focus(1)
     assert nav.focus_get().key == (0, "ocr0")
     nav._move_focus(1)
+    assert nav.focus_get().key == (0, "spacer_img0")
+    nav._move_focus(1)
     assert nav.focus_get().key == (0, "ocr1")
 
 
@@ -136,6 +143,8 @@ def test_move_focus_forward_off_the_end_focuses_finalize_button():
     nav._move_focus(1)
     assert nav.focus_get().key == (0, "message")
     nav._move_focus(1)
+    assert nav.focus_get().key == (0, "spacer_end")
+    nav._move_focus(1)
     assert nav.focus_get() is nav._finalize_button
 
 
@@ -143,7 +152,7 @@ def test_move_focus_backward_from_finalize_button_focuses_last_slot():
     nav = _NavStub([_text_item(), _image_item()])
     nav._finalize_button.focus_set()
     nav._move_focus(-1)
-    assert nav.focus_get().key == (1, "ocr0")
+    assert nav.focus_get().key == (1, "spacer_end")
 
 
 def test_move_focus_backward_off_the_start_stays_put():

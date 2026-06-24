@@ -5,21 +5,13 @@ def test_pipe_replaced_with_capital_i():
     assert clean_transcript("Health: ||||") == "Health: IIII"
 
 
-def test_roll_line_excess_newlines_collapsed():
-    text = "%roll 1d100\n\n\n\nresult\n"
-    cleaned = clean_transcript(text)
-    assert cleaned.startswith("%roll 1d100\nresult")
-
-
-def test_draw_line_excess_newlines_collapsed():
-    text = "%draw something\n\n\n\nresult\n"
-    cleaned = clean_transcript(text)
-    assert cleaned.startswith("%draw something\nresult")
-
-
-def test_excess_blank_lines_collapsed_to_three():
+def test_deliberately_large_gap_is_not_collapsed():
+    # Blank-line spacing is now entirely owned by the review screen's
+    # spacer slots (see pipeline.ReviewItem.slot_roles), so a gap larger
+    # than the old 3-blank-line cap is left exactly as written rather than
+    # being clobbered back down.
     text = "a\n\n\n\n\n\nb"
-    assert clean_transcript(text) == "a\n\n\n\nb"
+    assert clean_transcript(text) == text
 
 
 def test_stray_literal_backslash_n_removed():

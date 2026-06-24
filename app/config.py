@@ -11,6 +11,7 @@ below (the GM and the dice-roller bot) are still used as the very first
 run's default content, before anything has been cached yet.
 """
 
+import re
 from pathlib import Path
 
 TESSERACT_CMD = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
@@ -54,3 +55,21 @@ MAX_RECENT_PATHS = 8
 AUTOSAVE_INTERVAL_MS = 5000
 
 TIMESTAMP_FORMAT = "%d/%m/%Y %H:%M"
+
+# A message matching this is a die-roll command (e.g. "%roll 2d6",
+# "%draw 1 20") - its result is assumed to be the very next approved
+# message, so spacer defaults treat the pair as one continuous block
+# rather than separating them like a normal message - see
+# pipeline.build_review_items and ARCHITECTURE.md's "Spacer slots" section.
+DICE_COMMAND_RE = re.compile(r"^%roll \d*(d|l|h)\d+|^%draw \d+ \d+")
+
+# Default blank-line counts a spacer slot is pre-filled with (see
+# ARCHITECTURE.md's "Spacer slots" section for the full table this
+# implements) - the literal "\n" token count written into a spacer box is
+# always one more than the empty-line count, since the gap also includes
+# the newline that terminates the line right before it.
+EMPTY_LINES_NORMAL = 3
+EMPTY_LINES_TEXT_TO_IMAGE = 1
+EMPTY_LINES_BETWEEN_IMAGES = 2
+EMPTY_LINES_DICE_COMMAND_TO_RESULT = 0
+EMPTY_LINES_RESULT_TO_NEXT_COMMAND = 1

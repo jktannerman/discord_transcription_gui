@@ -15,7 +15,7 @@ from PIL import Image
 
 from gui_transcription.app.chatlog import MessageEntry
 from gui_transcription.app.gui.review_view import ReviewFrame
-from gui_transcription.app.pipeline import ReviewItem
+from gui_transcription.app.pipeline import ReviewItem, build_review_items
 
 # Unlike the other GUI-backed test files, this one can't withdraw() its
 # root - a withdrawn window never gets real pixel geometry, which these
@@ -53,25 +53,19 @@ def sample_image(tmp_path):
 def _items(sample_image, count=40):
     """A mix of text-only, image-only, and image-with-caption rows, in a
     fixed repeating pattern - the same three row shapes _build_row has to
-    lay out differently from one another."""
-    items = []
+    lay out differently from one another. Built via build_review_items
+    (not constructed by hand) so every item's spacer slots get properly
+    populated defaults, the same way a real run's items would."""
+    entries = []
     for i in range(count):
         if i % 3 == 0:
-            items.append(ReviewItem(
-                entry=MessageEntry(message_id=str(i), text_lines=[f"text only {i}"], image_names=[]),
-                image_paths=[], initial_message_text=f"text only {i}", initial_ocr_texts=[],
-            ))
+            entries.append(MessageEntry(message_id=str(i), text_lines=[f"text only {i}"], image_names=[]))
         elif i % 3 == 1:
-            items.append(ReviewItem(
-                entry=MessageEntry(message_id=str(i), text_lines=[], image_names=["sample.png"]),
-                image_paths=[sample_image], initial_message_text=None, initial_ocr_texts=[f"ocr {i}"],
-            ))
+            entries.append(MessageEntry(message_id=str(i), text_lines=[], image_names=["sample.png"]))
         else:
-            items.append(ReviewItem(
-                entry=MessageEntry(message_id=str(i), text_lines=[f"caption {i}"], image_names=["sample.png"]),
-                image_paths=[sample_image], initial_message_text=f"caption {i}", initial_ocr_texts=[f"ocr {i}"],
-            ))
-    return items
+            entries.append(MessageEntry(message_id=str(i), text_lines=[f"caption {i}"], image_names=["sample.png"]))
+    file_info = {"sample.png": ["ocr text"]}
+    return build_review_items(entries, file_info, image_folder=sample_image.parent)
 
 
 def _build_frame(root, items, **kwargs):
@@ -159,10 +153,9 @@ def test_collect_edited_texts_returns_initial_text_for_untouched_items(root, sam
     collected = frame.collect_edited_texts()
 
     assert len(collected) == len(items)
-    for (message_text, ocr_texts), item in zip(collected, items):
-        if item.initial_message_text is not None:
-            assert message_text == item.initial_message_text
-        assert ocr_texts == [text or "" for text in item.initial_ocr_texts]
+    for edited, item in zip(collected, items):
+        for role in item.slot_roles:
+            assert edited[role] == item.initial_text_for_role(role)
 
 
 def test_finalize_button_visible_for_a_transcript_that_fits_on_screen(root, sample_image):
@@ -191,6 +184,25 @@ def test_finalize_collects_current_edits_and_calls_on_finalize(root, sample_imag
     assert len(finalized[0]) == len(items)
 
 
+def test_spacer_slot_boxes_are_one_line_tall_and_hold_their_own_text(root, sample_image):
+    items = [
+        ReviewItem(
+            entry=MessageEntry(message_id="0", text_lines=["caption"], image_names=["sample.png"]),
+            image_paths=[sample_image], initial_message_text="caption", initial_ocr_texts=["ocr"],
+            initial_spacer_texts={"spacer_msg_img": "\\n\\n", "spacer_end": "\\n\\n\\n\\n"},
+        ),
+    ]
+    frame, _ = _build_frame(root, items)
+
+    spacer_widget = frame._text_widgets[(0, "spacer_msg_img")]
+    assert int(spacer_widget.cget("height")) == 1
+    assert spacer_widget.get("1.0", "end-1c") == "\\n\\n"
+
+    end_widget = frame._text_widgets[(0, "spacer_end")]
+    assert int(end_widget.cget("height")) == 1
+    assert end_widget.get("1.0", "end-1c") == "\\n\\n\\n\\n"
+
+
 def test_resuming_session_restores_saved_edit_and_focus(root, sample_image):
     """Real OS/window-manager focus delivery is too flaky to assert on
     directly in an automated run (several Tk windows get created/destroyed
@@ -200,8 +212,8 @@ def test_resuming_session_restores_saved_edit_and_focus(root, sample_image):
     there in a live app."""
     items = _items(sample_image, count=5)
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
-    saved_texts = [(None, [None] * len(item.image_paths)) for item in items]
-    saved_texts[text_item] = ("a resumed edit", [None] * len(items[text_item].image_paths))
+    saved_texts = [{} for _ in items]
+    saved_texts[text_item] = {"message": "a resumed edit"}
 
     finalized = []
     frame = ReviewFrame(

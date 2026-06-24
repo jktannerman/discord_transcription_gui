@@ -27,6 +27,7 @@ from .layout_constants import (
     GAP_BETWEEN_STACKED_PX,
     ROW_FRAME_BORDERWIDTH_PX,
     ROW_FRAME_PADDING_PX,
+    SPACER_BOX_HEIGHT_PX,
     TEXT_BOX_MARGIN_PX,
 )
 
@@ -76,30 +77,32 @@ class RowBuildingMixin:
         right = ttk.Frame(row)
         right.pack(side="left", fill="x", expand=True, padx=6)
 
-        has_message = item.initial_message_text is not None
-        image_count = len(item.image_paths)
-        # Number of stacked elements (caption, then each image) in this
-        # row - every element but the last gets a gap below it so stacked
-        # boxes (and their immutable counterparts) don't touch.
-        stacked_count = (1 if has_message else 0) + image_count
-        elements_built = 0
+        # One stacked sub-element per slot role (message/ocrN paired with
+        # their left-column counterpart, plus a left-column-less spacer
+        # role between/after them) - every element but the last gets a gap
+        # below it so stacked boxes (and their immutable counterparts)
+        # don't touch. See ReviewItem.slot_roles for the ordering.
+        roles = item.slot_roles
+        for position, role in enumerate(roles):
+            gap = GAP_BETWEEN_STACKED_PX if position < len(roles) - 1 else 0
 
-        if has_message:
-            elements_built += 1
-            gap = GAP_BETWEEN_STACKED_PX if elements_built < stacked_count else 0
-            message_h = self._build_immutable_message_label(left, item, pady_bottom=gap)
-            self._build_editable_text_box(
-                right, index, "message", item.initial_message_text, message_h, pady_bottom=gap,
-            )
-
-        for image_index, image_path in enumerate(item.image_paths):
-            elements_built += 1
-            gap = GAP_BETWEEN_STACKED_PX if elements_built < stacked_count else 0
-            image_h = self._build_image_placeholder(left, image_path, index, image_index, pady_bottom=gap)
-            self._build_editable_text_box(
-                right, index, f"ocr{image_index}", item.initial_ocr_texts[image_index],
-                image_h, pady_bottom=gap,
-            )
+            if role == "message":
+                message_h = self._build_immutable_message_label(left, item, pady_bottom=gap)
+                self._build_editable_text_box(
+                    right, index, "message", item.initial_message_text, message_h, pady_bottom=gap,
+                )
+            elif role.startswith("ocr"):
+                image_index = int(role[len("ocr"):])
+                image_h = self._build_image_placeholder(
+                    left, item.image_paths[image_index], index, image_index, pady_bottom=gap,
+                )
+                self._build_editable_text_box(
+                    right, index, role, item.initial_ocr_texts[image_index], image_h, pady_bottom=gap,
+                )
+            else:
+                self._build_spacer_text_box(
+                    right, index, role, item.initial_spacer_texts[role], pady_bottom=gap,
+                )
 
         return row
 
@@ -222,6 +225,56 @@ class RowBuildingMixin:
         # only while content actually overflows the box.
         text_widget.pack(side="left", fill="both", expand=True)
 
+        self._populate_text_box(key, text_widget, initial_text)
+        self._text_widgets[key] = text_widget
+        self._text_containers[key] = text_container
+
+    def _build_spacer_text_box(
+        self,
+        parent: tk.Widget,
+        index: int,
+        role: str,
+        initial_text: str,
+        pady_bottom: int = 0,
+    ) -> None:
+        """Build one spacer slot's text box - role is "spacer_msg_img"
+        (between a message's text and its first image), "spacer_img{N}"
+        (between the Nth and (N+1)th image on the same message), or
+        "spacer_end" (the gap before the next message) - see
+        ReviewItem.slot_roles. Unlike _build_editable_text_box, there is no
+        left-column counterpart to pair against: the box is fixed at
+        exactly one Tk text line tall (SPACER_BOX_HEIGHT_PX, via `height=1`
+        on the real Text widget) regardless of content, with no internal
+        scrollbar - it's meant to hold only a handful of literal "\\n"
+        tokens, not wrapped prose. Registered in the same (index, role)-keyed
+        bookkeeping dicts as a content box, so it's just as reachable by
+        Tab/Shift-Tab and just as covered by row-teardown/resume edit
+        persistence."""
+        key = (index, role)
+        text_container = ttk.Frame(parent, height=SPACER_BOX_HEIGHT_PX)
+        text_container.pack(side="top", fill="x", pady=(0, pady_bottom))
+        text_container.pack_propagate(False)
+
+        text_widget = tk.Text(
+            text_container, height=1, wrap="none", relief="flat", undo=True,
+            font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE),
+            bg=theme.DARK_TEXT_BG, fg=theme.DARK_FG, insertbackground=theme.DARK_INSERT,
+            selectbackground=theme.DARK_ACCENT, selectforeground="white",
+            highlightthickness=1, highlightbackground=theme.DARK_BG_ALT,
+            highlightcolor=theme.DARK_FOCUS_HIGHLIGHT,
+            padx=TEXT_BOX_INNER_PADX, pady=4,
+        )
+        text_widget.pack(side="left", fill="both", expand=True)
+
+        self._populate_text_box(key, text_widget, initial_text)
+        self._text_widgets[key] = text_widget
+        self._text_containers[key] = text_container
+
+    def _populate_text_box(self, key: Tuple[int, str], text_widget: tk.Text, initial_text: str) -> None:
+        """Insert a box's starting text (a saved edit if this row was
+        previously visited and torn down, else its default) and wire up
+        the keyboard/undo/modified bindings shared by every editable box,
+        content or spacer alike."""
         saved = self._saved_texts.get(key)
         text_widget.insert("1.0", saved if saved is not None else initial_text)
         # The "insert" mark has right gravity, so inserting at "1.0" (where
@@ -245,8 +298,6 @@ class RowBuildingMixin:
             "<<Modified>>",
             lambda e, k=key, t=text_widget: self._on_text_modified(k, t),
         )
-        self._text_widgets[key] = text_widget
-        self._text_containers[key] = text_container
 
     def _max_text_box_height_px(self) -> int:
         """Cap an editable text box's height at TEXT_BOX_MAX_HEIGHT_FRACTION

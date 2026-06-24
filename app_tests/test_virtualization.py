@@ -1,7 +1,17 @@
 from pathlib import Path
 
 from gui_transcription.app.chatlog import MessageEntry
-from gui_transcription.app.gui.virtualization import compute_visible_range, estimate_row_height
+from gui_transcription.app.gui.layout_constants import (
+    GAP_BETWEEN_STACKED_PX,
+    ROW_FRAME_OVERHEAD_PX,
+    SPACER_BOX_HEIGHT_PX,
+    TEXT_BOX_MARGIN_PX,
+)
+from gui_transcription.app.gui.virtualization import (
+    _estimate_message_text_height,
+    compute_visible_range,
+    estimate_row_height,
+)
 from gui_transcription.app.pipeline import ReviewItem
 
 
@@ -58,6 +68,20 @@ def test_estimate_row_height_two_images_taller_than_one():
         initial_message_text=None, initial_ocr_texts=["", ""],
     )
     assert estimate_row_height(two_images) > estimate_row_height(one_image)
+
+
+def test_estimate_row_height_text_only_includes_spacer_end_height():
+    # A text-only item's slot_roles is ["message", "spacer_end"] - the
+    # spacer contributes SPACER_BOX_HEIGHT_PX to the right column only
+    # (it has no left-column counterpart at all).
+    item = ReviewItem(
+        entry=MessageEntry(message_id="m", text_lines=["hi"], image_names=[]),
+        image_paths=[], initial_message_text="hi", initial_ocr_texts=[],
+    )
+    label_h = _estimate_message_text_height(item)
+    expected_left = label_h + GAP_BETWEEN_STACKED_PX
+    expected_right = label_h + TEXT_BOX_MARGIN_PX + GAP_BETWEEN_STACKED_PX + SPACER_BOX_HEIGHT_PX
+    assert estimate_row_height(item) == max(expected_left, expected_right) + ROW_FRAME_OVERHEAD_PX
 
 
 def test_compute_visible_range_empty_list_returns_empty_range():

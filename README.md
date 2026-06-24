@@ -163,12 +163,27 @@ What's in scope for v1 (by design, agreed with the project owner):
    in the same direction falls through to scrolling the whole review
    window, same as if the box weren't there.
 
+   Between every text/image piece - text and its first image, one image
+   and the next, and the gap before the next message - there's also a
+   **spacer box**: a one-line-tall, editable box holding nothing but
+   literal `\n` characters (typed as backslash-n, not real line breaks),
+   pre-filled with a default count (3 blank lines between most messages,
+   1 between a message's own text and its image, 2 between two images on
+   the same message, and no gap at all between a die-roll command and its
+   result) that you can freely add to, remove from, or otherwise edit -
+   anything else typed into one is ignored. This replaces the original
+   script's fixed regex-based spacing, which couldn't express anything
+   finer than its own hardcoded rules. See ARCHITECTURE.md's "Spacer
+   slots" section for the full default-spacing table and exactly how a
+   spacer's content is parsed at Finalize.
+
    Keyboard shortcuts on the review screen: **Ctrl+Backspace** deletes the
    previous word; **Tab**/**Shift+Tab** move between text boxes in
    transcript order (a message visits its message-text box first, if it
    has one, then one OCR box per attached image, in attachment order,
-   matching their top-to-bottom order on screen; paging the window in if
-   needed), landing on the Finalize button once there's no further box;
+   matching their top-to-bottom order on screen, with a spacer box visited
+   between/after each of those too; paging the window in if needed),
+   landing on the Finalize button once there's no further box;
    **Page Up**/**Page Down** scroll the whole window, overriding Tk's
    default of scrolling within whichever text box has focus;
    **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo within a single text box.
@@ -177,12 +192,17 @@ What's in scope for v1 (by design, agreed with the project owner):
    transcript (or the whole transcript fits on screen with nothing to
    scroll past) - it stays out of the way the rest of the time instead of
    permanently occupying its own strip below the review area. Clicking it
-   writes every message's final lines (edited text if you changed it, original OCR/
-   message text otherwise) to the output file in one pass, then runs the
-   original regex cleanup pass, records the new run-end date, copies the
-   newly-added text to the clipboard, appends a fresh `[BREAK]` marker as a
-   bookmark for the next run, and clears the autosaved session - there's
-   nothing left to resume once a run has actually been finalized.
+   writes every message's final lines (edited text if you changed it,
+   original OCR/message text otherwise, with each spacer box's blank-line
+   count written out as real newlines in between) to the output file in
+   one pass, then runs the remaining post-run cleanup (OCR misreads like
+   stray `|`s, leftover literal `\n`s, and trailing `[BREAK]` markers -
+   blank-line spacing is no longer touched here, since spacer boxes
+   already wrote exactly what you left in them), records the new run-end
+   date, copies the newly-added text to the clipboard, appends a fresh
+   `[BREAK]` marker as a bookmark for the next run, and clears the
+   autosaved session - there's nothing left to resume once a run has
+   actually been finalized.
 
 ## Appearance
 
