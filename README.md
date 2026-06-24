@@ -138,13 +138,16 @@ What's in scope for v1 (by design, agreed with the project owner):
    every message got an editable copy of its own text) — its background is
    left at the plain default, matching the image column's own background,
    so it still reads as visually distinct from the editable copy beside
-   it. Each editable text box is auto-sized to match its paired immutable
-   element: tall enough for its own current text (plus a little headroom
-   for more typing) and never shorter than that pairing, but capped at
-   roughly 70% of the screen's height even for a very long message — past
-   that cap it gets its own internal scrollbar (appearing/disappearing
-   automatically based on whether the text actually overflows) instead of
-   growing indefinitely. Scrolling the mouse wheel while hovering over a
+   it. Each editable text box's height is fixed up front rather than
+   resized to fit its content as you type: a "message" box (a copy of the
+   message's own text) is a flat 3-line minimum, since most messages here
+   are short; an "ocr" box (an image's OCR text) matches its paired image's
+   own on-screen height plus a small margin. Either way it's capped at
+   roughly 70% of the screen's height, and never grows past its fixed
+   height for a long message or a lot of typing — it gets its own internal
+   scrollbar instead (appearing/disappearing automatically based on whether
+   the text actually overflows the box). Scrolling the mouse wheel while
+   hovering over a
    text box that has its own scrollbar scrolls *that box* until it hits the
    end of its content, then further scrolling in the same direction falls
    through to scrolling the whole review window, same as if the box

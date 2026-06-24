@@ -80,18 +80,25 @@ is just enough to orient a new contributor:
 - **Per-box text box sizing.** Each editable text box lives in its own
   fixed-height container (`pack_propagate(False)`, same trick as the left
   column's placeholders) so it doesn't stretch to fill whatever space is
-  left via Tk's `fill="both"` - `ReviewFrame._size_text_container` sizes it
-  to the text's current wrapped line count (via Tk's own
-  `Text.count(..., "displaylines")`, not an estimate) plus
-  `TEXT_BOX_LEEWAY_LINES` of headroom, clamped between its paired immutable
-  element's actual height (no benefit to a box shorter than that - the
-  image's height for an "ocr" box, the label's for a "message" box) and
-  `TEXT_BOX_MAX_HEIGHT_FRACTION` of the screen. A box at that upper cap
-  gets an internal scrollbar that shows/hides itself automatically
-  (`_set_text_scrollbar`, driven by the box's own `yscrollcommand`) based on
-  whether its content actually overflows. `_on_text_modified` re-runs the
-  sizing live as you type, so a box grows to keep pace until it hits the
-  cap.
+  left via Tk's `fill="both"`. `ReviewFrame._fixed_text_box_height` decides
+  that height once, at build time, from a fixed rule rather than measuring
+  the text's actual wrapped line count: `TEXT_BOX_MIN_LINES` for a
+  "message" box, or its paired image's own on-screen height plus
+  `TEXT_BOX_IMAGE_MARGIN_PX` for an "ocr" box - either way capped at
+  `TEXT_BOX_MAX_HEIGHT_FRACTION` of the screen. A box gets an internal
+  scrollbar that shows/hides itself automatically (`_set_text_scrollbar`,
+  driven by the box's own `yscrollcommand`) whenever its content overflows
+  that fixed height, whether from a long original message or from typing
+  past it - the box itself never grows. This replaced an earlier design
+  (`_size_text_container`, removed) that measured the text's current
+  wrapped line count and resized the box to fit, re-running on every
+  keystroke (`_on_text_modified`) - that made a row's true height
+  unknowable until it was built and typed in, which is exactly the gap
+  `_remeasure_built_rows` existed to correct, and a repeated source of this
+  screen's scroll-position bugs. Fixing height to something knowable
+  upfront - the same way an image's height already was, via
+  `fitted_image_size`'s cheap header read - removes that correction's
+  reason to exist instead of just estimating it more carefully.
 - **Per-row scroll redirection.** The mouse wheel is bound globally
   (`canvas.bind_all("<MouseWheel>", ...)`), but the bound callback still
   receives the specific widget under the cursor as `event.widget` - so

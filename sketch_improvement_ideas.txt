@@ -135,5 +135,17 @@ write spec for exact line spacing rules
 Are the logs as useful as they could be? Are there any gaps in coverage?
 
 
-This project has now seen several updates and revisions. Please consider its current overall structure. Is it still natural? Are there any obvious problems or potential improvements?
+This project has now seen several updates and revisions. Please consider its current overall structure:
 
+- Is it still natural? Are there any obvious problems or potential improvements to be made?
+- Are there any overcomplicated parts of the code which are contradictory or likely to lead to problems in the future?
+
+
+
+There have been persistent problems with scrolling since the beginning of this project (which may or may not be visible from the documentation). Originally, the infinite scroll/lazy loading/virtualisation was implemented because having all images of a long chatlog on one page seemed to lead to very slow scrolling. However, due to the difficulty in fixing the subsequent bugs (such as scrolling upwards slightly actually leading to a downwards change in position), I am considering largely starting over and falling back to the simplest, most robust possible means of displaying the two columns.
+
+Please assess the current structure and give thoughts on possible paths forward, detailing the associated pros and cons of each.
+
+
+- done
+There should be a better way to handle this. The priority is speed; I don't mind if text input boxes are created slightly too small initially, so long as any unexpectedly overflowing text can be absorbed by a scrollbar appearing inside. Right now, I am considering making it so the height of the text input boxes are based purely on the height of the relevant image as it would be displayed in the left column; either exactly the same height, or perhaps a little larger, above and below; to a maximum of the current maximum height. If the user adds new lines, the textbox should not increase in height; a scrollbar should again appear inside.
