@@ -18,8 +18,22 @@ from . import config
 # module's __name__ is "app.something", so this is always their common
 # ancestor logger.
 LOGGER_NAME = "app"
+# Deliberately NOT a child of LOGGER_NAME (e.g. "app.scroll_trace") - it gets
+# its own handlers/file (see setup_logging) and must not also propagate up
+# into LOGGER_NAME's handlers, which would defeat the point of splitting it
+# out from app.log in the first place.
+TRACE_LOGGER_NAME = "scroll_trace"
 
 _configured = False
+# Stamped onto every log line (see JsonFormatter) so a multi-run log file -
+# or LOG_FILE and SCROLL_TRACE_LOG_FILE side by side - can be filtered down
+# to one run without having to re-derive line offsets by grepping for
+# "application starting" each time.
+_run_id = ""
+
+
+def _new_run_id() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%f")
 
 
 class JsonFormatter(logging.Formatter):
@@ -28,6 +42,7 @@ class JsonFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
+            "run_id": _run_id,
             "message": record.getMessage(),
         }
 
@@ -42,12 +57,14 @@ class JsonFormatter(logging.Formatter):
 
 
 def setup_logging(level: int = logging.INFO) -> None:
-    """Configure the LOGGER_NAME logger tree. Safe to call more than once -
-    only the first call has any effect."""
-    global _configured
+    """Configure the LOGGER_NAME logger tree, plus the separate
+    TRACE_LOGGER_NAME tree (see get_trace_logger). Safe to call more than
+    once - only the first call has any effect."""
+    global _configured, _run_id
     if _configured:
         return
     _configured = True
+    _run_id = _new_run_id()
 
     config.APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -66,6 +83,28 @@ def setup_logging(level: int = logging.INFO) -> None:
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
     logger.propagate = False
+
+    # Much higher-frequency than LOG_FILE (a single scroll gesture can fire
+    # dozens of these), so it gets its own file/rotation budget rather than
+    # competing with - and potentially evicting - LOG_FILE's lower-volume
+    # lifecycle events. Not attached to the console handler: this volume of
+    # output would drown out everything else printed there.
+    trace_handler = logging.handlers.RotatingFileHandler(
+        config.SCROLL_TRACE_LOG_FILE, maxBytes=10_000_000, backupCount=3, encoding="utf8"
+    )
+    trace_handler.setFormatter(formatter)
+    trace_logger = logging.getLogger(TRACE_LOGGER_NAME)
+    trace_logger.setLevel(logging.DEBUG)
+    trace_logger.addHandler(trace_handler)
+    trace_logger.propagate = False
+
+
+def get_trace_logger() -> logging.Logger:
+    """The review screen's dedicated logger for high-frequency per-scroll-
+    tick tracing (reconcile/debounce/remeasure/image-load/box-resize
+    events) - routed to SCROLL_TRACE_LOG_FILE instead of LOG_FILE, see
+    setup_logging."""
+    return logging.getLogger(TRACE_LOGGER_NAME)
 
 
 def get_logger(name: str) -> logging.Logger:

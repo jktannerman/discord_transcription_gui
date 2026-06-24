@@ -37,6 +37,12 @@ APPROVED_USERS_STATE_FILE = APP_DATA_DIR / "approved_users.json"
 # independently of one another.
 SESSIONS_FILE = APP_DATA_DIR / "sessions.json"
 LOG_FILE = APP_DATA_DIR / "app.log"
+# Separate, much higher-frequency stream for the review screen's per-scroll-
+# tick tracing (reconcile/debounce/remeasure/image-load events) - kept out of
+# LOG_FILE so lifecycle events (session save/load, OCR batch, errors) stay
+# readable on their own, and so this stream can rotate independently without
+# evicting those - see logging_config.setup_logging.
+SCROLL_TRACE_LOG_FILE = APP_DATA_DIR / "scroll_trace.log"
 
 # How many previously-used values to keep, per setup-screen field, for the
 # dropdown history (most-recently-used first).

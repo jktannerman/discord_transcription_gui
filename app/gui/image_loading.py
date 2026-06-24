@@ -6,7 +6,7 @@ the same way.
 """
 
 import tkinter as tk
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 from PIL import Image, ImageTk
 
@@ -89,27 +89,30 @@ class ImageLoader:
         row_heights,
         visible_top: float,
         visible_bottom: float,
+        log_event: Optional[Callable[..., None]] = None,
     ) -> None:
         """offset_of(index) and row_heights are the same authoritative
         layout source ReviewFrame uses for the canvas's scrollregion -
         absolute coordinates within the full virtual document, not widget-
-        relative geometry."""
+        relative geometry.
+
+        log_event, if given, is ReviewFrame._log_event - routing every
+        load/unload through it (rather than logging directly here) stamps
+        each one with the same seq/scroll-state context as every other
+        scroll-trace event, so an image load can be correlated against the
+        reconcile that triggered it without falling back to timestamps."""
         for idx, slot in self._slots.items():
             row_top = offset_of(idx)
             row_bottom = row_top + row_heights[idx]
             should_be_loaded = row_bottom >= visible_top and row_top <= visible_bottom
 
             if should_be_loaded and not slot.loaded:
-                logger.debug(
-                    "loading image",
-                    extra=logging_config.extra(index=idx, row_top=row_top, row_bottom=row_bottom),
-                )
+                if log_event:
+                    log_event("loading_image", index=idx, row_top=row_top, row_bottom=row_bottom)
                 self._load_image(slot)
             elif not should_be_loaded and slot.loaded:
-                logger.debug(
-                    "unloading image",
-                    extra=logging_config.extra(index=idx, row_top=row_top, row_bottom=row_bottom),
-                )
+                if log_event:
+                    log_event("unloading_image", index=idx, row_top=row_top, row_bottom=row_bottom)
                 self._unload_image(slot)
 
     def _load_image(self, slot: ImageSlot) -> None:

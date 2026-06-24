@@ -111,6 +111,11 @@ from .keyboard_nav import KeyboardNavMixin
 from .virtualization import compute_visible_range, estimate_row_height
 
 logger = logging_config.get_logger(__name__)
+# High-frequency per-scroll-tick tracing (reconcile/debounce/remeasure/
+# image-load/box-resize events, all via _log_event) goes to its own log
+# file/logger rather than `logger` above - see logging_config.setup_logging
+# for why this is split out of the main app.log.
+trace_logger = logging_config.get_trace_logger()
 
 # Extra lines of headroom an editable text box is given beyond its current
 # content when auto-sized (see ReviewFrame._size_text_container), so typing
@@ -379,13 +384,17 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         return True
 
     def _log_event(self, event: str, **fields) -> None:
-        """Log one step of scroll/page/focus handling at DEBUG, stamped with
+        """Log one step of scroll/page/focus/resize handling to the dedicated
+        scroll-trace log (see logging_config.get_trace_logger), stamped with
         a sequence number plus the canvas's current window/scroll state, so
         a captured log can be replayed step-by-step to see exactly what
-        triggered what during a pagination loop."""
+        triggered what during a pagination loop. Every other call site that
+        used to log this category of event directly (image load/unload,
+        text-box resize) now goes through this instead, so nothing in this
+        category falls outside the seq/scroll-state correlation."""
         self._event_seq += 1
         top_frac, bottom_frac = self._canvas.yview()
-        logger.debug(
+        trace_logger.debug(
             event,
             extra=logging_config.extra(
                 seq=self._event_seq,
@@ -616,16 +625,14 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         max_px = self._max_text_box_height_px()
         target_px = max(image_floor_px, min(content_px, max_px))
         container.configure(height=target_px)
-        logger.debug(
+        self._log_event(
             "size_text_container",
-            extra=logging_config.extra(
-                container_width=container.winfo_width(),
-                display_lines=display_lines,
-                content_px=content_px,
-                image_floor_px=image_floor_px,
-                max_px=max_px,
-                target_px=target_px,
-            ),
+            container_width=container.winfo_width(),
+            display_lines=display_lines,
+            content_px=content_px,
+            image_floor_px=image_floor_px,
+            max_px=max_px,
+            target_px=target_px,
         )
         return target_px
 
@@ -937,7 +944,10 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
         visible_top = canvas.canvasy(0) - buffer
         visible_bottom = canvas.canvasy(viewport_height) + buffer
 
-        self._images.update_visible(self._offset_of, self._row_heights, visible_top, visible_bottom)
+        self._images.update_visible(
+            self._offset_of, self._row_heights, visible_top, visible_bottom,
+            log_event=self._log_event,
+        )
 
     def _get_box_text(self, index: int, role: str) -> Optional[str]:
         """Current text for one box - the materialized widget's live
