@@ -352,14 +352,24 @@ class App:
         run = self._run
         try:
             html_text = run.html_path.read_text(encoding="utf8")
+            entries = chatlog.parse_message_groups(html_text, run.start_time, run.approved_author_ids)
+            self._review_items = pipeline.build_review_items(entries, file_info, run.image_folder)
         except OSError as exc:
             self._on_run_error(f"Could not read HTML file: {exc}")
             return
+        except ValueError as exc:
+            # chatlog.parse_message_groups raises a clear ValueError for a
+            # malformed export (missing/unparseable postamble timezone,
+            # missing per-message data-message-id) - this runs inside a
+            # root.after() callback, so without catching it here it would
+            # only ever reach Tk's default report_callback_exception (a
+            # console traceback, never the app's own logger or an error
+            # dialog), leaving the user stuck on the OCR progress screen
+            # with no indication anything went wrong.
+            logger.exception("chatlog parsing failed")
+            self._on_run_error(str(exc))
+            return
 
-        entries = chatlog.parse_message_groups(html_text, run.start_time, run.approved_author_ids)
-        self._review_items = pipeline.build_review_items(
-            entries, file_info, run.image_folder
-        )
         logger.info("OCR done, showing review screen", extra=logging_config.extra(item_count=len(self._review_items)))
         self._show_review()
 
