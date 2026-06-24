@@ -4,6 +4,7 @@ from gui_transcription.app.chatlog import MessageEntry
 from gui_transcription.app.gui.layout_constants import (
     GAP_BETWEEN_STACKED_PX,
     ROW_FRAME_OVERHEAD_PX,
+    ROW_PACK_PADY_PX,
     SPACER_BOX_HEIGHT_PX,
     TEXT_BOX_MARGIN_PX,
 )
@@ -81,7 +82,8 @@ def test_estimate_row_height_text_only_includes_spacer_end_height():
     label_h = _estimate_message_text_height(item)
     expected_left = label_h + GAP_BETWEEN_STACKED_PX
     expected_right = label_h + TEXT_BOX_MARGIN_PX + GAP_BETWEEN_STACKED_PX + SPACER_BOX_HEIGHT_PX
-    assert estimate_row_height(item) == max(expected_left, expected_right) + ROW_FRAME_OVERHEAD_PX
+    expected = max(expected_left, expected_right) + ROW_FRAME_OVERHEAD_PX + 2 * ROW_PACK_PADY_PX
+    assert estimate_row_height(item) == expected
 
 
 def test_compute_visible_range_empty_list_returns_empty_range():

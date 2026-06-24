@@ -45,6 +45,11 @@ I'm
 # OCR sometimes adds a comma instead of a period on a
 # single-capital-letter abbreviation, e.g. misreading "(A)." as "A,".
 
+,(\n+)
+,(\1)
+# A comma just before a paragraph break should usually be a period.
+
+
 ©
 C
 # Misread copyright symbol.

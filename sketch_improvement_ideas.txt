@@ -36,17 +36,7 @@ make it fullscreen by default - done
 
 make the text parts editable - done
 
-make it possible to open a given image in browser?
 
-
-doesn't transcribe everything
-
-The `pytesseract` often does not seem to detect all of the text in a given image. An example would be the very first image in the HTML file in `./example_inputs`, `Screen_Shot_2026-05-21_at_9.27.10_pm-03B97.png`; while the main text is black on light blue and is mostly transcribed correctly, the header is yellow text on a black background, and is ignored. How can this category of problem best be addressed? Consider several approaches and describe the pros and cons of each, unless there is a clear winning option.
-
-
-
-more comprehensive tests?
-more comprehensive logging?
 
 
 - done 
@@ -186,16 +176,74 @@ Examples of substitutions to begin with:
 The format of the file should probably have the regex to find on one line, the regex to replace it with on the next line, and any comments on the line after that, for readability.
 
 
+- done
+Upon tabbing/shift-tabbing into a text input box, please ensure that the entire box is cleanly onscreen. A previous attempted fix failed to resolve this issue.
 
-Upon tabbing/shift-tabbing into a text input box, please ensure that the entire box is cleanly onscreen.
 
+
+There seems to be an issue where certain user-edited transcriptions have not been properly saved, or the original OCR transcriptions are displayed instead after ending and resuming a session. This is a high-priority bug! Unfortunately, it is not clear when this started happening, and current logging may be insufficient for this task. Specifically, this behaviour was first noticed in the transcription of `file:///C:/Users/jktan/discord_chatlogs/parahumans/kq/kq_wm_0001_p1.html`.
+
+Some initial courses of action:
+
+- Double-check whether the startup regex logic can ever lead to the resulting modified OCR transcriptions overwriting or being used instead of user-edited transcriptions. This absolutely must never be allowed to happen.
+- Compare the current set of user-edited transcriptions to the original OCR transcriptions (before regex modification). Which ones differ? Which ones remained edited? Are there any patterns?
+- Migration of data to new formats may have been part of the problem. The migration scripts are no longer here, but backups may have been made; search the likely locations for them, and see what can be salvaged.
+- Improve logging of this aspect of the program in general.
+
+
+Add/improve tests that will help prevent problems like this in future.
+
+
+Upon tabbing/shift-tabbing into a text input box, please ensure that the entire box is cleanly onscreen. Previous attempted fixes have failed to resolve this issue, but the remaining behaviour seems to be centered around resuming a session where the focus is on a text input box which is a significant way down the page. It may be due to a disagreement in how positions are calculated; the canonical specification is given in `./gui_transcription/ARCHITECTURE.md`. Jumping to the top of the page and then navigating continuously down from there fixes the issue each session, but this is inconvenient.
+
+
+checkbox that can be checked to restore original state; automatically unchecks when user has made edits; can be rechecked to restore edited mode; only overwritten when user makes edits to unchecked
+
+To each text input box that corresponds to a chatlog image, please add a checkbox that behaves as follows:
+
+- The checkbox should be at the top of an invisible column placed at the right edge of the text input box, so that it is in the top right corner of the box. However, it should be to the left of the scrollbar (if there is a scrollbar). The column should be just wide enough to fit the checkbox.
+- The checkbox should be unchecked if the current contents of the text input box match the (regex-modified) original OCR transcription.
+- Upon the user making any changes, the checkbox should become checked automatically.
+- Upon the user unchecking the checkbox, the contents of the text input box should return to the (regex-modified) original OCR text. This must not overwrite the user-edited transcription in the save.
+- Upon the user rechecking the checkbox, the contents should return to the last version of the user-edited transcription.
+- The save of the user-edited transcription should be totally overwritten from fresh if and only if the user begins to edit the transcription when the checkbox is unchecked.
+- Tab/Shift-Tab should not interact with the checkbox. 
+
+
+
+make it possible to open a given image in browser?
+
+Please add a right-click menu that displays upon right-clicking images. There should be three options:
+
+- Open Image in Browser
+- Open Image Location
+- Copy Image
+
+
+
+
+doesn't transcribe everything
+
+The `pytesseract` often does not seem to detect all of the text in a given image. An example would be the very first image in the HTML file in `./example_inputs`, `Screen_Shot_2026-05-21_at_9.27.10_pm-03B97.png`; while the main text is black on light blue and is mostly transcribed correctly, the header is yellow text on a black background, and is ignored. How can this category of problem best be addressed? Consider several approaches and describe the pros and cons of each, unless there is a clear winning option.
+
+
+
+more comprehensive tests?
+more comprehensive logging?
+
+
+
+
+
+
+The cursor is not very visible when editing the timestamp on the startup window. Please tweak this.
 
 
 Please add an option to restore the last session, even if it was finalised and written to an output file, in order to be able to redo something overlooked.
 
 
 
-checkbox that can be checked to restore original state; automatically unchecks when user has made edits; can be rechecked to restore edited mode; only overwritten when user makes edits to unchecked
+
 
 
 A very minor bug: the window bar does not appear black on startup. This is fixed on resizing the window or alt-tabbing. A bugfix was already attempted once, but it seems to have been insufficient.
@@ -217,6 +265,8 @@ personalised clipboard?
 
 
 ctrl-f?? with regex?
+
+Please add Ctrl-F functionality for quick navigation. It should find matches in both the immutable text elements in the left column and all contents of input boxes in the right column. Draw strong inspiration from `./multi_file_search/multi_file_search.py`. 
 
 
 

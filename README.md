@@ -332,10 +332,14 @@ also runs Tcl/Tk's one-time subsystem init. Run
 `py -3.13 -m pytest gui_transcription\app_tests -v -m gui` to include just
 those, or add `-m ""` to run the whole suite including them.
 
-159 tests (192 including the `gui`-marked ones, which now also cover a
+159 tests (193 including the `gui`-marked ones, which now also cover a
 box's undo/redo history surviving its row being paged out and back in -
-`text_undo.py` - and a focused box always scrolling fully into view, not
-just its row) cover the cleanup regexes, the OCR-misread corrections
+`text_undo.py` - a focused box always scrolling fully into view, not
+just its row, and a far-away Tab/resume target landing fully within the
+*real* canvas viewport rather than just the document-space model's own
+idea of where it is, which a since-fixed row-height accounting bug could
+get wrong - see ARCHITECTURE.md's "Row geometry" section) cover the
+cleanup regexes, the OCR-misread corrections
 pass (`ocr_corrections.py`'s file parsing/validation and regex application,
 plus its wiring into `build_review_items` - applied to OCR text only,
 never to a message's own text),

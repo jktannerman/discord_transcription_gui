@@ -14,6 +14,7 @@ import pytest
 from PIL import Image
 
 from gui_transcription.app.chatlog import MessageEntry
+from gui_transcription.app.gui.layout_constants import ROW_PACK_PADY_PX
 from gui_transcription.app.gui.review_view import ReviewFrame
 from gui_transcription.app.pipeline import ReviewItem, build_review_items
 
@@ -312,10 +313,17 @@ def _container_bounds(frame, index, role):
     coordinates _keep_cursor_in_viewport computes them in - see that
     method's docstring for why a winfo_rooty() delta against the row (not
     winfo_y(), and not the container's own position relative to the
-    repositioned _scroll_frame) is what's reliable here."""
+    repositioned _scroll_frame) is what's reliable here, and ARCHITECTURE.md's
+    "Row geometry" section for why ROW_PACK_PADY_PX has to be added on top
+    of frame._offset_of(index): that offset is where row `index`'s full
+    pack-allocated slot starts, not where its Frame's own visible top edge
+    (what the winfo_rooty() delta below is anchored to) actually sits."""
     container = frame._text_containers[(index, role)]
     row = frame._row_frames[index]
-    top = frame._offset_of(index) + (container.winfo_rooty() - row.winfo_rooty())
+    top = (
+        frame._offset_of(index) + ROW_PACK_PADY_PX
+        + (container.winfo_rooty() - row.winfo_rooty())
+    )
     return top, top + container.winfo_height()
 
 
@@ -385,6 +393,44 @@ def test_keep_cursor_in_viewport_scrolls_up_to_align_box_top_with_view_top(root,
 
     new_view_top = frame._canvas.canvasy(0)
     assert abs(new_view_top - container_top) < 2
+
+
+def test_jumping_focus_to_a_far_row_lands_it_fully_within_the_real_canvas_viewport(root, sample_image):
+    """Regression test for the bug where Tab/Shift-Tab's scroll-into-view
+    silently stopped working partway through a long transcript: the
+    document-space model (self._row_heights, self._offset_of) drifted away
+    from each row's *real* on-screen position because the vertical gap
+    pack() leaves outside a row's own Frame (ROW_PACK_PADY_PX, see
+    ARCHITECTURE.md's "Row geometry" section) wasn't counted in either the
+    pre-build estimate or the real remeasured height, nor added back when
+    keyboard_nav.py converted a document-space offset into a real screen
+    comparison. The drift compounded by row, so it only became visible far
+    enough into a transcript - this jumps straight to a distant row (the
+    same far-away-Tab-target path _ensure_materialized exists for) and
+    checks the box's *real* winfo_rooty()/winfo_height() against the
+    canvas's, rather than re-deriving the same (potentially still-buggy)
+    document-space formula the production code uses, which an earlier
+    version of this drift wouldn't have caught."""
+    items = _items(sample_image, count=80)
+    frame, _ = _build_frame(root, items)
+    target_index = next(
+        i for i in range(60, len(items)) if any(r.startswith("ocr") for r in items[i].slot_roles)
+    )
+    target_role = next(role for role in items[target_index].slot_roles if role.startswith("ocr"))
+
+    frame._ensure_materialized(target_index)
+    frame._focus_text_box(target_index, target_role)
+    root.update()
+
+    canvas = frame._canvas
+    container = frame._text_containers[(target_index, target_role)]
+    canvas_top = canvas.winfo_rooty()
+    canvas_bottom = canvas_top + canvas.winfo_height()
+    box_top = container.winfo_rooty()
+    box_bottom = box_top + container.winfo_height()
+
+    assert box_top >= canvas_top
+    assert box_bottom <= canvas_bottom
 
 
 def test_keep_cursor_in_viewport_does_nothing_when_cursor_already_visible(root, sample_image):
