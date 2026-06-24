@@ -291,12 +291,11 @@ live Tesseract install.
 - Paging back up to revisit an earlier page re-decodes its images from disk
   (no cross-page image cache); only the edited text itself is cached across
   a page being torn down and rebuilt.
-- A text box that's actively growing while you type (see
-  `ARCHITECTURE.md`'s "Review screen internals") only updates its own row's
-  recorded height immediately - neighboring rows' positions are only
-  corrected on the next scroll-driven reconcile, not instantly, though this
-  has no visible effect since the row being typed in doesn't move on screen
-  either way.
+- Scrolling quickly shows occasional partial "ghost" image frames and brief
+  flickering at text box/image boundaries while rows are being paged in -
+  cosmetic only (confirmed not to affect edits, focus, or scroll position
+  accuracy, unlike the scroll-jump bugs `ARCHITECTURE.md` documents fixes
+  for), not yet root-caused, deferred as low priority.
 - Only one generation of backup is kept per state file (`*.bak`), not a
   full history - a crash can still lose up to one autosave interval's
   worth of review edits (5 seconds, `AUTOSAVE_INTERVAL_MS`) if it happens

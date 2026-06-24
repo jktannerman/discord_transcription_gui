@@ -376,15 +376,6 @@ class App:
                 initial_saved_texts = _match_saved_edits(self._review_items, saved_texts)
                 initial_focus_slot = _match_focus_slot(self._review_items, resume.get("focus_slot"))
                 initial_scroll_fraction = resume.get("scroll_fraction")
-            elif isinstance(saved_texts, list):
-                # Pre-message-id session format: a positional list has
-                # nothing to match against by message_id, so there's
-                # nothing here that can be reapplied - not an error, just
-                # an old on-disk shape. Silent, no popup.
-                logger.info(
-                    "saved session uses old positional edited_texts format, "
-                    "starting fresh"
-                )
             else:
                 logger.warning(
                     "saved session edited_texts has unexpected shape, discarding",

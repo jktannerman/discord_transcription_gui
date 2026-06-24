@@ -10,6 +10,11 @@ from typing import List, Tuple
 
 from ..pipeline import ReviewItem
 from .image_loading import THUMBNAIL_SIZE, fitted_image_size
+from .layout_constants import (
+    GAP_BELOW_MESSAGE_PX,
+    ROW_FRAME_OVERHEAD_PX,
+    TEXT_BOX_MARGIN_PX,
+)
 
 # Used to turn a text-only row's character count into an estimated wrapped
 # line count, matching _build_row's wraplength for that row's immutable-
@@ -22,32 +27,19 @@ _TEXT_ROW_CHARS_PER_LINE = _TEXT_ROW_WRAPLENGTH // 7  # ~7px/char at this font s
 _TEXT_ROW_LINE_HEIGHT = 18
 _TEXT_ROW_PADDING = 24
 
-# Mirrors review_view.ReviewFrame._fixed_text_box_height's rule
-# (review_view.py can't be imported from here - it's the one that imports
-# this Tk-free module - so this constant is kept in sync by hand rather
-# than shared): an editable box's height is its paired immutable element's
-# own on-screen height (the label's estimate below, for a "message" box;
-# the image's, for an "ocr" box) plus _TEXT_BOX_MARGIN_PX. Getting this
-# estimate close to the real eventual height matters more than usual now
-# that a box's height is no longer just a floor under a content-driven
-# size - it's the dominant term in a row's total height, so a stale/wrong
-# constant here overestimates or underestimates every such row by the same
-# large, constant amount, which is exactly the kind of error that turns
-# into a visible scroll jump once ReviewFrame._remeasure_built_rows
-# corrects it away after the row is actually built.
-_TEXT_BOX_MARGIN_PX = 12
-
-# Extra vertical space (px) a row's own ttk.Frame(relief="groove",
-# borderwidth=1, padding=6) adds on top of its tallest column - 6px padding
-# top and bottom, plus a couple px for the groove border - see
-# ReviewFrame._build_row.
-_ROW_FRAME_OVERHEAD_PX = 14
-
-# Gap (px) review_view.py's _build_row leaves between a row's stacked
-# caption and image (and their paired editable boxes) when a message has
-# both - applies to both columns, only when there's an image as well as a
-# message.
-_GAP_BELOW_MESSAGE_PX = 6
+# An editable box's height is its paired immutable element's own on-screen
+# height (the label's estimate below, for a "message" box; the image's, for
+# an "ocr" box) plus TEXT_BOX_MARGIN_PX - mirrors
+# review_view.ReviewFrame._fixed_text_box_height's rule exactly, via the
+# shared layout_constants module (review_view.py can't be imported from here
+# - it's the one that imports this Tk-free module). Getting this estimate
+# close to the real eventual height matters more than usual now that a box's
+# height is no longer just a floor under a content-driven size - it's the
+# dominant term in a row's total height, so a wrong constant here
+# overestimates or underestimates every such row by the same large, constant
+# amount, which is exactly the kind of error that turns into a visible
+# scroll jump once ReviewFrame._remeasure_built_rows corrects it away after
+# the row is actually built.
 
 
 def wrapped_line_count(text: str, chars_per_line: int) -> int:
@@ -77,29 +69,29 @@ def estimate_row_height(item: ReviewItem) -> int:
     and/or image, stacked) and the editable right column (message and/or
     ocr box, stacked the same way) - independently and takes the taller of
     the two, mirroring _build_row's actual side-by-side layout, then adds
-    _ROW_FRAME_OVERHEAD_PX for the row's own padding/border. A message with
-    both a caption and an image gets _GAP_BELOW_MESSAGE_PX added to
+    ROW_FRAME_OVERHEAD_PX for the row's own padding/border. A message with
+    both a caption and an image gets GAP_BELOW_MESSAGE_PX added to
     whichever column total includes the caption element, same as the real
     layout. Since the right column is always its left counterpart plus
-    _TEXT_BOX_MARGIN_PX per stacked element, the right column is always the
+    TEXT_BOX_MARGIN_PX per stacked element, the right column is always the
     taller of the two - the max() is kept anyway so this stays correct even
     if that margin is ever changed to zero or removed."""
     has_message = item.initial_message_text is not None
     has_image = item.image_path is not None
-    gap = _GAP_BELOW_MESSAGE_PX if (has_message and has_image) else 0
+    gap = GAP_BELOW_MESSAGE_PX if (has_message and has_image) else 0
 
     left = 0
     right = 0
     if has_message:
         label_h = _estimate_message_text_height(item)
         left += label_h + gap
-        right += label_h + _TEXT_BOX_MARGIN_PX + gap
+        right += label_h + TEXT_BOX_MARGIN_PX + gap
     if has_image:
         _, image_h = fitted_image_size(item.image_path)
         left += image_h
-        right += image_h + _TEXT_BOX_MARGIN_PX
+        right += image_h + TEXT_BOX_MARGIN_PX
 
-    return max(left, right) + _ROW_FRAME_OVERHEAD_PX
+    return max(left, right) + ROW_FRAME_OVERHEAD_PX
 
 
 def compute_visible_range(

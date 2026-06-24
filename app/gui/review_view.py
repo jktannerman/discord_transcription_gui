@@ -49,14 +49,15 @@ page forward" vs. "should I page backward" check that can disagree about
 the resting state, because there's only one range computation.
 
 This windowing core (_reconcile/_sync_materialized_rows/
-_remeasure_built_rows/_offset_of/_ensure_materialized, plus _build_row/
-_destroy_row) is deliberately kept together in this one class rather than
-split further, since it's exactly the state that disagreed with itself in
-the bug above - splitting it across files/objects would relocate that risk,
-not remove it. Pure layout math that doesn't touch widget state lives in
-virtualization.py; image lazy-loading and keyboard navigation are
-self-contained enough to live in image_loading.py and keyboard_nav.py
-respectively.
+_remeasure_built_rows/_offset_of/_ensure_materialized/_destroy_row) is
+deliberately kept together in this one class rather than split further,
+since it's exactly the state that disagreed with itself in the bug above -
+splitting it across files/objects would relocate that risk, not remove it.
+Building a single row's widgets (_build_row and friends) doesn't carry that
+same risk - it's mixed in from row_building.py's RowBuildingMixin, the same
+way image lazy-loading and keyboard navigation are self-contained enough to
+live in image_loading.py and keyboard_nav.py. Pure layout math that doesn't
+touch widget state lives in virtualization.py.
 
 The materialized rows are still packed into a single child Frame
 (self._scroll_frame) so Tk handles their relative stacking for free, but
@@ -105,8 +106,9 @@ from typing import Callable, Dict, List, Optional, Tuple
 from .. import logging_config
 from ..pipeline import ReviewItem
 from . import theme
-from .image_loading import THUMBNAIL_SIZE, ImageLoader, fitted_image_size
+from .image_loading import ImageLoader
 from .keyboard_nav import KeyboardNavMixin
+from .row_building import RowBuildingMixin
 from .virtualization import compute_visible_range, estimate_row_height
 
 logger = logging_config.get_logger(__name__)
@@ -116,34 +118,9 @@ logger = logging_config.get_logger(__name__)
 # for why this is split out of the main app.log.
 trace_logger = logging_config.get_trace_logger()
 
-# Extra headroom (px) added on top of an editable text box's paired
-# immutable element's own height (the label's, for a "message" box; the
-# image's, for an "ocr" box - see _fixed_text_box_height) - so the box isn't
-# pixel-for-pixel identical to whatever it sits beside. This is a fixed
-# amount decided once at build time, not anything measured from the box's
-# own content: re-measuring a box's height from its wrapped line count on
-# every keystroke (the old _size_text_container/_on_text_modified design)
-# was the source of the review screen's worst scroll-position bugs - it
-# made a row's true height unknowable until the box was built and typed in,
-# which is exactly what _remeasure_built_rows had to keep correcting for
-# (see ARCHITECTURE.md). Content longer than the box's fixed height gets an
-# internal scrollbar (_set_text_scrollbar) instead of growing the box.
-TEXT_BOX_MARGIN_PX = 12
-
-# Inner horizontal padding for an editable text box's own content (applied
-# symmetrically by Tk's Text.padx), so wrapped/long lines don't run right up
-# against the box's edge - it previously had none, which read as cramped
-# against the right edge in particular since text there is ragged (wrapped
-# at arbitrary word boundaries) rather than flush like the left edge.
-TEXT_BOX_INNER_PADX = 6
-
-# A maxed-out text box is capped at this fraction of the canvas viewport
-# (see ReviewFrame._max_text_box_height_px), not the full viewport - a box
-# that exactly fills the viewport leaves no margin, so tabbing to it rarely
-# lands with it comfortably fully on-screen (Tk's "scroll just enough to
-# reveal the target" positioning doesn't line it up pixel-perfectly with the
-# viewport edge). Capping below 1.0 leaves room to spare instead.
-TEXT_BOX_MAX_HEIGHT_FRACTION = 0.7
+# Row/text-box construction (sizing constants included) lives in
+# row_building.py's RowBuildingMixin - see that module's docstring for why
+# it's split out from this one.
 
 # How many extra viewport-heights worth of rows to keep loaded above and
 # below the visible area, so scrolling a little doesn't trigger a reload
@@ -158,7 +135,7 @@ SCROLL_BUFFER_VIEWPORTS = 1
 DEBOUNCE_MS = 80
 
 
-class ReviewFrame(KeyboardNavMixin, ttk.Frame):
+class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
     def __init__(
         self,
         master: tk.Widget,
@@ -396,286 +373,6 @@ class ReviewFrame(KeyboardNavMixin, ttk.Frame):
                 **fields,
             ),
         )
-
-    def _build_row(self, index: int, before: Optional[tk.Widget] = None) -> tk.Widget:
-        """Materialize the row widget(s) for items[index] and register it in
-        the window's bookkeeping dicts. If `before` is given, the row is
-        inserted immediately above that widget instead of appended at the
-        bottom (used when paging in rows above the current window).
-
-        Every row has the same two-column shape, both columns stacked
-        text-above-image (mirroring Discord's own layout) when a message
-        has both: an immutable left column (the message's own original
-        text, its image, or both) paired with the matching editable box(es)
-        on the right - a copy of the message's own text whenever it has
-        any, and/or an OCR text box whenever it has an image."""
-        item = self._items[index]
-        pack_kwargs = {"fill": "x", "pady": 4, "padx": 4}
-        if before is not None:
-            pack_kwargs["before"] = before
-
-        row = ttk.Frame(self._scroll_frame, relief="groove", borderwidth=1, padding=6)
-        row.pack(**pack_kwargs)
-        self._row_frames[index] = row
-
-        left = ttk.Frame(row)
-        left.pack(side="left", padx=6, fill="y")
-        right = ttk.Frame(row)
-        right.pack(side="left", fill="x", expand=True, padx=6)
-
-        has_message = item.initial_message_text is not None
-        has_image = item.image_path is not None
-        # When a row has both boxes, leave a gap below the top one so the
-        # two stacked boxes (and their immutable counterparts) don't touch.
-        gap_below_message = 6 if (has_message and has_image) else 0
-
-        message_h = 0
-        if has_message:
-            message_h = self._build_immutable_message_label(left, item, pady_bottom=gap_below_message)
-
-        image_h = 0
-        if has_image:
-            image_h = self._build_image_placeholder(left, item, index)
-
-        if has_message:
-            self._build_editable_text_box(
-                right, index, "message", item.initial_message_text, message_h,
-                pady_bottom=gap_below_message,
-            )
-        if has_image:
-            self._build_editable_text_box(
-                right, index, "ocr", item.initial_ocr_text or "", image_h,
-            )
-
-        return row
-
-    def _build_immutable_message_label(
-        self, parent: tk.Widget, item: ReviewItem, pady_bottom: int
-    ) -> int:
-        """Build the immutable, plain-styled label holding a message's own
-        original text (entry.text_lines) - used for a text-only row's
-        "original" column, and (stacked above the image) for an image
-        row's caption too, now that both are edited the same way. Returns
-        the label's measured height in px, used to size its paired editable
-        box (see _fixed_text_box_height).
-
-        Font matches the editable text boxes (theme.TEXT_FONT_FAMILY/SIZE)
-        rather than the ttk default Label font, for visual consistency
-        with the editable copy beside it; everything else about it (e.g.
-        background) is left at the ttk default, matching the image
-        column's own background, to stay visually distinct from that
-        editable copy and from an editable box.
-
-        The container's height isn't known until the label exists, so it's
-        measured with pack_propagate left on (sizing naturally around the
-        label, per its wraplength) before being pinned to a fixed
-        width/height - same end state as the image case
-        (_build_image_placeholder), just measured rather than computed
-        upfront from a cheap header read. This measure-once-at-build-time
-        step is unrelated to (and much cheaper than) the per-keystroke
-        remeasuring removed from its paired editable box (see
-        _fixed_text_box_height): the label is never edited, so there's
-        nothing to remeasure here after the initial build."""
-        preview = "\n".join(item.entry.text_lines).strip() or "(no text)"
-        container = ttk.Frame(parent)
-        container.pack(pady=(0, pady_bottom))
-        ttk.Label(
-            container, text=preview, wraplength=THUMBNAIL_SIZE[0], justify="left",
-            font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE),
-        ).pack(anchor="w", fill="x")
-        container.update_idletasks()
-        floor_px = max(container.winfo_reqheight(), 1)
-        container.configure(width=THUMBNAIL_SIZE[0], height=floor_px)
-        container.pack_propagate(False)
-        return floor_px
-
-    def _build_image_placeholder(self, parent: tk.Widget, item: ReviewItem, index: int) -> int:
-        """Build the fixed-size image placeholder (actual pixels loaded
-        lazily on scroll - see image_loading.py) and register it with
-        self._images. Returns the image's on-screen height in px, used as
-        its paired editable OCR box's height floor.
-
-        Width is the global THUMBNAIL_SIZE[0] constant, same for every row,
-        so images/text boxes still line up into two neat columns - only
-        height is sized per image (to its actual aspect-preserving fit
-        height, not the full bounding box) since most images here are
-        landscape, and a box-shaped placeholder would letterbox them with
-        large empty bands above/below the real photo. Fixed size (rather
-        than left to the real loaded photo's size) so loading/unloading the
-        image on scroll doesn't change the row's layout (which would jump
-        the scroll position)."""
-        _, image_h = fitted_image_size(item.image_path)
-        container = ttk.Frame(parent, width=THUMBNAIL_SIZE[0], height=image_h)
-        container.pack_propagate(False)
-        container.pack()
-        image_label = ttk.Label(container, text="(scroll to load image)", anchor="center")
-        image_label.pack(fill="both", expand=True)
-        self._images.register(index, item.image_path, image_label)
-        return image_h
-
-    def _build_editable_text_box(
-        self,
-        parent: tk.Widget,
-        index: int,
-        role: str,
-        initial_text: str,
-        paired_height: int,
-        pady_bottom: int = 0,
-    ) -> None:
-        """Build one editable text box - role is "message" (a copy of the
-        message's own text) or "ocr" (an image's OCR text) - and register
-        it in the window's bookkeeping dicts, keyed by (index, role) since
-        a row can now have one of these, the other, or both stacked
-        text-above-image to match the left column (_build_row). paired_height
-        is the on-screen height of this box's immutable counterpart in the
-        left column - the label's, for a "message" box, or the image's, for
-        an "ocr" box - see _fixed_text_box_height."""
-        key = (index, role)
-        # Fixed-height container (same pack_propagate(False) trick as the
-        # left column's placeholders) so the text box's height is exactly
-        # _fixed_text_box_height's verdict, computed once up front, rather
-        # than stretching to fill whatever vertical space is left in
-        # `parent` or being re-measured from content as the user types (see
-        # _fixed_text_box_height's docstring for why the latter was removed).
-        text_container = ttk.Frame(parent, height=self._fixed_text_box_height(paired_height))
-        text_container.pack(side="top", fill="x", pady=(0, pady_bottom))
-        text_container.pack_propagate(False)
-
-        scrollbar = ttk.Scrollbar(text_container, orient="vertical")
-        text_widget = tk.Text(
-            text_container, wrap="word", relief="flat", undo=True,
-            font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE),
-            bg=theme.DARK_TEXT_BG, fg=theme.DARK_FG, insertbackground=theme.DARK_INSERT,
-            selectbackground=theme.DARK_ACCENT, selectforeground="white",
-            highlightthickness=1, highlightbackground=theme.DARK_BG_ALT,
-            highlightcolor=theme.DARK_FOCUS_HIGHLIGHT,
-            padx=TEXT_BOX_INNER_PADX, pady=4,
-        )
-        # Set after construction (rather than passed as a kwarg) since the
-        # callback needs to close over text_widget itself.
-        text_widget.configure(
-            yscrollcommand=lambda first, last, sb=scrollbar, t=text_widget: self._set_text_scrollbar(
-                sb, t, first, last
-            )
-        )
-        scrollbar.configure(command=text_widget.yview)
-        # Scrollbar itself is packed/unpacked on demand by _set_text_scrollbar,
-        # only while content actually overflows the box.
-        text_widget.pack(side="left", fill="both", expand=True)
-
-        saved = self._saved_texts.get(key)
-        text_widget.insert("1.0", saved if saved is not None else initial_text)
-        # The "insert" mark has right gravity, so inserting at "1.0" (where
-        # it already sits on a fresh widget) leaves it at the *end* of the
-        # new text rather than the start - then Tab-focusing this box later
-        # would put the cursor (and the box's own auto-scroll-to-cursor) at
-        # the bottom, with the start of the text scrolled out of view.
-        text_widget.mark_set("insert", "1.0")
-        text_widget.see("1.0")
-        text_widget.edit_reset()  # don't let the initial insert be undoable
-        text_widget.edit_modified(False)  # don't count that insert as a user edit
-
-        text_widget.bind("<Control-BackSpace>", self._delete_word_backward)
-        text_widget.bind("<Tab>", self._on_tab)
-        text_widget.bind("<Shift-Tab>", self._on_shift_tab)
-        text_widget.bind("<Prior>", self._on_page_up)
-        text_widget.bind("<Next>", self._on_page_down)
-        text_widget.bind("<Control-z>", self._undo_text)
-        text_widget.bind("<Control-Z>", self._redo_text)
-        text_widget.bind(
-            "<<Modified>>",
-            lambda e, k=key, t=text_widget: self._on_text_modified(k, t),
-        )
-        self._text_widgets[key] = text_widget
-        self._text_containers[key] = text_container
-
-    def _max_text_box_height_px(self) -> int:
-        """Cap an editable text box's height at TEXT_BOX_MAX_HEIGHT_FRACTION
-        of the canvas viewport - falling back to the full screen if it
-        hasn't been laid out yet - so a very long message scrolls inside
-        its box (see _set_text_scrollbar) instead of growing taller than
-        what comfortably fits on screen with some margin to spare."""
-        viewport = self._canvas.winfo_height()
-        if viewport <= 1:
-            viewport = self.winfo_screenheight()
-        return int(viewport * TEXT_BOX_MAX_HEIGHT_FRACTION)
-
-    def _fixed_text_box_height(self, paired_height: int) -> int:
-        """A box's height (px), decided once at build time from a fixed
-        rule rather than measured from its actual content: its paired
-        immutable element's own on-screen height (the label's, for a
-        "message" box; the image's, for an "ocr" box) plus
-        TEXT_BOX_MARGIN_PX, capped at _max_text_box_height_px - any overflow
-        is handled by the box's own internal scrollbar (_set_text_scrollbar)
-        rather than the box growing. Both roles use the same rule (an
-        earlier version gave "message" boxes a flat minimum instead, on the
-        assumption that most messages here are short - in practice many are
-        not, so that assumption is gone and a "message" box now tracks its
-        label's real height the same way an "ocr" box already tracked its
-        image's).
-
-        This replaces an earlier design (_size_text_container, removed) that
-        measured the text's actual wrapped line count and resized the box to
-        fit it, re-running on every keystroke (_on_text_modified). That made
-        a row's true height unknowable until it was built and typed in -
-        which is exactly the gap _remeasure_built_rows existed to correct,
-        and the repeated source of this screen's scroll-position bugs (see
-        ARCHITECTURE.md). Fixing height to something knowable upfront - the
-        same way an image's height already was, via fitted_image_size's
-        cheap header read - removes that correction's reason to exist
-        instead of just estimating it more carefully."""
-        max_px = self._max_text_box_height_px()
-        target_px = paired_height + TEXT_BOX_MARGIN_PX
-        return max(1, min(target_px, max_px))
-
-    def _set_text_scrollbar(
-        self, scrollbar: ttk.Scrollbar, text_widget: tk.Text, first: str, last: str
-    ) -> None:
-        """yscrollcommand for an editable text box: show its scrollbar only
-        while content actually overflows the box. Most boxes' fixed height
-        (see _fixed_text_box_height) comfortably fits their typical content,
-        so a permanently-visible empty scrollbar would be pure visual noise
-        - this reveals one only once a message is long enough (or the box's
-        fixed height short enough) that the content actually overflows."""
-        if float(first) <= 0.0 and float(last) >= 1.0:
-            scrollbar.pack_forget()
-        else:
-            # before=text_widget: Tk allocates cavity space to packed slaves
-            # in pack-call order, and the text box (packed first, with
-            # fill="both"/expand=True) already claims the full cavity by the
-            # time this fires - packing the scrollbar in afterwards with no
-            # `before` would shrink it to a width-0 sliver, hidden but
-            # "mapped", since it'd be last in that order with nothing left
-            # to claim.
-            scrollbar.pack(side="right", fill="y", before=text_widget)
-        scrollbar.set(first, last)
-
-    def _on_text_modified(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
-        """Bound to a text box's <<Modified>> event. The box's own height is
-        now fixed at build time (see _fixed_text_box_height) and never
-        changes as the user types - overflow is handled entirely by the
-        box's internal scrollbar (_set_text_scrollbar) - so there's nothing
-        left to resize or remeasure here, just the modified-flag reset and
-        keeping the edited row on screen.
-
-        Scrolling the row back into view matters because focus alone
-        doesn't keep a box on screen: the mouse wheel/scrollbar can move the
-        viewport without touching focus at all, and Tk happily keeps
-        delivering keystrokes to a focused-but-off-screen widget - typing is
-        the easiest visible signal that the user is "at" this box and would
-        want to see it, without needing a separate scroll-position watcher
-        for an otherwise-rare case. Gated on the widget actually having
-        focus, since <<Modified>> also fires for a freshly-built row's own
-        initial text insert (see _build_editable_text_box) - that insert's
-        own edit_modified(False) reset doesn't suppress it, because Tk
-        queues <<Modified>> for the next idle tick rather than firing it
-        synchronously, by which point this binding already exists. Without
-        this guard, a row built only because it entered the virtualization
-        buffer (not because the user scrolled it into view) would yank the
-        canvas to reveal it anyway."""
-        text_widget.edit_modified(False)
-        if text_widget is self.focus_get():
-            self._scroll_into_view(key[0])
 
     def _destroy_row(self, index: int) -> None:
         """Tear down the row widget(s) for items[index], saving any edited
