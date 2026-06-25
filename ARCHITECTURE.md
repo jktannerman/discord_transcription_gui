@@ -631,6 +631,37 @@ containing the literal key `"ocr"`) for a transition period after this
 change shipped; that detection has since been removed now that no
 pre-spacer-slot session is expected to still be on disk.
 
+### Finalized edit persistence
+
+When the user clicks Finalize and the pipeline succeeds, `_on_finalize_clicked`
+saves every non-`None` slot value to `finalized_edits.json` (via
+`state.save_finalized_edits`), keyed by the HTML path and each message's
+Discord `message_id`. On a subsequent fresh run of the same chatlog,
+`_show_review` loads these via `state.load_finalized_edits` and passes them
+to `ReviewFrame` as `initial_finalized_texts`.
+
+**Priority order** inside `ReviewFrame.__init__`: `_saved_texts` is seeded
+first from the in-progress session (`initial_saved_texts`), then from
+finalized edits for any slot not already covered. The existing checkbox-
+seeding loop (`checked = saved is not None and saved != default`) runs last,
+so a finalized edit that differs from the OCR default starts its checkbox
+checked automatically with no special-case code.
+
+**Merge semantics** (`state.save_finalized_edits`): new non-`None` values are
+merged into whatever was already stored for this chatlog; `None` values
+(unchecked OCR boxes) are skipped, leaving the prior finalized text for that
+slot intact. A finalized edit is never deleted — once stored it persists until
+overwritten by a subsequent finalize that supplies a non-`None` value for
+that slot.
+
+**Matching** (`_match_finalized_edits`): stored `{message_id: {role: text}}`
+data is aligned to the current item list by Discord `message_id` (not by
+position) using the same approach as `_match_saved_edits` for session resume
+— orphaned message IDs are dropped silently, and roles that no longer appear
+in an item's `slot_roles` (e.g. because the chatlog was re-exported with
+fewer images) are also dropped. All `slot_roles` including `spacer_*` are
+eligible for storage and pre-population.
+
 ## Logging
 
 Every module logs through `app/logging_config.py`, which writes single-line

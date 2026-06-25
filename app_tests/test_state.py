@@ -72,6 +72,110 @@ def test_add_recent_path_orders_most_recent_first(tmp_path, monkeypatch):
     assert state.load_recent_paths("html_path") == ["b.html", "a.html"]
 
 
+def _patch_finalized(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "FINALIZED_EDITS_FILE", tmp_path / "finalized_edits.json")
+
+
+def test_load_finalized_edits_returns_none_when_no_file(tmp_path, monkeypatch):
+    _patch_finalized(monkeypatch, tmp_path)
+    assert state.load_finalized_edits("/path/to/chatlog.html") is None
+
+
+def test_finalized_edits_round_trip(tmp_path, monkeypatch):
+    _patch_finalized(monkeypatch, tmp_path)
+    html = "/path/to/chatlog.html"
+    edits = {"msg1": {"message": "hello", "spacer_end": r"\n\n\n\n"}}
+
+    state.save_finalized_edits(html, edits)
+
+    assert state.load_finalized_edits(html) == edits
+
+
+def test_save_finalized_edits_merges_without_deleting_prior_roles(tmp_path, monkeypatch):
+    """A second save for the same message_id must update only the roles present
+    in the new dict; prior roles absent from the new dict are kept unchanged."""
+    _patch_finalized(monkeypatch, tmp_path)
+    html = "/path/to/chatlog.html"
+
+    state.save_finalized_edits(html, {"msg1": {"message": "original", "ocr0": "ocr text"}})
+    # Second save updates only "message"; "ocr0" must be preserved.
+    state.save_finalized_edits(html, {"msg1": {"message": "updated"}})
+
+    result = state.load_finalized_edits(html)
+    assert result == {"msg1": {"message": "updated", "ocr0": "ocr text"}}
+
+
+def test_save_finalized_edits_isolates_html_paths(tmp_path, monkeypatch):
+    """Saving finalized edits for one chatlog must not affect another chatlog's
+    stored edits."""
+    _patch_finalized(monkeypatch, tmp_path)
+    html_a = "/path/to/a.html"
+    html_b = "/path/to/b.html"
+
+    state.save_finalized_edits(html_a, {"msgA": {"message": "text A"}})
+    state.save_finalized_edits(html_b, {"msgB": {"message": "text B"}})
+
+    assert state.load_finalized_edits(html_a) == {"msgA": {"message": "text A"}}
+    assert state.load_finalized_edits(html_b) == {"msgB": {"message": "text B"}}
+
+
+def test_save_finalized_edits_skips_none_values(tmp_path, monkeypatch):
+    """None values in the new dict must be silently dropped - they represent
+    unchecked or untouched boxes whose prior stored edit should be preserved,
+    not overwritten with None."""
+    _patch_finalized(monkeypatch, tmp_path)
+    html = "/path/to/chatlog.html"
+
+    state.save_finalized_edits(html, {"msg1": {"message": "original"}})
+    state.save_finalized_edits(html, {"msg1": {"message": None, "ocr0": "ocr text"}})
+
+    result = state.load_finalized_edits(html)
+    assert result == {"msg1": {"message": "original", "ocr0": "ocr text"}}
+
+
+def test_load_finalized_edits_returns_none_for_unknown_path_when_file_exists(tmp_path, monkeypatch):
+    """load returns None for a chatlog that isn't in the file, even when the
+    file already exists with entries for other chatlogs."""
+    _patch_finalized(monkeypatch, tmp_path)
+
+    state.save_finalized_edits("/path/to/known.html", {"msg": {"message": "text"}})
+
+    assert state.load_finalized_edits("/path/to/unknown.html") is None
+
+
+def test_save_finalized_edits_stores_multiple_messages_in_one_call(tmp_path, monkeypatch):
+    """A batch save with several message_ids must store all of them."""
+    _patch_finalized(monkeypatch, tmp_path)
+    html = "/path/to/chatlog.html"
+    edits = {
+        "msg1": {"message": "text 1", "spacer_end": r"\n\n\n\n"},
+        "msg2": {"ocr0": "image ocr"},
+        "msg3": {"message": "text 3", "ocr0": "image text"},
+    }
+
+    state.save_finalized_edits(html, edits)
+
+    assert state.load_finalized_edits(html) == edits
+
+
+def test_finalized_edits_recover_from_backup_when_primary_corrupt(tmp_path, monkeypatch):
+    """Mimics a crash mid-write: finalized_edits.json left corrupt, but the
+    previous good data survives in the .bak sibling."""
+    _patch_finalized(monkeypatch, tmp_path)
+    finalized_file = tmp_path / "finalized_edits.json"
+    backup_file = finalized_file.with_suffix(".bak")
+    html = "/path/to/chatlog.html"
+
+    state.save_finalized_edits(html, {"msg1": {"message": "good text"}})
+    state.save_finalized_edits(html, {"msg1": {"message": "overwritten"}})
+    finalized_file.write_text("", encoding="utf8")
+
+    result = state.load_finalized_edits(html)
+    assert result == {"msg1": {"message": "good text"}}
+    assert backup_file.exists()
+
+
 def test_add_recent_path_dedupes_and_moves_to_front(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
     monkeypatch.setattr(config, "RECENT_PATHS_FILE", tmp_path / "recent_paths.json")

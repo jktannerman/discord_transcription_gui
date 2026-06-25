@@ -315,6 +315,12 @@ pio -> pip - 1
 willbe -> will be - 1
 leam -> learn - 1
 priorties -> priorities - 1
+comer -> corner - 2
+fram -> from - 1
+lke -> like - 1
+swom -> sworn - 2
+Ifyou -> If you - 1
+
 
 check in general for words that are not words but would be words with m replaced by rn?
 

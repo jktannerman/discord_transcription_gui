@@ -1,7 +1,11 @@
 from pathlib import Path
 
 from gui_transcription.app.chatlog import MessageEntry
-from gui_transcription.app.gui.main_window import _match_focus_slot, _match_saved_edits
+from gui_transcription.app.gui.main_window import (
+    _match_finalized_edits,
+    _match_focus_slot,
+    _match_saved_edits,
+)
 from gui_transcription.app.review_item import ReviewItem
 
 
@@ -120,3 +124,80 @@ def test_focus_slot_translates_message_id_to_new_index_after_insertion():
     items = [_item("A"), _item("B"), _item("C")]
 
     assert _match_focus_slot(items, ["C", "ocr0"]) == (2, "ocr0")
+
+
+# -- _match_finalized_edits tests -------------------------------------------
+
+def test_match_finalized_edits_basic_mapping():
+    items = [_item("A"), _item("B")]
+    finalized = {"A": {"message": "final A"}, "B": {"message": "final B"}}
+
+    built = _match_finalized_edits(items, finalized)
+
+    assert built == [{"message": "final A"}, {"message": "final B"}]
+
+
+def test_match_finalized_edits_drops_orphaned_message_id():
+    """An entry whose message_id no longer appears in the current item list
+    (e.g. the author was later removed from the approved list) is dropped."""
+    items = [_item("A")]
+    finalized = {"A": {"message": "final A"}, "GONE": {"message": "orphan"}}
+
+    built = _match_finalized_edits(items, finalized)
+
+    assert built == [{"message": "final A"}]
+
+
+def test_match_finalized_edits_filters_to_current_slot_roles():
+    """A stored role that no longer exists on the current item (e.g. a second
+    image was removed in a re-export) is dropped rather than misapplied."""
+    items = [_image_item("A", image_count=1)]
+    finalized = {"A": {"ocr0": "first image", "ocr1": "stale second image"}}
+
+    built = _match_finalized_edits(items, finalized)
+
+    assert built == [{"ocr0": "first image"}]
+
+
+def test_match_finalized_edits_with_inserted_message():
+    """After a re-export inserts B between A and C, finalized edits for A
+    and C must still land on A and C rather than shifting by position."""
+    items = [_item("A"), _item("B"), _image_item("C", image_count=1)]
+    finalized = {"A": {"message": "final A"}, "C": {"ocr0": "final C ocr"}}
+
+    built = _match_finalized_edits(items, finalized)
+
+    assert built == [{"message": "final A"}, {}, {"ocr0": "final C ocr"}]
+
+
+def test_match_finalized_edits_maps_multiple_ocr_slots_for_multi_image_message():
+    """A message with two images has ocr0 and ocr1 slots; both must be
+    mapped onto the correct item independently."""
+    items = [_image_item("A", image_count=2)]
+    finalized = {"A": {"ocr0": "first image text", "ocr1": "second image text"}}
+
+    built = _match_finalized_edits(items, finalized)
+
+    assert built == [{"ocr0": "first image text", "ocr1": "second image text"}]
+
+
+def test_match_finalized_edits_includes_spacer_roles_in_slot_roles():
+    """Spacer roles (spacer_end, spacer_msg_img, etc.) are part of each
+    item's slot_roles, so stored spacer edits must pass the role filter
+    and land on the item correctly."""
+    items = [_item("A")]
+    finalized = {"A": {"message": "msg", "spacer_end": r"\n\n\n\n"}}
+
+    built = _match_finalized_edits(items, finalized)
+
+    assert built == [{"message": "msg", "spacer_end": r"\n\n\n\n"}]
+
+
+def test_match_finalized_edits_returns_empty_dicts_for_all_items_when_finalized_is_empty():
+    """An empty finalized dict (no runs ever finalized) must produce an
+    all-empty per-item list, not raise or produce fewer items than requested."""
+    items = [_item("A"), _item("B")]
+
+    built = _match_finalized_edits(items, {})
+
+    assert built == [{}, {}]

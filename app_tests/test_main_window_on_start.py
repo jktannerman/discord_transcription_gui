@@ -5,14 +5,17 @@ _match_focus_slot helpers (test_main_window_resume.py) were tested, not
 the orchestration that calls into them. A fake setup frame stands in for
 the real SetupFrame (pure Tk widget wiring, not under test here) so these
 tests exercise just _on_start's own decision logic."""
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 import tkinter as tk
 
 from gui_transcription.app import config
+from gui_transcription.app.chatlog import MessageEntry
 from gui_transcription.app.gui import main_window
-from gui_transcription.app.gui.main_window import App
+from gui_transcription.app.gui.main_window import App, RunContext
+from gui_transcription.app.review_item import ReviewItem
 
 # Every test here builds a real App (and so a real Tk root) - excluded from
 # the default run (see pyproject.toml's addopts) since the brief window it
@@ -196,3 +199,98 @@ def test_pending_session_declined_archives_it_before_clearing(app):
         _start(app, setup, resume_answer=False)
 
     archive_session_backup.assert_called_once_with("chat.html", pending)
+
+
+# -- _on_finalize_clicked tests -----------------------------------------------
+
+def _make_text_item(message_id: str) -> ReviewItem:
+    return ReviewItem(
+        entry=MessageEntry(message_id=message_id, text_lines=["hello"], image_names=[]),
+        image_paths=[],
+        initial_message_text="hello",
+        initial_ocr_texts=[],
+        initial_spacer_texts={"spacer_end": r"\n\n\n\n"},
+    )
+
+
+def _finalize(app, tmp_path, items, edited_texts):
+    """Set up app._run/_review_items and call _on_finalize_clicked with
+    pipeline and most state calls mocked out, returning the args each call
+    received as a list."""
+    html = tmp_path / "chat.html"
+    html.write_text("<html></html>", encoding="utf8")
+    output = tmp_path / "out.txt"
+    output.write_text("", encoding="utf8")
+
+    app._run = RunContext(
+        html_path=html,
+        image_folder=tmp_path / "images",
+        output_path=output,
+        start_time=0,
+        approved_author_ids=None,
+        use_cache=True,
+    )
+    app._review_items = items
+
+    save_calls = []
+    with patch.object(main_window.pipeline, "write_all_items"), \
+         patch.object(main_window.pipeline, "finalize_run", return_value="added"), \
+         patch.object(main_window.state, "save_finalized_edits",
+                      side_effect=lambda *a: save_calls.append(a)), \
+         patch.object(main_window.state, "clear_session"):
+        app._on_finalize_clicked(edited_texts)
+
+    return save_calls
+
+
+def test_on_finalize_clicked_saves_non_none_edits_as_finalized(app, tmp_path, monkeypatch):
+    """_on_finalize_clicked must call state.save_finalized_edits with only
+    the non-None edited values, keyed by each item's message_id."""
+    monkeypatch.setattr(config, "FINALIZED_EDITS_FILE", tmp_path / "finalized_edits.json")
+
+    items = [_make_text_item("msg1"), _make_text_item("msg2")]
+    edited_texts = [
+        {"message": "edited text", "spacer_end": None},   # non-None message, None spacer
+        {"message": None, "spacer_end": r"\n\n\n\n"},     # None message, non-None spacer
+    ]
+
+    save_calls = _finalize(app, tmp_path, items, edited_texts)
+
+    assert len(save_calls) == 1
+    _, by_id = save_calls[0]
+    assert by_id == {
+        "msg1": {"message": "edited text"},   # spacer_end None → dropped
+        "msg2": {"spacer_end": r"\n\n\n\n"},  # message None → dropped
+    }
+
+
+def test_on_finalize_clicked_does_not_save_finalized_edits_on_pipeline_failure(app, tmp_path, monkeypatch):
+    """If write_all_items or finalize_run raises, _on_finalize_clicked must
+    abort before saving finalized edits, so a failed finalize never
+    overwrites a prior good run's stored edits."""
+    monkeypatch.setattr(config, "FINALIZED_EDITS_FILE", tmp_path / "finalized_edits.json")
+
+    items = [_make_text_item("msg1")]
+    edited_texts = [{"message": "edited text", "spacer_end": None}]
+
+    save_calls = []
+    html = tmp_path / "chat.html"
+    html.write_text("<html></html>", encoding="utf8")
+    app._run = RunContext(
+        html_path=html,
+        image_folder=tmp_path / "images",
+        output_path=tmp_path / "out.txt",
+        start_time=0,
+        approved_author_ids=None,
+        use_cache=True,
+    )
+    app._review_items = items
+
+    with patch.object(main_window.pipeline, "write_all_items",
+                      side_effect=OSError("disk full")), \
+         patch.object(main_window.state, "save_finalized_edits",
+                      side_effect=lambda *a: save_calls.append(a)), \
+         patch.object(main_window.messagebox, "showerror"):
+        app._on_finalize_clicked(edited_texts)
+
+    assert save_calls == []

@@ -154,12 +154,15 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         initial_saved_texts: Optional[List[Dict[str, Optional[str]]]] = None,
         initial_focus_slot: Optional[Tuple[int, str]] = None,
         initial_scroll_fraction: Optional[float] = None,
+        initial_finalized_texts: Optional[List[Dict[str, Optional[str]]]] = None,
     ):
         super().__init__(master)
         logger.info(
             "building review screen",
             extra=logging_config.extra(
-                item_count=len(items), resuming=initial_saved_texts is not None
+                item_count=len(items),
+                resuming=initial_saved_texts is not None,
+                has_finalized_texts=initial_finalized_texts is not None,
             ),
         )
         self._items = items
@@ -200,6 +203,16 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
             for idx, edited in enumerate(initial_saved_texts):
                 for role, text in edited.items():
                     if text is not None:
+                        self._saved_texts[(idx, role)] = text
+        # Finalized edits from a prior completed run - used as fallback for
+        # slots not already covered by a session resume above. Session takes
+        # priority (already in _saved_texts); finalized edits fill the rest,
+        # so a fresh run pre-populates with the previously-finalized text
+        # rather than raw OCR.
+        if initial_finalized_texts is not None and len(initial_finalized_texts) == len(items):
+            for idx, edited in enumerate(initial_finalized_texts):
+                for role, text in edited.items():
+                    if text is not None and (idx, role) not in self._saved_texts:
                         self._saved_texts[(idx, role)] = text
         # Cursor ("insert" mark) position captured alongside self._saved_texts
         # when a box's row is torn down, so paging a focused box's row out and

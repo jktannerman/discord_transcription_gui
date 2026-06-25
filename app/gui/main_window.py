@@ -92,6 +92,36 @@ def _match_saved_edits(
     return built
 
 
+def _match_finalized_edits(
+    review_items: list["review_item.ReviewItem"], finalized: dict
+) -> list[dict[str, Optional[str]]]:
+    """Translate a {message_id: {role: text}} finalized-edits dict onto the
+    freshly-parsed review_items' current positions, producing one role->text
+    dict per item (same shape as _match_saved_edits). Entries whose
+    message_id no longer appears in the current item list are dropped
+    silently. Each matched entry's roles are filtered to the item's current
+    slot_roles, so a re-export that changed an item's image count can't
+    misalign a stored edit onto the wrong slot."""
+    by_id = {item.message_id: idx for idx, item in enumerate(review_items)}
+    built: list[dict[str, Optional[str]]] = [{} for _ in review_items]
+    matched = dropped = 0
+    for message_id, role_texts in finalized.items():
+        idx = by_id.get(message_id)
+        if idx is None:
+            dropped += 1
+            continue
+        matched += 1
+        valid_roles = set(review_items[idx].slot_roles)
+        built[idx] = {role: text for role, text in role_texts.items() if role in valid_roles}
+    logger.debug(
+        "finalized edits matched by message_id",
+        extra=logging_config.extra(
+            matched_count=matched, dropped_count=dropped, current_item_count=len(review_items)
+        ),
+    )
+    return built
+
+
 def _match_focus_slot(
     review_items: list["review_item.ReviewItem"], focus_slot: Optional[list]
 ) -> Optional[tuple[int, str]]:
@@ -509,6 +539,11 @@ class App:
                 initial_focus_slot = _match_focus_slot(self._review_items, resume.get("focus_slot"))
                 initial_scroll_fraction = resume.get("scroll_fraction")
 
+        finalized_raw = state.load_finalized_edits(str(self._run.html_path))
+        initial_finalized_texts = None
+        if finalized_raw:
+            initial_finalized_texts = _match_finalized_edits(self._review_items, finalized_raw)
+
         frame = ReviewFrame(
             self.container,
             self._review_items,
@@ -516,6 +551,7 @@ class App:
             initial_saved_texts=initial_saved_texts,
             initial_focus_slot=initial_focus_slot,
             initial_scroll_fraction=initial_scroll_fraction,
+            initial_finalized_texts=initial_finalized_texts,
         )
         self._set_frame(frame)
         self._review_frame = frame
@@ -531,6 +567,14 @@ class App:
             logger.exception("finalize failed")
             self._on_run_error(f"Failed to write output: {exc}")
             return
+
+        finalized_by_id: dict[str, dict] = {}
+        for item, edited in zip(self._review_items, edited_texts):
+            per_msg = {role: text for role, text in edited.items() if text is not None}
+            if per_msg:
+                finalized_by_id[item.message_id] = per_msg
+        if finalized_by_id:
+            state.save_finalized_edits(str(run.html_path), finalized_by_id)
 
         self._cancel_autosave()
         state.clear_session(str(run.html_path))

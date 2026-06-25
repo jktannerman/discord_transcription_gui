@@ -58,6 +58,14 @@ What's in scope for v1:
    scroll position all restored. Declining discards that chatlog's saved
    session outright (other chatlogs' saved sessions are unaffected).
 
+   In addition, every text box that had a user edit when a run was Finalized
+   is stored permanently per chatlog, so starting a **fresh run** of the same
+   chatlog pre-populates each box with the previously-finalized edit rather
+   than raw OCR. This means noticing a mistake later requires only a re-run
+   to fix - previous edits are already there, not lost. On a **resumed
+   session** the most recent in-session edit takes priority; the stored
+   finalized edit fills in any box the session did not cover.
+
    Resuming re-runs HTML parsing/OCR from the saved inputs rather than
    serializing the parsed messages themselves, but saved edits are matched
    back onto the freshly-parsed messages by Discord's own per-message ID
@@ -184,6 +192,15 @@ What's in scope for v1:
    the app. Tab/Shift-Tab never land on the checkbox itself - only on the
    text boxes, same as before this existed.
 
+   When a box is pre-populated from a previously-finalized edit (see
+   "Setup screen" above), its checkbox starts **checked** if that finalized
+   text differs from the current OCR default, so unchecking still reverts
+   to OCR and re-checking brings back the finalized text. If the finalized
+   text happens to match the current OCR (e.g. OCR corrections were not
+   changed and the original was already correct), the checkbox starts
+   unchecked and the box is visually indistinguishable from an ordinary
+   fresh OCR result.
+
    Between every text/image piece - text and its first image, one image
    and the next, and the gap before the next message - there's also a
    **spacer box**: a one-line-tall, editable box holding nothing but
@@ -232,6 +249,16 @@ What's in scope for v1:
    autosaved session - there's nothing left to resume once a run has
    actually been finalized.
 
+   Finalize also stores every box that had a user edit (non-None value in
+   `collect_edited_texts`) into `finalized_edits.json`, keyed by this
+   chatlog's HTML path and each message's Discord message ID. These are
+   merged into whatever was already stored for this chatlog (prior edits
+   for boxes not touched in this run are preserved), so running again on
+   the same chatlog - e.g. to fix a noticed mistake - starts with every
+   prior edit already in place. Spacer-box edits are included. Boxes that
+   were unchecked or never touched (value is `None`) do not overwrite a
+   prior stored edit for the same slot.
+
 ## OCR corrections
 
 `app/ocr_corrections.txt` is a user-editable, plain-text list of regex
@@ -269,12 +296,13 @@ gui_transcription/
     main.py              # entry point
     config.py            # constants: paths, markers, default approved users
     state.py             # JSON run-date log, OCR cache, approved-users
-                          # state, in-progress session save/resume - every
-                          # write goes through atomic write-then-replace
-                          # with .bak rotation, every read falls back to
-                          # the .bak if the primary file is missing/corrupt;
-                          # a session's last 3 end-of-session states are
-                          # also kept in a separate rotating backup file
+                          # state, in-progress session save/resume, and
+                          # finalized-edit persistence - every write goes
+                          # through atomic write-then-replace with .bak
+                          # rotation, every read falls back to the .bak if
+                          # the primary file is missing/corrupt; a session's
+                          # last 3 end-of-session states are also kept in a
+                          # separate rotating backup file
                           # (archive_session_backup/load_session_backups),
                           # so resuming and continuing to edit doesn't
                           # erase the previous session's final state the
@@ -358,7 +386,7 @@ also runs Tcl/Tk's one-time subsystem init. Run
 `py -3.13 -m pytest gui_transcription\app_tests -v -m gui` to include just
 those, or add `-m ""` to run the whole suite including them.
 
-168 tests (214 including the `gui`-marked ones, which now also cover a
+183 tests (242 including the `gui`-marked ones, which now also cover a
 box's undo/redo history surviving its row being paged out and back in -
 `text_undo.py` - a focused box always scrolling fully into view, not
 just its row, a far-away Tab/resume target landing fully within the

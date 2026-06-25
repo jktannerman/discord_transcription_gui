@@ -57,6 +57,13 @@ SESSIONS_FILE = APP_DATA_DIR / "sessions.json"
 # few times it stopped being the live, in-progress one.
 SESSION_BACKUPS_FILE = APP_DATA_DIR / "session_backups.json"
 SESSION_BACKUP_COUNT = 3
+# {html_path: {message_id: {role: text}}} - user-edited transcriptions written
+# at Finalize, kept indefinitely per message (keyed by Discord message_id so
+# they survive a re-export with new messages inserted anywhere). Only non-None
+# role values are stored; spacer edits and content edits are both included.
+# Merged on each Finalize (never deleted) so unchecked/untouched boxes at
+# finalize time leave prior stored edits intact.
+FINALIZED_EDITS_FILE = APP_DATA_DIR / "finalized_edits.json"
 LOG_FILE = APP_DATA_DIR / "app.log"
 # Separate, much higher-frequency stream for the review screen's per-scroll-
 # tick tracing (reconcile/debounce/remeasure/image-load events) - kept out of

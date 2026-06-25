@@ -51,6 +51,16 @@ def sample_image(tmp_path):
     return path
 
 
+def _two_image_items(sample_image):
+    """A single message with two image attachments - used to test that
+    finalized edits for ocr0 and ocr1 are independent of each other."""
+    entries = [
+        MessageEntry(message_id="multi", text_lines=[], image_names=["sample.png", "sample.png"])
+    ]
+    file_info = {"sample.png": ["ocr default"]}
+    return build_review_items(entries, file_info, image_folder=sample_image.parent)
+
+
 def _items(sample_image, count=40):
     """A mix of text-only, image-only, and image-with-caption rows, in a
     fixed repeating pattern - the same three row shapes _build_row has to
@@ -824,3 +834,226 @@ def test_typing_in_a_focused_box_scrolled_offscreen_scrolls_its_row_back_into_vi
     # Tk can deliver <<Modified>> more than once for a single edit; what
     # matters here is that every delivery scrolled this box, not the exact count.
     assert scroll_calls and set(scroll_calls) == {key}
+
+
+# -- finalized-edit pre-population tests ------------------------------------
+
+def test_fresh_run_uses_finalized_text_when_no_session(root, sample_image):
+    """A fresh run (no session resume) must pre-populate each box with the
+    corresponding finalized edit when one exists."""
+    items = _items(sample_image, count=5)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    finalized = [{} for _ in items]
+    finalized[text_item] = {"message": "finalized message text"}
+
+    frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
+
+    assert frame._text_widgets[(text_item, "message")].get("1.0", "end-1c") == "finalized message text"
+
+
+def test_session_takes_priority_over_finalized_text(root, sample_image):
+    """When both a session edit and a finalized edit exist for the same slot,
+    the session edit wins."""
+    items = _items(sample_image, count=5)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    saved_texts = [{} for _ in items]
+    saved_texts[text_item] = {"message": "session edit"}
+    finalized = [{} for _ in items]
+    finalized[text_item] = {"message": "finalized edit"}
+
+    frame, _ = _build_frame(root, items, initial_saved_texts=saved_texts, initial_finalized_texts=finalized)
+
+    assert frame._text_widgets[(text_item, "message")].get("1.0", "end-1c") == "session edit"
+
+
+def test_finalized_used_for_slot_not_covered_by_session(root, sample_image):
+    """When session and finalized edits each cover different slots, both
+    sources contribute: session wins for its slots, finalized fills the rest."""
+    items = _items(sample_image, count=5)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    saved_texts = [{} for _ in items]
+    saved_texts[text_item] = {"message": "session message"}
+    finalized = [{} for _ in items]
+    finalized[image_item] = {"ocr0": "finalized ocr"}
+
+    frame, _ = _build_frame(root, items, initial_saved_texts=saved_texts, initial_finalized_texts=finalized)
+
+    assert frame._text_widgets[(text_item, "message")].get("1.0", "end-1c") == "session message"
+    assert frame._text_widgets[(image_item, "ocr0")].get("1.0", "end-1c") == "finalized ocr"
+
+
+def test_ocr_checkbox_starts_checked_when_finalized_differs_from_ocr(root, sample_image):
+    """An OCR box pre-populated from a finalized edit that differs from the
+    OCR default must start with its checkbox checked, so unchecking reverts
+    to OCR and re-checking returns to the finalized text."""
+    items = _items(sample_image, count=5)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    ocr_default = items[image_item].initial_ocr_texts[0]
+    finalized = [{} for _ in items]
+    finalized[image_item] = {"ocr0": "finalized ocr different from default"}
+    assert finalized[image_item]["ocr0"] != ocr_default
+
+    frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
+    key = (image_item, "ocr0")
+
+    assert frame._checkbox_checked[key] is True
+    assert frame._checkbox_vars[key].get() is True
+    assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized ocr different from default"
+    assert frame._user_edited_texts[key] == "finalized ocr different from default"
+
+
+def test_ocr_checkbox_starts_unchecked_when_finalized_matches_ocr(root, sample_image):
+    """If the finalized edit happens to equal the current OCR default (e.g.
+    no corrections changed it, or the user typed it back exactly), the box
+    must start unchecked - no false positive checked state."""
+    items = _items(sample_image, count=5)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    ocr_default = items[image_item].initial_ocr_texts[0]
+    finalized = [{} for _ in items]
+    finalized[image_item] = {"ocr0": ocr_default}  # same as current OCR
+
+    frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
+    key = (image_item, "ocr0")
+
+    assert frame._checkbox_checked[key] is False
+    assert frame._checkbox_vars[key].get() is False
+
+
+def test_finalized_edit_survives_page_out_and_back_in(root, sample_image):
+    """Composition test (per ARCHITECTURE.md's "test where features compose"
+    heuristic): a box pre-populated from a finalized edit must still show
+    that edit after its row is paged out and rebuilt, with no further typing
+    in between - the same scenario that exposed the UndoLog.baseline
+    data-loss bug (see that section in ARCHITECTURE.md)."""
+    items = _items(sample_image, count=40)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    assert items[text_item].initial_message_text != "finalized edit"
+    finalized = [{} for _ in items]
+    finalized[text_item] = {"message": "finalized edit"}
+
+    frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
+    key = (text_item, "message")
+    assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized edit"
+
+    # Page far away (tears the row down with no further edits) and back.
+    frame._ensure_materialized(len(items) - 1)
+    frame._canvas.yview_moveto(0.0)
+    frame._reconcile()
+
+    assert key in frame._text_widgets
+    assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized edit"
+
+
+def test_spacer_finalized_edit_pre_populates_spacer_box(root, sample_image):
+    """A spacer_end finalized edit must pre-populate the spacer box with
+    the stored token string rather than the default computed at build time."""
+    items = _items(sample_image, count=5)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    default_spacer = items[text_item].initial_spacer_texts["spacer_end"]
+    custom_spacer = r"\n\n\n\n\n\n\n\n"  # more tokens than the default
+    assert custom_spacer != default_spacer
+    finalized = [{} for _ in items]
+    finalized[text_item] = {"spacer_end": custom_spacer}
+
+    frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
+
+    spacer_widget = frame._text_widgets[(text_item, "spacer_end")]
+    assert spacer_widget.get("1.0", "end-1c") == custom_spacer
+
+
+def test_multiple_image_message_finalized_edits_populate_each_ocr_box_independently(root, sample_image):
+    """A message with two images must have each image's OCR box independently
+    pre-populated from the corresponding finalized edit (ocr0 ≠ ocr1)."""
+    items = _two_image_items(sample_image)
+    finalized = [{"ocr0": "finalized first image", "ocr1": "finalized second image"}]
+
+    frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
+
+    assert frame._text_widgets[(0, "ocr0")].get("1.0", "end-1c") == "finalized first image"
+    assert frame._text_widgets[(0, "ocr1")].get("1.0", "end-1c") == "finalized second image"
+    assert frame._checkbox_checked[(0, "ocr0")] is True
+    assert frame._checkbox_checked[(0, "ocr1")] is True
+
+
+def test_unchecking_then_rechecking_ocr_box_starting_from_finalized_edit(root, sample_image):
+    """Full toggle cycle for an OCR box pre-populated from a finalized edit:
+    unchecking must revert to the OCR default without discarding the
+    finalized text, and rechecking must bring the finalized text back."""
+    items = _items(sample_image, count=5)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    ocr_default = items[image_item].initial_ocr_texts[0]
+    finalized = [{} for _ in items]
+    finalized[image_item] = {"ocr0": "finalized ocr text"}
+    assert finalized[image_item]["ocr0"] != ocr_default
+
+    frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
+    key = (image_item, "ocr0")
+    widget = frame._text_widgets[key]
+    assert widget.get("1.0", "end-1c") == "finalized ocr text"
+    assert frame._checkbox_vars[key].get() is True
+
+    frame._checkbox_vars[key].set(False)
+    frame._on_ocr_checkbox_toggle(key)
+
+    assert widget.get("1.0", "end-1c") == ocr_default
+    assert frame._checkbox_checked[key] is False
+    assert frame._user_edited_texts[key] == "finalized ocr text"  # not lost
+
+    frame._checkbox_vars[key].set(True)
+    frame._on_ocr_checkbox_toggle(key)
+
+    assert widget.get("1.0", "end-1c") == "finalized ocr text"
+    assert frame._checkbox_checked[key] is True
+
+
+def test_collect_edited_texts_reports_finalized_text_for_checked_ocr_box(root, sample_image):
+    """collect_edited_texts (what autosave and Finalize read) must return
+    the finalized text for a box pre-populated from a finalized edit whose
+    checkbox is checked - and None if that same box is then unchecked,
+    since unchecked means "use the OCR default"."""
+    items = _items(sample_image, count=5)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    finalized = [{} for _ in items]
+    finalized[image_item] = {"ocr0": "finalized ocr text"}
+
+    frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
+    key = (image_item, "ocr0")
+
+    collected_checked = frame.collect_edited_texts()
+    assert collected_checked[image_item]["ocr0"] == "finalized ocr text"
+
+    frame._checkbox_vars[key].set(False)
+    frame._on_ocr_checkbox_toggle(key)
+
+    collected_unchecked = frame.collect_edited_texts()
+    assert collected_unchecked[image_item]["ocr0"] is None
+
+
+def test_finalized_ocr_edit_and_checkbox_survive_page_out_and_back_in(root, sample_image):
+    """Composition test for the OCR-box-specific case: an OCR box pre-
+    populated from a finalized edit must still show the finalized text and
+    have its checkbox correctly checked after its row is paged out and back
+    in with no further edits. Combines finalized pre-population, row
+    virtualization, and checkbox seeding - three separate features that
+    must all hold their invariants together."""
+    items = _items(sample_image, count=40)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    ocr_default = items[image_item].initial_ocr_texts[0]
+    finalized = [{} for _ in items]
+    finalized[image_item] = {"ocr0": "finalized ocr text"}
+    assert finalized[image_item]["ocr0"] != ocr_default
+
+    frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
+    key = (image_item, "ocr0")
+    assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized ocr text"
+    assert frame._checkbox_checked[key] is True
+
+    frame._ensure_materialized(len(items) - 1)
+    frame._canvas.yview_moveto(0.0)
+    frame._reconcile()
+
+    assert key in frame._text_widgets
+    assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized ocr text"
+    assert frame._checkbox_checked[key] is True
+    assert frame._checkbox_vars[key].get() is True

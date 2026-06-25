@@ -275,6 +275,64 @@ def load_session_backups(html_path: str) -> list:
     return backups.get(str(Path(html_path)), [])
 
 
+def load_finalized_edits(html_path: str) -> Optional[dict]:
+    """Return the stored finalized edits for html_path as
+    {message_id: {role: text}}, or None if there are no stored edits for
+    that specific chatlog. Finalized edits for other chatlogs, if any, are
+    unaffected."""
+    all_finalized = _read_json_with_backup(config.FINALIZED_EDITS_FILE)
+    if not isinstance(all_finalized, dict):
+        return None
+
+    data = all_finalized.get(str(Path(html_path)))
+    if data is None:
+        logger.info(
+            "no finalized edits for this chatlog",
+            extra=logging_config.extra(html_path=html_path),
+        )
+        return None
+
+    logger.info(
+        "loaded finalized edits",
+        extra=logging_config.extra(html_path=html_path, message_count=len(data)),
+    )
+    return data
+
+
+def save_finalized_edits(html_path: str, edits_by_message: dict) -> None:
+    """Merge edits_by_message ({message_id: {role: text}}) into the stored
+    finalized edits for html_path. Only non-None values in edits_by_message
+    are stored; roles absent from or None in the new dict leave any prior
+    stored value for that role intact ("preserve" policy - an untouched or
+    unchecked box at finalize time does not erase a prior finalized edit).
+    Finalized edits for other chatlogs are kept alongside this one
+    indefinitely."""
+    all_finalized = _read_json_with_backup(config.FINALIZED_EDITS_FILE)
+    if not isinstance(all_finalized, dict):
+        all_finalized = {}
+
+    key = str(Path(html_path))
+    existing = all_finalized.get(key, {})
+    for message_id, role_texts in edits_by_message.items():
+        per_message = existing.get(message_id, {})
+        for role, text in role_texts.items():
+            if text is not None:
+                per_message[role] = text
+        existing[message_id] = per_message
+    all_finalized[key] = existing
+    _atomic_write_json(config.FINALIZED_EDITS_FILE, all_finalized)
+
+    stored_count = sum(len(roles) for roles in existing.values())
+    logger.info(
+        "saved finalized edits",
+        extra=logging_config.extra(
+            html_path=html_path,
+            message_count=len(existing),
+            stored_role_count=stored_count,
+        ),
+    )
+
+
 def load_cache(folder_path: str) -> Optional[dict]:
     """Return the cached {image_name: [paragraphs]} dict for folder_path.
 
