@@ -203,6 +203,8 @@ Off of the top of my head, there are many different ways that rows can be torn d
 - done
 Upon tabbing/shift-tabbing into a text input box, please ensure that the entire box is cleanly onscreen. Previous attempted fixes have failed to resolve this issue, but the remaining behaviour seems to be centered around resuming a session where the focus is on a text input box which is a significant way down the page. It may be due to a disagreement in how positions are calculated; the canonical specification is given in `./gui_transcription/ARCHITECTURE.md`. Jumping to the top of the page and then navigating continuously down from there fixes the issue each session, but this is inconvenient, and jumping to a new location breaks things again.
 
+- done
+Please improve the backups of the user-edited transcriptions. Currently, there is only one backup, which is edited more or less immediately. I would like backups of the data at the end of the last N sessions before the current saved state, where N should be 3 for now.
 
 
 checkbox that can be checked to restore original state; automatically unchecks when user has made edits; can be rechecked to restore edited mode; only overwritten when user makes edits to unchecked
@@ -220,7 +222,6 @@ To each text input box that corresponds to a chatlog image, please add a checkbo
 Ask any other questions about desired behaviour now, if needed. Before beginning work, read `./gui_transcription/ARCHITECTURE.md` and make a plan.
 
 
-Please improve the backups of the user-edited transcriptions. Currently, there is only one backup, which is edited more or less immediately. I would like backups of the data at the end of the last N sessions before the current saved state, where N should be 3 for now.
 
 
 Please improve behavior or/and test coverage around Tab/Shift-Tab. To be specific, these buttons can be held down, which can lead to very fast changes in position.
@@ -256,6 +257,8 @@ more comprehensive logging?
 
 
 The cursor is not very visible when editing the timestamp on the startup window. Please tweak this.
+Strip newlines from the beginning of transcriptions when writing to finalised output file.
+
 
 
 Please add an option to restore the last session, even if it was finalised and written to an output file, in order to be able to redo something overlooked.
@@ -271,7 +274,7 @@ A very minor bug: the window bar does not appear black on startup. This is fixed
 image size issues? add zoom?
 
 
-
+right click menu should link to the place in the chatlog
 
 
 
@@ -313,14 +316,7 @@ willbe -> will be - 1
 leam -> learn - 1
 priorties -> priorities - 1
 
-
-
-
-Are there any problematic gaps in test coverage or logging coverage? 
-
-Read a small sample of the logs. Is the format as useful as it could be? Could it be made more readable in some way, or split up, or documented better?
-
-Are there any aspects that are noticeably missing, comparing this project to a professional one?
+check in general for words that are not words but would be words with m replaced by rn?
 
 
 
@@ -337,4 +333,8 @@ Please make notes on what could be changed in some scratchpad file as you go, ra
 
 
 
+Are there any problematic gaps in test coverage or logging coverage? 
 
+Read a small sample of the logs. Is the format as useful as it could be? Could it be made more readable in some way, or split up, or documented better?
+
+Are there any aspects that are noticeably missing, comparing this project to a professional one?

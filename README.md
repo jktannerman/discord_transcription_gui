@@ -255,7 +255,13 @@ gui_transcription/
                           # state, in-progress session save/resume - every
                           # write goes through atomic write-then-replace
                           # with .bak rotation, every read falls back to
-                          # the .bak if the primary file is missing/corrupt
+                          # the .bak if the primary file is missing/corrupt;
+                          # a session's last 3 end-of-session states are
+                          # also kept in a separate rotating backup file
+                          # (archive_session_backup/load_session_backups),
+                          # so resuming and continuing to edit doesn't
+                          # erase the previous session's final state the
+                          # way the single write-time .bak would
     ocr.py                # Tesseract OCR behind a swappable backend interface
     ocr_corrections.py     # loads/applies ocr_corrections.txt's regex fixes
     ocr_corrections.txt    # user-editable OCR-misread find/replace rules

@@ -48,6 +48,15 @@ APPROVED_USERS_STATE_FILE = APP_DATA_DIR / "approved_users.json"
 # different chatlogs can each be partially transcribed and resumed
 # independently of one another.
 SESSIONS_FILE = APP_DATA_DIR / "sessions.json"
+# {html_path: [session_dict, ...]} - up to SESSION_BACKUP_COUNT end-of-
+# session snapshots per chatlog, most-recent-first (see
+# state.archive_session_backup). Separate from SESSIONS_FILE's own
+# write-time .bak (which only ever holds the single immediately-previous
+# write and is itself overwritten by the very next autosave tick) - this
+# file instead preserves whatever a session actually looked like the last
+# few times it stopped being the live, in-progress one.
+SESSION_BACKUPS_FILE = APP_DATA_DIR / "session_backups.json"
+SESSION_BACKUP_COUNT = 3
 LOG_FILE = APP_DATA_DIR / "app.log"
 # Separate, much higher-frequency stream for the review screen's per-scroll-
 # tick tracing (reconcile/debounce/remeasure/image-load events) - kept out of

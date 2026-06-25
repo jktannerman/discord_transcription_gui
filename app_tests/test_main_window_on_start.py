@@ -169,3 +169,30 @@ def test_pending_session_accepted_resumes_instead_of_starting_fresh(app):
 
     assert begin_run_calls == []
     assert len(resume_calls) == 1
+
+
+def test_pending_session_accepted_archives_it_before_resuming(app):
+    """Accepting resume means the pending session is about to be
+    progressively overwritten by the new session's own autosave ticks -
+    clear_session is never called on this path (there's something to
+    resume), so archiving has to happen here instead, or the previous
+    session's final state would just be lost the moment the new one
+    autosaves over it."""
+    setup = _FakeSetupFrame()
+    pending = {"html_path": "chat.html", "edited_texts": {"1": "old edit"}}
+    with patch.object(main_window.state, "load_session", return_value=pending), \
+         patch.object(main_window.state, "archive_session_backup") as archive_session_backup:
+        _start(app, setup, resume_answer=True)
+
+    archive_session_backup.assert_called_once_with("chat.html", pending)
+
+
+def test_pending_session_declined_archives_it_before_clearing(app):
+    setup = _FakeSetupFrame()
+    pending = {"html_path": "chat.html", "edited_texts": {"1": "old edit"}}
+    with patch.object(main_window.state, "load_session", return_value=pending), \
+         patch.object(main_window.state, "clear_session"), \
+         patch.object(main_window.state, "archive_session_backup") as archive_session_backup:
+        _start(app, setup, resume_answer=False)
+
+    archive_session_backup.assert_called_once_with("chat.html", pending)

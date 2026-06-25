@@ -221,6 +221,14 @@ class App:
 
         pending_session = state.load_session(html_path)
         if pending_session is not None:
+            # Either branch below ends this pending session's life as the
+            # live, in-progress one for html_path - accepting moves it into
+            # a new session that will progressively overwrite it via
+            # autosave, declining clears it outright (which separately
+            # archives it too - see state.clear_session) - so archive it
+            # here first, covering the accepted case clear_session never
+            # runs for.
+            state.archive_session_backup(html_path, pending_session)
             if messagebox.askyesno(
                 "Resume previous session",
                 "A saved in-progress review session exists for this chatlog. Resume it?",

@@ -241,6 +241,148 @@ def test_clear_session_removes_backup_too(tmp_path, monkeypatch):
     assert json.loads(backup_file.read_text(encoding="utf8"))["chat.html"]["output_path"] == "second.txt"
 
 
+def _backups_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "SESSIONS_FILE", tmp_path / "sessions.json")
+    monkeypatch.setattr(config, "SESSION_BACKUPS_FILE", tmp_path / "session_backups.json")
+
+
+def test_load_session_backups_returns_empty_when_no_file(tmp_path, monkeypatch):
+    _backups_config(tmp_path, monkeypatch)
+
+    assert state.load_session_backups("chat.html") == []
+
+
+def test_archive_session_backup_round_trip(tmp_path, monkeypatch):
+    _backups_config(tmp_path, monkeypatch)
+
+    session = {"output_path": "out.txt", "edited_texts": {"1": {"message": "edited"}}}
+    state.archive_session_backup("chat.html", session)
+
+    assert state.load_session_backups("chat.html") == [session]
+
+
+def test_archive_session_backup_orders_most_recent_first(tmp_path, monkeypatch):
+    _backups_config(tmp_path, monkeypatch)
+
+    state.archive_session_backup("chat.html", {"output_path": "first.txt"})
+    state.archive_session_backup("chat.html", {"output_path": "second.txt"})
+    state.archive_session_backup("chat.html", {"output_path": "third.txt"})
+
+    backups = state.load_session_backups("chat.html")
+    assert [b["output_path"] for b in backups] == ["third.txt", "second.txt", "first.txt"]
+
+
+def test_archive_session_backup_caps_at_session_backup_count(tmp_path, monkeypatch):
+    _backups_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(config, "SESSION_BACKUP_COUNT", 3)
+
+    for i in range(5):
+        state.archive_session_backup("chat.html", {"output_path": f"v{i}.txt"})
+
+    backups = state.load_session_backups("chat.html")
+    assert [b["output_path"] for b in backups] == ["v4.txt", "v3.txt", "v2.txt"]
+
+
+def test_archive_session_backup_dedupes_identical_consecutive_entry(tmp_path, monkeypatch):
+    """A pending session loaded then immediately declined (or accepted,
+    with no edits made before the next archive) must not burn two backup
+    slots on the exact same content."""
+    _backups_config(tmp_path, monkeypatch)
+
+    session = {"output_path": "out.txt"}
+    state.archive_session_backup("chat.html", session)
+    state.archive_session_backup("chat.html", dict(session))
+
+    assert state.load_session_backups("chat.html") == [session]
+
+
+def test_archive_session_backup_does_not_dedupe_non_consecutive_repeat(tmp_path, monkeypatch):
+    """Deduping only looks at the single most recent entry - the same
+    content recurring later (e.g. after round-tripping back through an
+    edit and an undo) is still a real, distinct session boundary and
+    should be archived again."""
+    _backups_config(tmp_path, monkeypatch)
+
+    state.archive_session_backup("chat.html", {"output_path": "a.txt"})
+    state.archive_session_backup("chat.html", {"output_path": "b.txt"})
+    state.archive_session_backup("chat.html", {"output_path": "a.txt"})
+
+    backups = state.load_session_backups("chat.html")
+    assert [b["output_path"] for b in backups] == ["a.txt", "b.txt", "a.txt"]
+
+
+def test_archive_session_backup_keeps_different_html_paths_independent(tmp_path, monkeypatch):
+    _backups_config(tmp_path, monkeypatch)
+
+    state.archive_session_backup("chat_a.html", {"output_path": "a.txt"})
+    state.archive_session_backup("chat_b.html", {"output_path": "b.txt"})
+
+    assert [b["output_path"] for b in state.load_session_backups("chat_a.html")] == ["a.txt"]
+    assert [b["output_path"] for b in state.load_session_backups("chat_b.html")] == ["b.txt"]
+
+
+def test_clear_session_archives_the_cleared_session(tmp_path, monkeypatch):
+    _backups_config(tmp_path, monkeypatch)
+
+    state.save_session("chat.html", {"output_path": "final.txt", "edited_texts": []})
+    state.clear_session("chat.html")
+
+    backups = state.load_session_backups("chat.html")
+    assert [b["output_path"] for b in backups] == ["final.txt"]
+
+
+def test_clear_session_is_a_noop_for_backups_when_no_session(tmp_path, monkeypatch):
+    _backups_config(tmp_path, monkeypatch)
+
+    state.clear_session("chat.html")  # should not raise, nothing to archive
+
+    assert state.load_session_backups("chat.html") == []
+
+
+def test_session_backups_survive_being_overwritten_by_a_later_session(tmp_path, monkeypatch):
+    """The core scenario this feature exists for: closing the app
+    mid-review (leaving a resumable session), then later resuming and
+    continuing to edit - the prior session's final state must not vanish
+    just because the live sessions.json entry for that chatlog moved on."""
+    _backups_config(tmp_path, monkeypatch)
+
+    # Session 1 ends (app closed mid-review, leaving a resumable session).
+    state.save_session("chat.html", {"output_path": "out.txt", "edited_texts": {"1": "session 1 final"}})
+
+    # App restarts, finds the pending session, archives it, then resumes
+    # and continues editing (mirroring App._on_start/_resume_session).
+    pending = state.load_session("chat.html")
+    state.archive_session_backup("chat.html", pending)
+    state.save_session("chat.html", {"output_path": "out.txt", "edited_texts": {"1": "session 2 final"}})
+
+    assert state.load_session("chat.html")["edited_texts"] == {"1": "session 2 final"}
+    backups = state.load_session_backups("chat.html")
+    assert [b["edited_texts"] for b in backups] == [{"1": "session 1 final"}]
+
+
+def test_session_backups_recover_from_backup_when_primary_corrupt(tmp_path, monkeypatch):
+    _backups_config(tmp_path, monkeypatch)
+    backups_file = tmp_path / "session_backups.json"
+    backup_file = backups_file.with_suffix(".bak")
+
+    state.archive_session_backup("chat.html", {"output_path": "good.txt"})
+    state.archive_session_backup("chat.html", {"output_path": "overwritten.txt"})
+    backups_file.write_text("", encoding="utf8")
+
+    assert [b["output_path"] for b in state.load_session_backups("chat.html")] == ["good.txt"]
+    assert backup_file.exists()
+
+
+def test_no_session_backup_temp_files_left_after_archiving(tmp_path, monkeypatch):
+    _backups_config(tmp_path, monkeypatch)
+
+    state.archive_session_backup("chat.html", {"output_path": "first.txt"})
+    state.archive_session_backup("chat.html", {"output_path": "second.txt"})
+
+    assert list(tmp_path.glob("session_backups_*.tmp")) == []
+
+
 def test_no_session_temp_files_left_after_save(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
     monkeypatch.setattr(config, "SESSIONS_FILE", tmp_path / "sessions.json")

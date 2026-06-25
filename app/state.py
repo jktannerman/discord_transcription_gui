@@ -208,7 +208,11 @@ def save_session(html_path: str, session: dict) -> None:
 def clear_session(html_path: str) -> None:
     """Remove the saved in-progress session for html_path only - called
     once that chatlog's run is finalized, since there's nothing left to
-    resume for it. Sessions saved for other chatlogs are left in place."""
+    resume for it. Sessions saved for other chatlogs are left in place.
+    The just-removed session is archived first (see
+    archive_session_backup) - finalizing (or declining to resume a pending
+    one) is itself the end of a session, the same as the cases handled at
+    the load_session call site in main_window.py."""
     sessions = _read_json_with_backup(config.SESSIONS_FILE)
     if not isinstance(sessions, dict):
         return
@@ -217,10 +221,58 @@ def clear_session(html_path: str) -> None:
     if key not in sessions:
         return
 
+    archive_session_backup(html_path, sessions[key])
+
     del sessions[key]
     _atomic_write_json(config.SESSIONS_FILE, sessions)
 
     logger.info("cleared saved session", extra=logging_config.extra(html_path=html_path))
+
+
+def archive_session_backup(html_path: str, session: dict) -> None:
+    """Record `session` (html_path's saved session, as it looked right
+    before it stopped being the live in-progress one) into its rotating
+    end-of-session backup history - kept separately from SESSIONS_FILE so
+    these survive being overwritten by whatever the *next* session
+    autosaves. Keeps only the config.SESSION_BACKUP_COUNT most recent
+    entries per html_path, most-recent-first.
+
+    Deliberately a no-op if `session` is identical to the most recently
+    archived entry for this html_path: load_session's caller and
+    clear_session can both end up archiving the exact same still-unedited
+    session for the same chatlog in a single call sequence (e.g. a pending
+    session that's loaded then immediately declined) - without this check
+    that would burn a backup slot on a duplicate instead of an actually
+    distinct prior session."""
+    backups = _read_json_with_backup(config.SESSION_BACKUPS_FILE)
+    if not isinstance(backups, dict):
+        backups = {}
+
+    key = str(Path(html_path))
+    history = backups.get(key, [])
+    if history and history[0] == session:
+        return
+
+    history = [session] + history
+    backups[key] = history[: config.SESSION_BACKUP_COUNT]
+    _atomic_write_json(config.SESSION_BACKUPS_FILE, backups)
+
+    logger.info(
+        "archived end-of-session backup",
+        extra=logging_config.extra(html_path=html_path, backup_count=len(backups[key])),
+    )
+
+
+def load_session_backups(html_path: str) -> list:
+    """Return html_path's end-of-session backup history, most-recent-first
+    (up to config.SESSION_BACKUP_COUNT entries) - empty list if none have
+    ever been archived for it. Backups for other chatlogs, if any, don't
+    affect this lookup either way."""
+    backups = _read_json_with_backup(config.SESSION_BACKUPS_FILE)
+    if not isinstance(backups, dict):
+        return []
+
+    return backups.get(str(Path(html_path)), [])
 
 
 def load_cache(folder_path: str) -> Optional[dict]:
