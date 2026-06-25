@@ -473,6 +473,84 @@ def test_jumping_focus_to_a_far_row_lands_it_fully_within_the_real_canvas_viewpo
     assert box_bottom <= canvas_bottom
 
 
+def test_resuming_deep_in_a_long_transcript_remeasures_rows_correctly_on_first_build(root, sample_image):
+    """Regression test for a real production bug (confirmed via
+    scroll_trace.log): jumping straight to a resumed session's deep focus
+    slot materializes that whole window of rows in the session's *very
+    first* _reconcile call - a brand-new, several-levels-deep widget tree
+    that has never been mapped to the screen before. A single
+    canvas.update_idletasks() right after building them wasn't always
+    enough to let Tk finish laying that tree out: winfo_height() still
+    read back 1 (Tk's "no real geometry yet" default) for every row in
+    that window, which _remeasure_built_rows took as ground truth and
+    wrote into self._row_heights as 2*ROW_PACK_PADY_PX (9px) - permanently,
+    since none of those rows get torn down and rebuilt again just because a
+    later reconcile runs. That corrupted self._offset_of for every row
+    after the resumed one for the rest of the session, by hundreds of px
+    per corrupted row - the user-visible symptom was Tab/Shift-Tab's
+    scroll-into-view looking broken from the moment a resumed session
+    opened. _reconcile now retries update_idletasks() (_settle_pending_
+    geometry) until every newly-built row reports real geometry before
+    trusting any of their heights."""
+    items = _long_text_items(sample_image, tall_index=30, count=80)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    saved_texts = [{} for _ in items]
+    deep_index = 60
+    saved_texts[deep_index] = {"message": items[deep_index].initial_message_text}
+
+    frame, _ = _build_frame(
+        root, items, initial_saved_texts=saved_texts, initial_focus_slot=(deep_index, "message"),
+    )
+
+    first, last = frame._materialized_range
+    assert deep_index in range(first, last + 1)
+    for idx in range(first, last + 1):
+        real_height = frame._row_frames[idx].winfo_height() + 2 * ROW_PACK_PADY_PX
+        assert frame._row_heights[idx] == real_height, (
+            f"row {idx}: recorded height {frame._row_heights[idx]} doesn't match "
+            f"its real on-screen height {real_height} - first-build geometry wasn't "
+            "settled before being trusted"
+        )
+
+
+def test_jumping_focus_past_a_capped_long_message_row_lands_target_fully_in_view(root, sample_image):
+    """Regression test: estimate_row_height's pre-build guess for a
+    "message" box has no cap, but the real box is capped at
+    TEXT_BOX_MAX_HEIGHT_FRACTION of the canvas (_fixed_text_box_height) -
+    so a long message's row is overestimated by a large, fixed amount until
+    it's actually built and remeasured. A row skipped entirely by a
+    discontinuous jump (resume's saved focus slot, clicking far down the
+    scrollbar) never gets remeasured, so that overestimate stays baked into
+    every later row's document-space offset - this puts one such long
+    message well outside the window built at startup, then jumps straight
+    past it to a target several rows further down (without ever walking
+    through the long row first, the same far jump _ensure_materialized
+    exists for) and checks the target box's real screen position against
+    the canvas's."""
+    tall_index = 20
+    items = _long_text_items(sample_image, tall_index=tall_index, count=40)
+    frame, _ = _build_frame(root, items)
+    # The long row must not have been part of the window built at startup -
+    # otherwise it would already have been remeasured, which isn't the
+    # scenario this test is about.
+    assert tall_index not in frame._row_frames
+    target_index = 35
+
+    frame._ensure_materialized(target_index)
+    frame._focus_text_box(target_index, "message")
+    root.update()
+
+    canvas = frame._canvas
+    container = frame._text_containers[(target_index, "message")]
+    canvas_top = canvas.winfo_rooty()
+    canvas_bottom = canvas_top + canvas.winfo_height()
+    box_top = container.winfo_rooty()
+    box_bottom = box_top + container.winfo_height()
+
+    assert box_top >= canvas_top
+    assert box_bottom <= canvas_bottom
+
+
 def test_keep_cursor_in_viewport_does_nothing_when_cursor_already_visible(root, sample_image):
     items = _items(sample_image, count=5)
     frame, _ = _build_frame(root, items)

@@ -181,14 +181,6 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         self._slot_positions: Dict[Tuple[int, str], int] = {
             slot: pos for pos, slot in enumerate(self._slots)
         }
-        # Per-item row height (px), seeded with cheap estimates and
-        # overwritten with the real winfo_height() once a row is built -
-        # the source of truth for the full virtual document's layout, used
-        # to compute which index range should be materialized and to set
-        # the canvas's scrollregion (see _reconcile). Only items in
-        # [_materialized_range[0], _materialized_range[1]] (inclusive)
-        # currently have widgets; None until the first _reconcile call.
-        self._row_heights: List[int] = [estimate_row_height(item) for item in items]
         self._materialized_range: Optional[Tuple[int, int]] = None
         self._row_frames: Dict[int, tk.Widget] = {}
         # All per-box bookkeeping below is keyed by (item_index, role) -
@@ -256,6 +248,27 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0, bg=theme.DARK_BG_ALT)
         canvas.pack(side="left", fill="both", expand=True)
         self._canvas = canvas
+
+        # Per-item row height (px), seeded with cheap estimates and
+        # overwritten with the real winfo_height() once a row is built -
+        # the source of truth for the full virtual document's layout, used
+        # to compute which index range should be materialized and to set
+        # the canvas's scrollregion (see _reconcile). Only items in
+        # [_materialized_range[0], _materialized_range[1]] (inclusive)
+        # currently have widgets; None until the first _reconcile call.
+        # Computed only now that self._canvas exists, so the estimate can
+        # pass _max_text_box_height_px() the same content-box height cap
+        # the real layout enforces (RowBuildingMixin._fixed_text_box_height)
+        # - the canvas hasn't been given real geometry yet at this point in
+        # __init__, so this falls back to that method's own
+        # winfo_screenheight()-based guess, same as it would for any other
+        # not-yet-laid-out call. Without this cap, a long message/OCR text's
+        # estimated row height ran far past what its real, capped box would
+        # ever be - see estimate_row_height's docstring.
+        self._row_heights: List[int] = [
+            estimate_row_height(item, max_text_box_height_px=self._max_text_box_height_px())
+            for item in items
+        ]
 
         def _on_scrollbar(*args):
             self._log_event("input_scrollbar", args=args)
@@ -517,6 +530,60 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
                 newly_built.append(idx)
         return newly_built
 
+    # Bound on _settle_pending_geometry's retry loop - cheap (an idle-queue
+    # flush each iteration) and only ever exercised on the rare reconcile
+    # that needs more than one round, so a generous cap costs nothing in
+    # the common case.
+    _SETTLE_MAX_ATTEMPTS = 10
+
+    def _settle_pending_geometry(self, newly_built: List[int]) -> None:
+        """Keep flushing Tk's idle queue until every row in `newly_built`
+        reports a real winfo_height(), instead of trusting a single
+        update_idletasks() call to have been enough.
+
+        A brand-new widget that has never been mapped to the screen
+        reports winfo_height() == 1 (Tk's "no real geometry assigned yet"
+        default) until the geometry manager has actually placed it -
+        normally exactly what update_idletasks() (called once, just before
+        this) forces. But the very first reconcile of a session can
+        materialize an entire window's worth of rows - a deeply nested
+        ttk.Frame tree, several levels deep, none of which have ever been
+        mapped before - in one shot, and pack's bottom-up size negotiation
+        for that much brand-new tree apparently doesn't always finish
+        within a single idle-queue pass: real production logs
+        (scroll_trace.log) showed every row in such a first reconcile
+        measuring winfo_height()==1 right after update_idletasks(), then
+        measuring correctly (the same rows, unchanged) on the very next
+        access a few milliseconds later - i.e. genuinely not yet settled,
+        not a one-off fluke. Left unguarded, _remeasure_built_rows took
+        that bogus ~0 height as ground truth and permanently wrote
+        2*ROW_PACK_PADY_PX (9px) into self._row_heights for every such row
+        - and since a row already in self._row_frames is never rebuilt
+        (so never remeasured) just because a later reconcile runs, that
+        corruption then threw self._offset_of off by hundreds of px for
+        every row after it for the rest of the session, with no further
+        chance to self-correct. Bounded (_SETTLE_MAX_ATTEMPTS) so a row
+        that's for some other reason never going to get real geometry
+        (shouldn't happen, but this guards against turning that case into
+        an infinite loop) doesn't hang the UI - _remeasure_built_rows's own
+        winfo_height()<=1 guard is the fallback if this bound is ever hit."""
+        canvas = self._canvas
+        for attempt in range(self._SETTLE_MAX_ATTEMPTS):
+            unsettled = [
+                idx for idx in newly_built
+                if idx in self._row_frames and self._row_frames[idx].winfo_height() <= 1
+            ]
+            if not unsettled:
+                if attempt:
+                    self._log_event("settle_pending_geometry_resolved", attempts=attempt)
+                return
+            canvas.update_idletasks()
+        self._log_event(
+            "settle_pending_geometry_gave_up",
+            attempts=self._SETTLE_MAX_ATTEMPTS,
+            still_unsettled=unsettled,
+        )
+
     def _remeasure_built_rows(self, scroll_top: float, newly_built: List[int]) -> float:
         """Overwrite self._row_heights for newly-built rows with their real
         on-screen height, and return the exact pixel delta that the canvas's
@@ -536,13 +603,35 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         leaving it out here silently drifted self._row_heights (and
         everything keyboard_nav.py derives from it, like
         _scroll_box_into_view) away from the real screen position by a
-        couple of px for every row scrolled past."""
+        couple of px for every row scrolled past.
+
+        Skips a row outright if its winfo_height() is still <=1 - Tk's
+        "never been given real geometry" default, not a legitimately tiny
+        row - rather than recording that as this row's real height. The
+        caller (_reconcile, via _settle_pending_geometry) is expected to
+        have already flushed Tk's idle queue until this stops happening,
+        so this is a defense-in-depth fallback for if that bounded retry
+        ever gives up, not the primary fix - see _settle_pending_geometry's
+        docstring for why a single update_idletasks() isn't always enough.
+        Leaving the row's previous estimate in self._row_heights in that
+        case is strictly better than overwriting it with a near-zero
+        value: the estimate, however imprecise, still degrades gracefully,
+        while 2*ROW_PACK_PADY_PX would corrupt _offset_of for every row
+        after it for the rest of the session."""
         if not newly_built:
             return 0.0
         old_heights = list(self._row_heights)
         delta = 0.0
         for idx in newly_built:
-            real = self._row_frames[idx].winfo_height() + 2 * ROW_PACK_PADY_PX
+            real_winfo_height = self._row_frames[idx].winfo_height()
+            if real_winfo_height <= 1:
+                self._log_event(
+                    "remeasure_skipped_unsettled_geometry",
+                    index=idx,
+                    estimated_height=old_heights[idx],
+                )
+                continue
+            real = real_winfo_height + 2 * ROW_PACK_PADY_PX
             old = old_heights[idx]
             if real and real != old:
                 row_offset = sum(old_heights[:idx])
@@ -591,6 +680,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         self._materialized_range = (first_idx, last_idx)
 
         canvas.update_idletasks()
+        self._settle_pending_geometry(newly_built)
         delta = self._remeasure_built_rows(scroll_top, newly_built)
 
         total_height = sum(self._row_heights)

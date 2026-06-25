@@ -86,6 +86,38 @@ debounce/Finalize-button machinery:
   calls the same cheap, header-only `fitted_image_size` read already used to
   size the real placeholder, instead of a flat constant, so there's far
   less left for `_remeasure_built_rows` to ever need to correct.
+- **The pre-build estimate also has to mirror the real layout's cap, not
+  just its content-driven size.** A content box's real height
+  (`RowBuildingMixin._fixed_text_box_height`) is capped at
+  `TEXT_BOX_MAX_HEIGHT_FRACTION` of the canvas - a long message/OCR text
+  gets an internal scrollbar past that point rather than growing the row
+  further - but `estimate_row_height` had no matching cap, so a long
+  row's *estimated* height could run far past what its real, capped box
+  would ever be. That overestimate is harmless for a row that gets built
+  and remeasured soon after (`_remeasure_built_rows` corrects it away like
+  any other estimate/reality mismatch) - the actual symptom was a focused
+  box landing partially or fully off the real canvas viewport after a
+  discontinuous jump straight to a deep slot (a resumed session's saved
+  focus, or a scrollbar drag far down the document), while continuously
+  walking there via Tab/Page Down from the top always looked fine. The
+  difference: walking through remeasures every row along the way,
+  including any long ones, before `_offset_of` ever needs their height
+  again - a jump skips that remeasurement entirely for whatever it jumps
+  over, so any long row in that skipped range keeps contributing its
+  uncapped overestimate to every later row's document-space offset
+  indefinitely (until something eventually builds it). `estimate_row_height`
+  now takes an optional `max_text_box_height_px` and caps each content
+  role's right-column contribution the same way `_fixed_text_box_height`
+  does; `ReviewFrame.__init__` passes `self._max_text_box_height_px()` -
+  which is also why the row-heights list is now built *after*
+  `self._canvas` exists, not before, so that call's own
+  not-yet-laid-out/`winfo_screenheight()` fallback applies the same way it
+  would for any other premature call to it.
+  `test_jumping_focus_past_a_capped_long_message_row_lands_target_fully_in_view`
+  (`app_tests/test_review_view.py`) is the regression test - it puts one
+  long, capped-height row outside the window built at startup and jumps
+  straight past it to a target further down, the same way a resumed
+  session's saved focus slot would.
 
   The fixed-height text box policy (see "Per-box text box sizing" below)
   removed most of what was left to estimate, but also moved the goalposts:

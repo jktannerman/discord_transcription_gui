@@ -6,7 +6,7 @@ from scratch, rather than incremental step-forward/step-backward) matters.
 
 import bisect
 import textwrap
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from ..pipeline import ReviewItem
 from .image_loading import THUMBNAIL_SIZE, fitted_image_size
@@ -60,7 +60,7 @@ def _estimate_message_text_height(item: ReviewItem) -> int:
     return line_count * _TEXT_ROW_LINE_HEIGHT + _TEXT_ROW_PADDING
 
 
-def estimate_row_height(item: ReviewItem) -> int:
+def estimate_row_height(item: ReviewItem, max_text_box_height_px: Optional[int] = None) -> int:
     """Cheap, approximate height (px) for an item's row before it's ever
     been built as real widgets - good enough for scrollbar proportion and
     decoding which rows are near the viewport, not for actual layout. Once
@@ -84,7 +84,22 @@ def estimate_row_height(item: ReviewItem) -> int:
     SPACER_BOX_HEIGHT_PX), unlike a content role whose right-column box is
     always its left counterpart plus TEXT_BOX_MARGIN_PX - the max() is kept
     anyway so this stays correct regardless of how those two compare for
-    any given item."""
+    any given item.
+
+    `max_text_box_height_px` mirrors RowBuildingMixin._fixed_text_box_height's
+    own cap on a content box's right-column height (TEXT_BOX_MAX_HEIGHT_
+    FRACTION of the canvas) - omitted (None) means "don't cap," for callers
+    that don't have a real viewport height to cap against yet. A long
+    message/OCR text's real box stops growing past that cap (it gets an
+    internal scrollbar instead), but its *left*-column counterpart (the
+    label/image) doesn't shrink to match - so capping has to apply to the
+    right column's running total alone, not to whichever of left/right
+    happens to be larger overall. Skipping this cap left long-message rows
+    overestimated by however far past the cap their uncapped guess ran -
+    not a one-off glitch, since a never-built row (skipped by a far
+    Tab/resume-focus jump or a scrollbar drag) keeps that overestimate
+    baked into every later row's document-space offset until it's actually
+    built and remeasured."""
     roles = item.slot_roles
     left = 0
     right = 0
@@ -93,13 +108,19 @@ def estimate_row_height(item: ReviewItem) -> int:
 
         if role == "message":
             label_h = _estimate_message_text_height(item)
+            box_h = label_h + TEXT_BOX_MARGIN_PX
+            if max_text_box_height_px is not None:
+                box_h = min(box_h, max_text_box_height_px)
             left += label_h + gap
-            right += label_h + TEXT_BOX_MARGIN_PX + gap
+            right += box_h + gap
         elif role.startswith("ocr"):
             image_index = int(role[len("ocr"):])
             _, image_h = fitted_image_size(item.image_paths[image_index])
+            box_h = image_h + TEXT_BOX_MARGIN_PX
+            if max_text_box_height_px is not None:
+                box_h = min(box_h, max_text_box_height_px)
             left += image_h + gap
-            right += image_h + TEXT_BOX_MARGIN_PX + gap
+            right += box_h + gap
         else:
             right += SPACER_BOX_HEIGHT_PX + gap
 

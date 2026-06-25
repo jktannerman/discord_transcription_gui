@@ -228,6 +228,20 @@ class KeyboardNavMixin:
             canvas.yview_moveto(max(box_bottom - viewport_height, 0) / total_height)
             action = "scroll_down"
 
+        # Cross-check the document-space model (box_top/view_top, built from
+        # self._row_heights) against real screen pixels, which Tk's pack
+        # manager guarantees are correct regardless of what our model
+        # thinks: container.winfo_rooty() - canvas.winfo_rooty() is the
+        # box's real on-screen offset from the canvas's own (fixed) top
+        # edge, and box_top - view_top is what the model claims that same
+        # offset is. These two *must* agree if self._row_heights accurately
+        # reflects the real, already-built layout above this row - any
+        # nonzero model_real_discrepancy_px means self._offset_of(index) (or
+        # something it sums over) has drifted from the rows' true on-screen
+        # heights, which is exactly the failure mode this logging exists to
+        # catch (see ARCHITECTURE.md's "Row geometry" section).
+        real_offset_px = container.winfo_rooty() - canvas.winfo_rooty()
+        model_offset_px = box_top - view_top
         self._log_event(
             "scroll_box_into_view",
             key=key,
@@ -237,6 +251,11 @@ class KeyboardNavMixin:
             view_bottom=round(view_bottom, 1),
             total_height=total_height,
             action=action,
+            recorded_row_height=self._row_heights[index] if index < len(self._row_heights) else None,
+            real_row_winfo_height=row.winfo_height(),
+            real_offset_px=real_offset_px,
+            model_offset_px=round(model_offset_px, 1),
+            model_real_discrepancy_px=round(model_offset_px - real_offset_px, 1),
         )
         self._update_finalize_button_visibility()
 
