@@ -93,6 +93,21 @@ def apply_dark_theme(root: tk.Tk) -> ttk.Style:
         background=[("active", DARK_BG_ALT)],
         foreground=[("active", DARK_FG)],
     )
+    # Used by each review-screen OCR box's own checkbox (row_building.py) -
+    # a separate named style rather than reusing plain "TCheckbutton" above,
+    # since this one needs DARK_TEXT_BG (the text box's own background, so
+    # the checkbox's column blends into it) instead of the general UI's
+    # DARK_BG_ALT.
+    style.configure("OcrCheckbox.TCheckbutton", background=DARK_TEXT_BG, foreground=DARK_FG)
+    style.map(
+        "OcrCheckbox.TCheckbutton",
+        background=[("active", DARK_TEXT_BG)],
+        foreground=[("active", DARK_FG)],
+    )
+    # The checkbox's own column frame (row_building.py) - plain "TFrame" is
+    # DARK_BG_ALT, which would leave a visible seam around the checkbox
+    # above wherever its own background doesn't fully cover the frame.
+    style.configure("OcrCheckboxColumn.TFrame", background=DARK_TEXT_BG)
     style.configure(
         "TCombobox",
         fieldbackground=DARK_BG_WIDGET,

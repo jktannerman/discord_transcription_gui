@@ -367,6 +367,104 @@ debounce/Finalize-button machinery:
   Computed the same way `_keep_cursor_in_viewport`'s box bounds already
   were: `self._offset_of(index)` (the row's document-space offset) plus a
   `winfo_rooty()` delta for the box's offset *within* that row.
+- **Per-OCR-box edited/checkbox state.** Every "ocr" box (one per attached
+  image - never a "message" box, which was never OCR'd and so has no
+  "original" to revert to) has a checkbox tracking "edited vs. not" and
+  letting the user toggle between the original (regex-corrected) OCR
+  transcription and their own edit without losing either. Two
+  `ReviewFrame`-level dicts hold this, keyed by `(item_index, role)` like
+  every other per-box dict here (`_saved_texts`, `_saved_cursor`, ...):
+  `self._checkbox_checked` (current checked state) and
+  `self._user_edited_texts` (the last user-edited version, kept distinct
+  from whatever the box currently *displays* - the OCR default, while
+  unchecked). Neither is ever cleared by `_destroy_row`, so both survive a
+  row being torn down and rebuilt with no teardown/rebuild-specific
+  plumbing of their own - they're written to only from live editing code
+  (typing, the checkbox's own toggle, undo/redo), never read back from a
+  about-to-be-destroyed widget the way `_saved_texts` is.
+
+  Both dicts are seeded **eagerly in `ReviewFrame.__init__`**, for every
+  `(idx, "ocr{i}")` slot across all items, not lazily the first time a row
+  is built - `collect_edited_texts`/autosave loop over every item
+  regardless of whether its row has ever been materialized this session
+  (e.g. right after a resume far from that row), so the checked-state has
+  to be knowable without requiring a build. The seeding rule - `checked =
+  saved is not None and saved != default`, where `saved` comes from
+  `self._saved_texts` (itself already seeded from a resumed session's
+  `edited_texts` field) - also implements the project owner's chosen resume
+  behavior for free: a resumed box with an edited version differing from
+  its default is always shown checked, regardless of whether it happened to
+  be checked or unchecked at the moment the session was last saved. This
+  works because `ReviewFrame._get_box_text` (what `collect_edited_texts`/
+  autosave/the session file actually read) reports `None` - not the box's
+  live, OCR-default-matching content - for an `ocr*` role while unchecked,
+  so a saved, non-default value can only ever mean "there's a real edit to
+  surface." This doesn't change what Finalize ever writes (`None` already
+  falls back to the same default text in `review_item.lines_for_item`),
+  only what gets *persisted/reported* for an unchecked box.
+
+  `_populate_text_box`'s existing baseline+replay logic
+  (`row_building.py`) needed no changes to support any of this: a checkbox
+  toggle's content swap (`RowBuildingMixin._on_ocr_checkbox_toggle`) is
+  just another recorded delete/insert through the same undo-recording proxy
+  every other edit goes through, so a row torn down mid-toggle and rebuilt
+  later replays back to the right content automatically, the same way a
+  resumed edit already did (see "A box's `UndoLog` must record what it
+  actually started from" above).
+
+  Two things needed new code, both reusing an existing mechanism rather
+  than inventing a new one:
+  - **Telling a real edit apart from a programmatic one.** `<<Modified>>`
+    fires for the checkbox's own swap exactly like it does for typing (see
+    "`<<Modified>>` fires on a box's initial population" above) - left
+    unguarded, unchecking a box would immediately re-check itself via the
+    same "any change checks the box" reaction real typing needs.
+    `_on_text_modified`'s existing `had_focus` gate (already there to skip
+    a build-time insert, which also fires this event) turns out to cover
+    this case too for free: clicking the checkbox normally moves focus to
+    it, not the text widget, so the swap's deferred `<<Modified>>` arrives
+    with `had_focus` false. `_on_ocr_checkbox_toggle` additionally adds its
+    key to `self._suppress_ocr_auto_check` around the swap as defense in
+    depth, in case focus ever doesn't move the way expected - and
+    `keyboard_nav.py`'s `_undo_text`/`_redo_text` rely on that same set for
+    real, since Ctrl+Z *does* run with the box focused: undo/redo always
+    re-derives checked/unchecked by comparing the resulting text to the OCR
+    default (`_resync_ocr_checkbox_after_undo`) rather than the
+    unconditional "any change checks the box" rule ordinary typing uses, so
+    undoing a toggle that lands exactly back on the OCR default correctly
+    un-checks the box again instead of leaving it stuck checked.
+  - **Making a toggle's delete+insert undo as one step.** A `tk.Text`
+    widget's default `autoseparators` behavior inserts a separator on every
+    insert↔delete type transition - left alone, a toggle's `delete("1.0",
+    "end")` followed by `insert("1.0", ...)` becomes *two* undo groups
+    instead of one, so a single Ctrl+Z only reversed the insert half,
+    landing on the empty post-delete/pre-reinsert text rather than back on
+    whatever the toggle swapped away from. Worse, naively disabling
+    `autoseparators` only around the delete+insert pair (with no boundary
+    *before* it either) merged the toggle into whatever undo group preceded
+    it, so a single Ctrl+Z undid the toggle *and* the user's last real edit
+    together. `_on_ocr_checkbox_toggle` calls `edit_separator()` once
+    *before* turning `autoseparators` off (sealing off whatever came
+    before), then again right after re-inserting (sealing off whatever
+    comes after) before turning `autoseparators` back on - bounding the
+    delete+insert pair as exactly one atomic undo/redo step.
+
+  Checkbox widgets themselves are plain `tk.Checkbutton`/`tk.BooleanVar`
+  (not `ttk`, so each can be colored to blend into its own text box's
+  background rather than sharing one global `ttk.Style`), `takefocus=0` so
+  Tab/Shift-Tab - which already only navigate `self._slots`, never anything
+  Tk's own default focus traversal would otherwise reach - skip over them
+  with no further change needed. The checkbox sits inside an otherwise-
+  invisible `tk.Frame` column packed `side="right"` into the box's
+  `text_container`, built (and packed) before `text_widget` so it's earlier
+  in the container's pack order and claims a slice off the right edge
+  before `text_widget`'s `expand=True` claims everything still left - this
+  is the same pack-order trick `_set_text_scrollbar`'s own `before=`
+  argument already relied on for the scrollbar (see that method's
+  docstring), just with one more widget in the chain: showing the
+  scrollbar now has to insert it before the checkbox column, not just
+  before `text_widget`, to land at the true right edge with the checkbox
+  column directly to its left.
 
 ## Row geometry: the document-space spacing model
 

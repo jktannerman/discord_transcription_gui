@@ -167,6 +167,23 @@ What's in scope for v1:
    in the same direction falls through to scrolling the whole review
    window, same as if the box weren't there.
 
+   Each "ocr" box additionally has a checkbox in an otherwise-invisible
+   column at its own top-right corner - inside the box, compressing its text
+   leftward, and to the left of that box's own scrollbar if/when one
+   appears (a "message" box has no such checkbox, since it was never OCR'd
+   and so has no "original" to track). Unchecked means the box's current
+   text still matches the original (regex-corrected) OCR transcription;
+   typing anything into the box checks it automatically. Unchecking a
+   checked box snaps its text back to that original OCR transcription
+   without discarding whatever you'd typed - re-checking it brings your
+   edit straight back. Both versions, and the checkbox's own state, survive
+   a row being scrolled out of the materialized window and back in, the
+   same as an ordinary edit does; resuming a saved session always shows
+   your edited version (checked) for any box that has one, regardless of
+   whether it happened to be checked or unchecked at the moment you closed
+   the app. Tab/Shift-Tab never land on the checkbox itself - only on the
+   text boxes, same as before this existed.
+
    Between every text/image piece - text and its first image, one image
    and the next, and the gap before the next message - there's also a
    **spacer box**: a one-line-tall, editable box holding nothing but
@@ -341,13 +358,23 @@ also runs Tcl/Tk's one-time subsystem init. Run
 `py -3.13 -m pytest gui_transcription\app_tests -v -m gui` to include just
 those, or add `-m ""` to run the whole suite including them.
 
-159 tests (193 including the `gui`-marked ones, which now also cover a
+168 tests (214 including the `gui`-marked ones, which now also cover a
 box's undo/redo history surviving its row being paged out and back in -
 `text_undo.py` - a focused box always scrolling fully into view, not
-just its row, and a far-away Tab/resume target landing fully within the
+just its row, a far-away Tab/resume target landing fully within the
 *real* canvas viewport rather than just the document-space model's own
 idea of where it is, which a since-fixed row-height accounting bug could
-get wrong - see ARCHITECTURE.md's "Row geometry" section) cover the
+get wrong - see ARCHITECTURE.md's "Row geometry" section - and each
+OCR box's checkbox: starting unchecked/checked correctly for an untouched
+vs. a resumed-and-differing-from-default box, typing checking it
+automatically, unchecking/rechecking round-tripping both the OCR default
+and the edited version without either ever discarding the other,
+`collect_edited_texts` (what autosave/the session file persist) reporting
+`None` for an unchecked box despite its edited version still being cached
+for restoration, both the checkbox state and both text versions surviving
+a row being paged out and back in, and Ctrl+Z re-deriving (and
+re-displaying) the right checked state after undoing a toggle - see
+ARCHITECTURE.md's "Per-OCR-box edited/checkbox state" section) cover the
 cleanup regexes, the OCR-misread corrections
 pass (`ocr_corrections.py`'s file parsing/validation and regex application,
 plus its wiring into `build_review_items` - applied to OCR text only,
@@ -428,6 +455,8 @@ correctly).
   worth of review edits (5 seconds, `AUTOSAVE_INTERVAL_MS`) if it happens
   between two autosaves, since the .bak only protects the *previous*
   successful write, not the in-memory edits since then (low priority).
-- There's no UI for resetting a message's editable copy back to its
-  original OCR/message text once edited (deferred, not an immediate
-  priority, per the original feature request).
+- Each "ocr" box now has a checkbox for resetting it back to its original
+  OCR transcription without losing the edit (see the "Review screen"
+  section above) - but a "message" box (a copy of the message's own
+  original text, never OCR'd) still has no equivalent reset-to-original UI
+  (deferred, not an immediate priority, per the original feature request).

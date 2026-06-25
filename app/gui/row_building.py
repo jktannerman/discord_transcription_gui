@@ -272,13 +272,20 @@ class RowBuildingMixin:
         # land at the true right edge outside it.
         checkbox_column: Optional[tk.Widget] = None
         if role.startswith("ocr"):
-            checkbox_column = tk.Frame(text_container, bg=theme.DARK_TEXT_BG)
+            # ttk.Checkbutton (styled via "OcrCheckbox.TCheckbutton" -
+            # theme.py), not a raw tk.Checkbutton - this app's clam ttk
+            # theme draws a checked indicator as a cross, matching the
+            # setup screen's checkboxes, where a raw tk widget would fall
+            # back to Tk's native tick-mark rendering instead. The column
+            # frame uses its own matching style ("OcrCheckboxColumn.TFrame",
+            # DARK_TEXT_BG) rather than plain "TFrame" (DARK_BG_ALT), so
+            # there's no visible seam around the checkbox.
+            checkbox_column = ttk.Frame(text_container, style="OcrCheckboxColumn.TFrame")
             checkbox_column.pack(side="right", fill="y")
             checked_var = tk.BooleanVar(value=self._checkbox_checked.get(key, False))
-            checkbox = tk.Checkbutton(
+            checkbox = ttk.Checkbutton(
                 checkbox_column, variable=checked_var, takefocus=0,
-                bg=theme.DARK_TEXT_BG, activebackground=theme.DARK_TEXT_BG,
-                selectcolor=theme.DARK_ACCENT, highlightthickness=0, bd=0,
+                style="OcrCheckbox.TCheckbutton",
                 command=lambda k=key: self._on_ocr_checkbox_toggle(k),
             )
             checkbox.pack(side="top")
