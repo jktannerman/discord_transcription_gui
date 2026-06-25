@@ -537,51 +537,74 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
     _SETTLE_MAX_ATTEMPTS = 10
 
     def _settle_pending_geometry(self, newly_built: List[int]) -> None:
-        """Keep flushing Tk's idle queue until every row in `newly_built`
-        reports a real winfo_height(), instead of trusting a single
-        update_idletasks() call to have been enough.
+        """Get every row in `newly_built` a real winfo_height(), instead of
+        trusting a single update_idletasks() call (just before this) to
+        have been enough.
 
         A brand-new widget that has never been mapped to the screen
         reports winfo_height() == 1 (Tk's "no real geometry assigned yet"
-        default) until the geometry manager has actually placed it -
-        normally exactly what update_idletasks() (called once, just before
-        this) forces. But the very first reconcile of a session can
-        materialize an entire window's worth of rows - a deeply nested
-        ttk.Frame tree, several levels deep, none of which have ever been
-        mapped before - in one shot, and pack's bottom-up size negotiation
-        for that much brand-new tree apparently doesn't always finish
-        within a single idle-queue pass: real production logs
-        (scroll_trace.log) showed every row in such a first reconcile
-        measuring winfo_height()==1 right after update_idletasks(), then
-        measuring correctly (the same rows, unchanged) on the very next
-        access a few milliseconds later - i.e. genuinely not yet settled,
-        not a one-off fluke. Left unguarded, _remeasure_built_rows took
-        that bogus ~0 height as ground truth and permanently wrote
-        2*ROW_PACK_PADY_PX (9px) into self._row_heights for every such row
-        - and since a row already in self._row_frames is never rebuilt
-        (so never remeasured) just because a later reconcile runs, that
-        corruption then threw self._offset_of off by hundreds of px for
-        every row after it for the rest of the session, with no further
-        chance to self-correct. Bounded (_SETTLE_MAX_ATTEMPTS) so a row
-        that's for some other reason never going to get real geometry
-        (shouldn't happen, but this guards against turning that case into
-        an infinite loop) doesn't hang the UI - _remeasure_built_rows's own
-        winfo_height()<=1 guard is the fallback if this bound is ever hit."""
+        default) until the window system has actually mapped it - and
+        confirmed experimentally (a standalone repro reproducing the real
+        production scroll_trace.log symptom below), update_idletasks()
+        alone *never* resolves that, no matter how many times it's called:
+        idle-queue processing covers Tcl-level callbacks (including pack's
+        own size negotiation), but a widget's first Map is an actual
+        window-system event, which only update() (or the normal mainloop)
+        pumps. The very first reconcile of a session can materialize an
+        entire window's worth of rows - a deeply nested ttk.Frame tree,
+        several levels deep, none of which have ever been mapped before -
+        in one shot, which is exactly when this matters; every later
+        reconcile measures correctly first try, because by then the canvas
+        has already been mapped at least once. Left unguarded,
+        _remeasure_built_rows took that bogus ~0 height as ground truth and
+        permanently wrote 2*ROW_PACK_PADY_PX (9px) into self._row_heights
+        for every such row - and since a row already in self._row_frames is
+        never rebuilt (so never remeasured) just because a later reconcile
+        runs, that corruption then threw self._offset_of off by hundreds of
+        px for every row after it for the rest of the session, with no
+        further chance to self-correct.
+
+        Tries cheap update_idletasks() first (covers the ordinary case of a
+        pack layout still settling, with no event-processing side effects),
+        only escalating to update() - which processes *all* pending events,
+        not just idle callbacks - if that wasn't enough. update() can call
+        back into _reconcile itself (e.g. an already-scheduled debounced
+        reconcile firing) before returning here; that's expected and safe,
+        not reentrancy to guard against - see _reconcile's own docstring.
+        Both stages bounded by _SETTLE_MAX_ATTEMPTS so a row that's for some
+        other reason never going to get real geometry (shouldn't happen)
+        can't hang the UI - _remeasure_built_rows's own winfo_height()<=1
+        guard is the last-resort fallback if even update() doesn't settle
+        it."""
         canvas = self._canvas
-        for attempt in range(self._SETTLE_MAX_ATTEMPTS):
-            unsettled = [
+
+        def unsettled() -> List[int]:
+            return [
                 idx for idx in newly_built
                 if idx in self._row_frames and self._row_frames[idx].winfo_height() <= 1
             ]
-            if not unsettled:
+
+        for attempt in range(self._SETTLE_MAX_ATTEMPTS):
+            remaining = unsettled()
+            if not remaining:
                 if attempt:
                     self._log_event("settle_pending_geometry_resolved", attempts=attempt)
                 return
             canvas.update_idletasks()
+
+        for attempt in range(self._SETTLE_MAX_ATTEMPTS):
+            remaining = unsettled()
+            if not remaining:
+                self._log_event(
+                    "settle_pending_geometry_resolved_via_full_update", attempts=attempt
+                )
+                return
+            canvas.update()
+
         self._log_event(
             "settle_pending_geometry_gave_up",
-            attempts=self._SETTLE_MAX_ATTEMPTS,
-            still_unsettled=unsettled,
+            attempts=2 * self._SETTLE_MAX_ATTEMPTS,
+            still_unsettled=remaining,
         )
 
     def _remeasure_built_rows(self, scroll_top: float, newly_built: List[int]) -> float:
@@ -663,7 +686,28 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         step-backward design suffered from - there's no separate "should I
         page forward" vs. "should I page backward" check that can disagree
         about the resting state, because there's only one range
-        computation, not two opposing ones racing each other."""
+        computation, not two opposing ones racing each other.
+
+        Can end up reentrant with itself: _settle_pending_geometry can fall
+        back to canvas.update() on the very first reconcile of a session,
+        which - unlike update_idletasks() - drains *all* pending events,
+        not just idle callbacks, including an already-scheduled debounced
+        reconcile (from the canvas's very first <Configure>), which calls
+        right back into this method before this outer call returns. That's
+        fine, not a bug to guard against: a nested call computes the same
+        first_idx/last_idx (scroll hasn't moved), so _sync_materialized_rows
+        sees full overlap with the range this outer call already
+        materialized and does no further building/destroying - in practice
+        that nested call's own re-issued canvas.configure(scrollregion=...)/
+        canvas.coords(...) is what actually finishes flushing the Map this
+        outer call's canvas.update() was waiting on, confirmed by tracing
+        actual call depth against a real production repro. An earlier
+        version of this method added a reentrancy guard that made a nested
+        call here a no-op, on the theory that it could rebuild/tear down
+        rows out from under the outer call - that theory didn't hold up:
+        guarding it back out reproduced the exact bug _settle_pending_
+        geometry exists to fix, because the guard was blocking the one
+        thing that actually resolved it."""
         canvas = self._canvas
         viewport_height = canvas.winfo_height()
         if viewport_height <= 1:

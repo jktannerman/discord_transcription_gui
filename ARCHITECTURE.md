@@ -118,6 +118,67 @@ debounce/Finalize-button machinery:
   long, capped-height row outside the window built at startup and jumps
   straight past it to a target further down, the same way a resumed
   session's saved focus slot would.
+- **A row's first-ever build can measure as winfo_height()==1 even right
+  after `canvas.update_idletasks()`.** This was the actual cause behind a
+  real, reproduced bug: resuming a session whose saved focus slot is deep
+  in the transcript jumps straight there (`_ensure_materialized`), which
+  materializes that whole window of rows in the session's very *first*
+  `_reconcile` call - a deeply nested `ttk.Frame` tree, several levels
+  deep, none of which have ever been mapped to the screen before.
+  `update_idletasks()` only drains Tcl's idle queue (which is what pack's
+  own size negotiation runs on), not the window-system `Map` event a
+  widget needs before `winfo_height()` reports anything real - and that
+  event apparently doesn't always arrive within a single idle-queue pass
+  for that much brand-new tree at once. `_remeasure_built_rows` used to
+  take `winfo_height()`'s bogus `1` at face value, permanently writing
+  `2*ROW_PACK_PADY_PX` (9px) into `self._row_heights` for every row in that
+  first window - and since a row already in `self._row_frames` is never
+  rebuilt (so never remeasured) just because a later `_reconcile` runs,
+  that 9px-per-row corruption then threw `self._offset_of` off by hundreds
+  of px for every row after it, for the rest of the session, with no
+  further chance to self-correct - the user-visible symptom was Tab/
+  Shift-Tab's scroll-into-view looking completely broken from the moment a
+  deep resume opened, confirmed against real `scroll_trace.log` output
+  (every row in that first reconcile's `remeasure_mismatch` events reading
+  `real_height: 9`, every later reconcile reading correctly). Every
+  *later* reconcile measures correctly on the first try, since by then the
+  canvas has already been mapped at least once - this is specifically a
+  first-reconcile problem.
+
+  `_reconcile` now calls `_settle_pending_geometry` (`review_view.py`)
+  right after `update_idletasks()` and before trusting any measurement:
+  it retries `update_idletasks()` a bounded number of times first (cheap,
+  no event-processing side effects, covers the ordinary "pack is still
+  settling" case), then falls back to a bounded number of full `update()`
+  calls if that wasn't enough. `update()` - unlike `update_idletasks()` -
+  drains *all* pending events, not just idle callbacks, which is what
+  actually unblocks the stuck `Map`; confirmed by a standalone repro that
+  `update_idletasks()` alone never resolves it, no matter how many times
+  it's retried, while a single `update()` does. `update()` can call back
+  into `_reconcile` itself before returning (e.g. an already-scheduled
+  debounced reconcile from the canvas's first `<Configure>` event) - this
+  is expected and *not* guarded against: an earlier version of this fix
+  added a reentrancy flag that made such a nested call a no-op, on the
+  theory that it could rebuild/tear down rows out from under the in-
+  progress outer call. That theory didn't survive contact with the actual
+  repro - guarding the reentrancy back out reproduced the exact bug this
+  fix exists to remove, because the nested call's own geometry-touching
+  work (re-issuing `canvas.configure(scrollregion=...)`/`canvas.coords`)
+  turned out to be what actually finishes flushing the stuck `Map`, not
+  incidental to it. `_reconcile`/`_sync_materialized_rows` are already
+  written to be idempotent and safe to re-enter (see the module
+  docstring), so trusting that existing guarantee - rather than adding a
+  new one - is what makes this safe. `_remeasure_built_rows` itself also
+  gained a direct `winfo_height()<=1` guard as a last-resort fallback
+  (skip recording that row's height at all, leaving its previous estimate
+  in place, rather than recording the bogus near-zero value) for if
+  `_settle_pending_geometry`'s bound is ever actually hit.
+  `test_resuming_deep_in_a_long_transcript_remeasures_rows_correctly_on_first_build`
+  (`app_tests/test_review_view.py`) is the regression test - it resumes
+  with a saved focus slot deep enough into a long transcript that jumping
+  there is that session's very first reconcile, then checks every
+  materialized row's recorded height against its real, current
+  `winfo_height()`.
 
   The fixed-height text box policy (see "Per-box text box sizing" below)
   removed most of what was left to estimate, but also moved the goalposts:
