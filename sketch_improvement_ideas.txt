@@ -180,7 +180,7 @@ The format of the file should probably have the regex to find on one line, the r
 Upon tabbing/shift-tabbing into a text input box, please ensure that the entire box is cleanly onscreen. A previous attempted fix failed to resolve this issue.
 
 
-
+- done
 There seems to be an issue where certain user-edited transcriptions have not been properly saved, or the original OCR transcriptions are displayed instead after ending and resuming a session. This is a high-priority bug! Unfortunately, it is not clear when this started happening, and current logging may be insufficient for this task. Specifically, this behaviour was first noticed in the transcription of `file:///C:/Users/jktan/discord_chatlogs/parahumans/kq/kq_wm_0001_p1.html`.
 
 Some initial courses of action:
@@ -191,10 +191,18 @@ Some initial courses of action:
 - Improve logging of this aspect of the program in general.
 
 
+This is so incredibly egregious an oversight that it is worth thinking carefully about how to prevent similar problems in future. Have all row-rebuild-related functions been patched? Are there any alternative mechanisms that work similarly in the code at current? How can data loss be better mitigated? Should the documentation be amended? What was the mindset that led to this being overlooked in the first place?
+
 Add/improve tests that will help prevent problems like this in future.
 
 
+Off of the top of my head, there are many different ways that rows can be torn down and rebuilt (normal scrolling, Page Up/Down, clicking on the global scrollbar directly, Tab/Shift-Tab (which may be held down and therefore very rapid)). Do the current tests adequately cover all of these?
+
+
+
+- done
 Upon tabbing/shift-tabbing into a text input box, please ensure that the entire box is cleanly onscreen. Previous attempted fixes have failed to resolve this issue, but the remaining behaviour seems to be centered around resuming a session where the focus is on a text input box which is a significant way down the page. It may be due to a disagreement in how positions are calculated; the canonical specification is given in `./gui_transcription/ARCHITECTURE.md`. Jumping to the top of the page and then navigating continuously down from there fixes the issue each session, but this is inconvenient, and jumping to a new location breaks things again.
+
 
 
 checkbox that can be checked to restore original state; automatically unchecks when user has made edits; can be rechecked to restore edited mode; only overwritten when user makes edits to unchecked
@@ -204,12 +212,23 @@ To each text input box that corresponds to a chatlog image, please add a checkbo
 - The checkbox should be at the top of an invisible column placed at the right edge of the text input box, so that it is in the top right corner of the box. However, it should be to the left of the scrollbar (if there is a scrollbar). The column should be just wide enough to fit the checkbox.
 - The checkbox should be unchecked if the current contents of the text input box match the (regex-modified) original OCR transcription, checked otherwise.
 - Upon the user making any changes, the checkbox should become checked automatically.
-- Upon the user unchecking the checkbox, the contents of the text input box should return to the (regex-modified) original OCR text. This must not overwrite the user-edited transcription in the save.
+- Upon the user unchecking the checkbox, the contents of the text input box should return to the (regex-modified) original OCR text. This *must not* overwrite the user-edited transcription in the save.
 - Upon the user rechecking the checkbox, the contents should return to the last version of the user-edited transcription.
 - The save of the user-edited transcription should be totally overwritten from fresh if and only if the user begins to edit the transcription when the checkbox is unchecked and the .
 - Tab/Shift-Tab should not interact with the checkbox. 
 
-Ask any other questions about desired behaviour now, if needed.
+Ask any other questions about desired behaviour now, if needed. Before beginning work, read `./gui_transcription/ARCHITECTURE.md` and make a plan.
+
+
+Please improve the backups of the user-edited transcriptions. Currently, there is only one backup, which is edited more or less immediately. I would like backups of the data at the end of the last N sessions before the current saved state, where N should be 3 for now.
+
+
+Please improve behavior or/and test coverage around Tab/Shift-Tab. To be specific, these buttons can be held down, which can lead to very fast changes in position.
+
+
+Please find all spacing-related edits and confirm whether or 
+
+
 
 make it possible to open a given image in browser?
 
@@ -295,21 +314,27 @@ leam -> learn - 1
 priorties -> priorities - 1
 
 
-Are the logs as useful as they could be? 
 
-Are there any major gaps in test coverage or logging coverage?
+
+Are there any problematic gaps in test coverage or logging coverage? 
+
+Read a small sample of the logs. Is the format as useful as it could be? Could it be made more readable in some way, or split up, or documented better?
 
 Are there any aspects that are noticeably missing, comparing this project to a professional one?
 
 
+
+(make sure they read ARCHITECTURE.md first)
 This project has now seen several updates and revisions. Please consider its current overall structure: is it still natural? Are there any obvious problems or potential improvements to be made?
 
 
 
 Now conduct a more low-level code review. Are there any overcomplicated parts of the code which are contradictory in intent or likely to lead to problems in the future? Is there any duplicated logic?
 
-*Simultaneously*, assess the comments and documentation. It is possible that they are somewhat too verbose. In particular, there is something of a pattern where they will reference previous bugfixes or the original version when it is not necessary to do so; this causes bloat. However, you should judge case-by-case whether a given comment or section of documentation is likely to help prevent future errors. 
+*Simultaneously*, assess the comments and documentation. It is possible that they are somewhat too verbose. In particular, there is something of a pattern where they will reference previous bugfixes or the original version when it is not necessary to do so; this causes bloat. However, you should judge case-by-case whether a given comment or section of documentation is likely to help prevent future errors, weighted by how severe errors there would be. Also, as a matter of course, flag any discrepancies between the documentation and the code.
 
-Please make notes on what could be changed in some scratchpad file as you go.
+Please make notes on what could be changed in some scratchpad file as you go, rather than making too many edits and getting bogged down.
+
+
 
 

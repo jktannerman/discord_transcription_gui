@@ -67,6 +67,20 @@ def estimate_row_height(item: ReviewItem, max_text_box_height_px: Optional[int] 
     a row is materialized, ReviewFrame replaces this estimate with the
     row's real winfo_height().
 
+    This hand-mirrors row_building.RowBuildingMixin._build_row's per-role
+    sizing (same gap placement, same "content height + margin, capped at
+    max_text_box_height_px" rule) rather than calling into it, since this
+    module has to stay Tk-free to be unit-testable - so the two can't share
+    code, only the ordering (item.slot_roles). If you change how a role's
+    height/gap is computed in one of these, change it in the other too:
+    drift between them is exactly what previously surfaced as a scroll-
+    position jump once ReviewFrame._remeasure_built_rows corrected the
+    estimate away after the row was actually built (see ARCHITECTURE.md).
+
+    Walks item.slot_roles - the same ordering _build_row uses - estimating
+    both of the row's columns (the immutable left column: label and/or
+    images; the editable right column: one box per slot, content or
+
     Walks item.slot_roles - the same ordering _build_row uses - estimating
     both of the row's columns (the immutable left column: label and/or
     images; the editable right column: one box per slot, content or

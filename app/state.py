@@ -24,14 +24,13 @@ def _ensure_data_dir() -> None:
 
 def _atomic_write_json(path: Path, data) -> None:
     """Write data to path as JSON without ever leaving a truncated/partial
-    file in its place, mirroring song_folder_player/state.py's save_state:
-    write to a temp file in the same directory, fsync it so the bytes are
-    actually on disk, rotate whatever currently occupies path to a .bak
-    sibling, then os.replace the temp file into path. os.replace is atomic
-    on Windows/POSIX, so a crash at any point leaves either the old file or
-    the new one intact - never a half-written one - and the .bak rotation
-    means even a bad *new* write (not just a crash mid-write) still leaves
-    the previous good version recoverable."""
+    file in its place: write to a temp file in the same directory, fsync it
+    so the bytes are actually on disk, rotate whatever currently occupies
+    path to a .bak sibling, then os.replace the temp file into path.
+    os.replace is atomic on Windows/POSIX, so a crash at any point leaves
+    either the old file or the new one intact - never a half-written one -
+    and the .bak rotation means even a bad *new* write (not just a crash
+    mid-write) still leaves the previous good version recoverable."""
     _ensure_data_dir()
     backup_path = path.with_suffix(".bak")
 

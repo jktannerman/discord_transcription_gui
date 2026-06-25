@@ -6,9 +6,13 @@ constants for now (not exposed in the GUI) per the agreed v1 scope; they are
 isolated here so a future settings screen only needs to change this one
 module. The approved-author allow-list is no longer one of these constants -
 it's entered and cached from the setup screen instead (see
-state.read_approved_users_state/save_approved_users_state) - but the IDs
-below (the GM and the dice-roller bot) are still used as the very first
-run's default content, before anything has been cached yet.
+state.read_approved_users_state/save_approved_users_state).
+DEFAULT_APPROVED_USERS below is its fallback for a genuinely first-ever
+run, before anything has been cached yet - empty by default, since this is
+shared, version-controlled code and shouldn't ship with anyone's real
+Discord user IDs baked in; the project owner can fill in their own
+go-to IDs (e.g. the GM and the dice-roller bot) locally if they want the
+approved-users box pre-filled on a fresh install.
 """
 
 import re

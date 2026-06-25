@@ -168,7 +168,7 @@ class App:
 
     def _on_close(self) -> None:
         """Logs a final snapshot of whatever's currently in memory, then
-        flushes it to disk via one last _run_autosave() call before the
+        flushes it to disk via one last _snapshot_and_save() call before the
         window actually closes - closing used to just leave whatever the
         last *periodic* tick happened to catch as the on-disk state, with
         up to AUTOSAVE_INTERVAL_MS worth of edits/scrolling never making it
@@ -183,8 +183,8 @@ class App:
                     last_autosaved_count=len(self._last_autosave_snapshot),
                 ),
             )
-            self._run_autosave(tag="window_close")
-            self._cancel_autosave()  # the call above just rescheduled a tick that will never fire
+            self._snapshot_and_save(frame, tag="window_close")
+            self._cancel_autosave()
         self.root.destroy()
 
     # -- frame management -------------------------------------------------
@@ -363,50 +363,56 @@ class App:
         self._cancel_autosave()
         self._run_autosave()
 
-    def _run_autosave(self, tag: str = "autosave_tick") -> None:
+    def _run_autosave(self) -> None:
         """Snapshot the review screen's current edits/focus/scroll position
         to disk, then reschedule itself - runs continuously while the
         review screen is up (see _start_autosave/_cancel_autosave), every
         config.AUTOSAVE_INTERVAL_MS, so closing the app at any point during
-        review leaves a resumable session behind. Also called once more,
-        with tag="window_close", from _on_close - so the diff this logs
-        (see _diff_autosave) is clearly distinguishable from a periodic
-        tick's, and so that final call's snapshot is what actually ends up
-        on disk, not just what gets logged."""
+        review leaves a resumable session behind."""
         frame = getattr(self, "_review_frame", None)
         if frame is not None and frame.winfo_exists():
-            run = self._run
-            focused_slot = frame.get_focused_slot()
-            focus_message_id = None
-            if focused_slot is not None:
-                idx, role = focused_slot
-                focus_message_id = [self._review_items[idx].message_id, role]
-
-            edited_texts_by_id = {}
-            for idx, edited in enumerate(frame.collect_edited_texts()):
-                if any(text is not None for text in edited.values()):
-                    edited_texts_by_id[self._review_items[idx].message_id] = edited
-
-            self._diff_autosave(self._last_autosave_snapshot, edited_texts_by_id, tag=tag)
-            self._last_autosave_snapshot = edited_texts_by_id
-
-            session = {
-                "html_path": str(run.html_path),
-                "image_folder": str(run.image_folder),
-                "output_path": str(run.output_path),
-                "start_time": run.start_time,
-                "approved_author_ids": (
-                    sorted(run.approved_author_ids)
-                    if run.approved_author_ids is not None
-                    else None
-                ),
-                "use_cache": run.use_cache,
-                "edited_texts": edited_texts_by_id,
-                "focus_slot": focus_message_id,
-                "scroll_fraction": frame.get_scroll_top_fraction(),
-            }
-            state.save_session(str(run.html_path), session)
+            self._snapshot_and_save(frame, tag="autosave_tick")
         self._autosave_job = self.root.after(config.AUTOSAVE_INTERVAL_MS, self._run_autosave)
+
+    def _snapshot_and_save(self, frame: ReviewFrame, tag: str) -> None:
+        """Snapshot `frame`'s current edits/focus/scroll position and write
+        it to disk - the actual save logic shared by the periodic
+        _run_autosave tick and _on_close's one-off final flush, with neither
+        caller's own scheduling concerns (rescheduling the next tick vs.
+        tearing the window down right after) folded in here. `tag`
+        distinguishes a periodic tick's _diff_autosave log from _on_close's,
+        since both call this."""
+        run = self._run
+        focused_slot = frame.get_focused_slot()
+        focus_message_id = None
+        if focused_slot is not None:
+            idx, role = focused_slot
+            focus_message_id = [self._review_items[idx].message_id, role]
+
+        edited_texts_by_id = {}
+        for idx, edited in enumerate(frame.collect_edited_texts()):
+            if any(text is not None for text in edited.values()):
+                edited_texts_by_id[self._review_items[idx].message_id] = edited
+
+        self._diff_autosave(self._last_autosave_snapshot, edited_texts_by_id, tag=tag)
+        self._last_autosave_snapshot = edited_texts_by_id
+
+        session = {
+            "html_path": str(run.html_path),
+            "image_folder": str(run.image_folder),
+            "output_path": str(run.output_path),
+            "start_time": run.start_time,
+            "approved_author_ids": (
+                sorted(run.approved_author_ids)
+                if run.approved_author_ids is not None
+                else None
+            ),
+            "use_cache": run.use_cache,
+            "edited_texts": edited_texts_by_id,
+            "focus_slot": focus_message_id,
+            "scroll_fraction": frame.get_scroll_top_fraction(),
+        }
+        state.save_session(str(run.html_path), session)
 
     def _diff_autosave(
         self, previous: dict[str, dict[str, Optional[str]]], current: dict[str, dict[str, Optional[str]]], tag: str

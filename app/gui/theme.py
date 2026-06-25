@@ -1,13 +1,11 @@
-"""Dark theme shared by every screen in this app, modelled on the dark
-theme in ``song_folder_player/gui.py`` (same palette, same ttk Style
-configuration, same dark-title-bar trick on Windows)."""
+"""Dark theme shared by every screen in this app."""
 
 import ctypes
 import sys
 import tkinter as tk
 from tkinter import ttk
 
-# Dark theme colors (matching song_folder_player's style)
+# Dark theme colors
 DARK_BG = "#1e1e1e"  # Main background (darkest)
 DARK_BG_ALT = "#2d2d2d"  # Frames, canvases
 DARK_BG_WIDGET = "#3c3c3c"  # Buttons, entry/text fields
@@ -15,9 +13,8 @@ DARK_FG = "#d4d4d4"  # Text color
 DARK_ACCENT = "#264f78"  # Selection highlight
 
 # Colors and font for message/transcript text content and editable input
-# boxes specifically, matched to multi_file_search/multi_file_search.py's
-# text area and search-entry styling, which reads more clearly than the
-# general UI palette above for dense body text and typed input.
+# boxes specifically - darker/higher-contrast than the general UI palette
+# above, which reads more clearly for dense body text and typed input.
 DARK_TEXT_BG = "#171717"  # Darker than DARK_BG, so text boxes read as the
                           # darkest element on screen (darker than the image
                           # panel's DARK_BG_ALT background next to them)

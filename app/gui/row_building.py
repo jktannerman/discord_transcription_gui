@@ -64,7 +64,14 @@ class RowBuildingMixin:
         left column (the message's own original text, its image(s), or
         both) paired with the matching editable box(es) on the right - a
         copy of the message's own text whenever it has any, and one OCR
-        text box per attached image, in attachment order."""
+        text box per attached image, in attachment order.
+
+        The per-role sizing below (gap placement, each box's height) is
+        hand-mirrored by virtualization.estimate_row_height, which can't
+        call into this method directly since it has to stay Tk-free to be
+        unit-testable - if you change a role's sizing/gap rule here, change
+        it there too, or the pre-build estimate drifts from the real
+        layout (see that function's docstring)."""
         item = self._items[index]
         pack_kwargs = {"fill": "x", "pady": ROW_PACK_PADY_PX, "padx": 4}
         if before is not None:
