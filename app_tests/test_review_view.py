@@ -174,6 +174,39 @@ def test_undo_history_survives_a_row_being_paged_out_and_back_in(root, sample_im
     assert rebuilt.get("1.0", "end-1c") == original
 
 
+def test_undo_after_unchecking_an_ocr_box_restores_the_edit_and_rechecks_it(root, sample_image):
+    """Unchecking an OCR box is itself an undoable delete/insert (see
+    RowBuildingMixin._on_ocr_checkbox_toggle) - Ctrl+Z right after must
+    bring the edited text back, and _undo_text's compare-to-default resync
+    must re-check the checkbox to match, rather than leaving it unchecked
+    while the edited text is back on screen (per the project owner's
+    decision: undo/redo always re-derives checked state, never the
+    unconditional "any change checks the box" rule typing uses)."""
+    items = _items(sample_image, count=5)
+    frame, _ = _build_frame(root, items)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    key = (image_item, "ocr0")
+    default_text = items[image_item].initial_ocr_texts[0]
+    widget = frame._text_widgets[key]
+    widget.focus_force()
+    root.update_idletasks()
+    widget.insert("end", " typed")
+    root.update()
+    edited_text = widget.get("1.0", "end-1c")
+
+    var = frame._checkbox_vars[key]
+    var.set(False)
+    frame._on_ocr_checkbox_toggle(key)
+    assert widget.get("1.0", "end-1c") == default_text
+    assert frame._checkbox_checked[key] is False
+
+    frame._undo_text(type("Event", (), {"widget": widget})())
+
+    assert widget.get("1.0", "end-1c") == edited_text
+    assert frame._checkbox_checked[key] is True
+    assert frame._checkbox_vars[key].get() is True
+
+
 def test_focusing_a_box_scrolls_the_whole_box_fully_into_view_not_just_its_row(root, sample_image):
     """Regression test: _scroll_into_view (this method's predecessor) only
     checked a row's outer bounds. A multi-box row (caption + image, here)
@@ -223,7 +256,143 @@ def test_collect_edited_texts_returns_initial_text_for_untouched_items(root, sam
     assert len(collected) == len(items)
     for edited, item in zip(collected, items):
         for role in item.slot_roles:
-            assert edited[role] == item.initial_text_for_role(role)
+            if role.startswith("ocr"):
+                # An untouched OCR box's checkbox starts unchecked, so
+                # _get_box_text reports None (meaning "use the default")
+                # rather than the literal (default) text it displays - see
+                # ReviewFrame._get_box_text.
+                assert edited[role] is None
+            else:
+                assert edited[role] == item.initial_text_for_role(role)
+
+
+def test_ocr_checkbox_starts_unchecked_for_an_untouched_box(root, sample_image):
+    items = _items(sample_image, count=5)
+    frame, _ = _build_frame(root, items)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    key = (image_item, "ocr0")
+
+    assert frame._checkbox_checked[key] is False
+    assert frame._checkbox_vars[key].get() is False
+    assert frame._text_widgets[key].get("1.0", "end-1c") == items[image_item].initial_ocr_texts[0]
+
+
+def test_ocr_checkbox_starts_checked_for_a_resumed_edit_differing_from_default(root, sample_image):
+    items = _items(sample_image, count=5)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    saved_texts = [{} for _ in items]
+    saved_texts[image_item] = {"ocr0": "a resumed ocr edit"}
+
+    frame, _ = _build_frame(root, items, initial_saved_texts=saved_texts)
+    key = (image_item, "ocr0")
+
+    assert frame._checkbox_checked[key] is True
+    assert frame._checkbox_vars[key].get() is True
+    assert frame._text_widgets[key].get("1.0", "end-1c") == "a resumed ocr edit"
+
+
+def test_typing_into_an_ocr_box_checks_its_checkbox(root, sample_image):
+    items = _items(sample_image, count=5)
+    frame, _ = _build_frame(root, items)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    key = (image_item, "ocr0")
+    widget = frame._text_widgets[key]
+    widget.focus_force()  # focus_set() alone doesn't reliably win real OS focus in a test run
+    root.update_idletasks()
+
+    widget.insert("end", " typed")
+    root.update()  # let the queued <<Modified>> event fire
+
+    assert frame._checkbox_checked[key] is True
+    assert frame._checkbox_vars[key].get() is True
+
+
+def test_unchecking_then_rechecking_an_ocr_box_round_trips_both_versions(root, sample_image):
+    """Unchecking must restore the OCR default without discarding the
+    user-edited version, and rechecking must bring that edit back - the
+    save isn't overwritten by either toggle, only by typing while
+    unchecked (see test_typing_while_unchecked_starts_a_fresh_edit)."""
+    items = _items(sample_image, count=5)
+    frame, _ = _build_frame(root, items)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    key = (image_item, "ocr0")
+    default_text = items[image_item].initial_ocr_texts[0]
+    widget = frame._text_widgets[key]
+    widget.focus_force()
+    root.update_idletasks()
+    widget.insert("end", " typed")
+    root.update()
+    edited_text = widget.get("1.0", "end-1c")
+    assert edited_text != default_text
+    assert frame._checkbox_vars[key].get() is True
+
+    var = frame._checkbox_vars[key]
+    var.set(False)
+    frame._on_ocr_checkbox_toggle(key)
+
+    assert widget.get("1.0", "end-1c") == default_text
+    assert frame._checkbox_checked[key] is False
+    assert frame._user_edited_texts[key] == edited_text  # not discarded
+
+    var.set(True)
+    frame._on_ocr_checkbox_toggle(key)
+
+    assert widget.get("1.0", "end-1c") == edited_text
+    assert frame._checkbox_checked[key] is True
+
+
+def test_collect_edited_texts_reports_none_for_an_unchecked_ocr_box(root, sample_image):
+    """Even though the box still has live, different-from-default text
+    cached for restoration (self._user_edited_texts), collect_edited_texts
+    - what autosave/the session file persist - must report None while
+    unchecked, since unchecked means "use the default" (see
+    ReviewFrame._get_box_text). The actual Finalize output is unaffected
+    either way, since None already falls back to the same default text."""
+    items = _items(sample_image, count=5)
+    frame, _ = _build_frame(root, items)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    key = (image_item, "ocr0")
+    widget = frame._text_widgets[key]
+    widget.focus_force()
+    root.update_idletasks()
+    widget.insert("end", " typed")
+    root.update()
+    var = frame._checkbox_vars[key]
+    var.set(False)
+    frame._on_ocr_checkbox_toggle(key)
+
+    collected = frame.collect_edited_texts()
+
+    assert collected[image_item]["ocr0"] is None
+
+
+def test_ocr_checkbox_state_and_both_versions_survive_paging_out_and_back_in(root, sample_image):
+    items = _items(sample_image, count=40)
+    frame, _ = _build_frame(root, items)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    key = (image_item, "ocr0")
+    default_text = items[image_item].initial_ocr_texts[0]
+    widget = frame._text_widgets[key]
+    widget.focus_force()
+    root.update_idletasks()
+    widget.insert("end", " typed")
+    root.update()
+    edited_text = widget.get("1.0", "end-1c")
+
+    var = frame._checkbox_vars[key]
+    var.set(False)
+    frame._on_ocr_checkbox_toggle(key)
+
+    # Page far away (tears the row down) and back to the top again.
+    frame._ensure_materialized(len(items) - 1)
+    frame._canvas.yview_moveto(0.0)
+    frame._reconcile()
+
+    assert key in frame._text_widgets
+    assert frame._checkbox_checked[key] is False
+    assert frame._checkbox_vars[key].get() is False
+    assert frame._text_widgets[key].get("1.0", "end-1c") == default_text
+    assert frame._user_edited_texts[key] == edited_text
 
 
 def test_finalize_button_visible_for_a_transcript_that_fits_on_screen(root, sample_image):

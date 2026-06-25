@@ -258,11 +258,38 @@ class RowBuildingMixin:
             highlightcolor=theme.DARK_FOCUS_HIGHLIGHT,
             padx=TEXT_BOX_INNER_PADX, pady=4,
         )
+
+        # An "ocr" box (one per attached image) gets a checkbox in an
+        # otherwise-invisible column at its top-right, tracking "edited vs.
+        # not" (see _on_ocr_checkbox_toggle/_on_text_modified) - a "message"
+        # box has no such column, since it was never OCR'd in the first
+        # place and so has no "original" to revert to. Built (and packed)
+        # before text_widget so it's earlier in the container's pack order,
+        # claiming a slice off the right edge before text_widget's
+        # expand=True claims everything still left - see
+        # _set_text_scrollbar for how the scrollbar then has to be inserted
+        # even earlier than this column, not just before text_widget, to
+        # land at the true right edge outside it.
+        checkbox_column: Optional[tk.Widget] = None
+        if role.startswith("ocr"):
+            checkbox_column = tk.Frame(text_container, bg=theme.DARK_TEXT_BG)
+            checkbox_column.pack(side="right", fill="y")
+            checked_var = tk.BooleanVar(value=self._checkbox_checked.get(key, False))
+            checkbox = tk.Checkbutton(
+                checkbox_column, variable=checked_var, takefocus=0,
+                bg=theme.DARK_TEXT_BG, activebackground=theme.DARK_TEXT_BG,
+                selectcolor=theme.DARK_ACCENT, highlightthickness=0, bd=0,
+                command=lambda k=key: self._on_ocr_checkbox_toggle(k),
+            )
+            checkbox.pack(side="top")
+            self._checkbox_vars[key] = checked_var
+
         # Set after construction (rather than passed as a kwarg) since the
         # callback needs to close over text_widget itself.
+        before_widget = checkbox_column if checkbox_column is not None else text_widget
         text_widget.configure(
-            yscrollcommand=lambda first, last, sb=scrollbar, t=text_widget: self._set_text_scrollbar(
-                sb, t, first, last
+            yscrollcommand=lambda first, last, sb=scrollbar, t=text_widget, b=before_widget: (
+                self._set_text_scrollbar(sb, t, b, first, last)
             )
         )
         scrollbar.configure(command=text_widget.yview)
@@ -500,25 +527,33 @@ class RowBuildingMixin:
         return max(1, min(target_px, max_px))
 
     def _set_text_scrollbar(
-        self, scrollbar: ttk.Scrollbar, text_widget: tk.Text, first: str, last: str
+        self, scrollbar: ttk.Scrollbar, text_widget: tk.Text, before_widget: tk.Widget,
+        first: str, last: str,
     ) -> None:
         """yscrollcommand for an editable text box: show its scrollbar only
         while content actually overflows the box. Most boxes' fixed height
         (see _fixed_text_box_height) comfortably fits their typical content,
         so a permanently-visible empty scrollbar would be pure visual noise
         - this reveals one only once a message is long enough (or the box's
-        fixed height short enough) that the content actually overflows."""
+        fixed height short enough) that the content actually overflows.
+
+        before_widget is text_widget itself for a box with no checkbox
+        column (a "message"/spacer box), or that column's frame for an
+        "ocr" box - either way, it's whatever currently sits immediately to
+        the scrollbar's left, so inserting the scrollbar immediately before
+        it in pack order puts the scrollbar at the true right edge with
+        nothing claiming space outside it."""
         if float(first) <= 0.0 and float(last) >= 1.0:
             scrollbar.pack_forget()
         else:
-            # before=text_widget: Tk allocates cavity space to packed slaves
-            # in pack-call order, and the text box (packed first, with
-            # fill="both"/expand=True) already claims the full cavity by the
-            # time this fires - packing the scrollbar in afterwards with no
-            # `before` would shrink it to a width-0 sliver, hidden but
-            # "mapped", since it'd be last in that order with nothing left
-            # to claim.
-            scrollbar.pack(side="right", fill="y", before=text_widget)
+            # before=before_widget: Tk allocates cavity space to packed
+            # slaves in pack-call order, and text_widget/the checkbox
+            # column (packed first) already claim the full remaining cavity
+            # by the time this fires - packing the scrollbar in afterwards
+            # with no `before` would shrink it to a width-0 sliver, hidden
+            # but "mapped", since it'd be last in that order with nothing
+            # left to claim.
+            scrollbar.pack(side="right", fill="y", before=before_widget)
         scrollbar.set(first, last)
 
     def _on_text_modified(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
@@ -552,5 +587,95 @@ class RowBuildingMixin:
             **logging_config.text_fingerprint(text_widget.get("1.0", "end-1c")),
         )
         text_widget.edit_modified(False)
+        # Gated on had_focus for the same reason _scroll_box_into_view below
+        # already is: a build-time insert/replay (see _populate_text_box)
+        # fires this same deferred <<Modified>> event, but the widget is
+        # never focused yet at that point (a refocus-on-rebuild, if any, is
+        # itself deferred via after_idle until after this box's whole row
+        # finishes building - see _build_row) - so this can't mistake "box
+        # was just (re)built" for "the user changed something". Undo/redo
+        # (keyboard_nav.py's _undo_text/_redo_text) *does* run with the
+        # widget focused, so it additionally suppresses via
+        # self._suppress_ocr_auto_check - it re-derives checked/unchecked
+        # itself, via a different (compare-to-default) rule than this
+        # method's unconditional one.
+        if key[1].startswith("ocr") and had_focus and key not in self._suppress_ocr_auto_check:
+            self._on_ocr_box_user_edit(key, text_widget)
         if had_focus:
             self._scroll_box_into_view(key)
+
+    def _on_ocr_box_user_edit(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
+        """An "ocr" box's content changed for a real reason - typing,
+        paste, Ctrl+Backspace, or an undo/redo that wasn't itself routed
+        through the compare-to-default resync in keyboard_nav.py's
+        _undo_text/_redo_text (which adds its own suppression around the
+        call, so this never double-handles those) - so its checkbox checks
+        itself, unconditionally, per the project owner's "any change checks
+        the box" rule: unlike the checked-state derivation used at build
+        time/after undo (compare the text to the OCR default), this doesn't
+        un-check itself even if the new text happens to coincidentally
+        match the default again."""
+        current_text = text_widget.get("1.0", "end-1c")
+        self._checkbox_checked[key] = True
+        self._user_edited_texts[key] = current_text
+        var = self._checkbox_vars.get(key)
+        if var is not None and not var.get():
+            var.set(True)
+
+    def _on_ocr_checkbox_toggle(self, key: Tuple[int, str]) -> None:
+        """Command callback for an "ocr" box's checkbox - by the time this
+        runs, Tk has already flipped self._checkbox_vars[key] to the new
+        state. Unchecking swaps the box's content back to the OCR default
+        (without losing the edited version, kept in
+        self._user_edited_texts); checking swaps back to that last edited
+        version, or leaves the default in place if there was never one
+        (e.g. the box was checked by hand with nothing typed into it yet).
+
+        The delete/insert below still goes through the box's normal
+        undo-recording proxy (text_undo.attach_undo_recording) - so it's
+        itself undoable, and a row torn down and rebuilt right after still
+        replays correctly. Wrapped in self._suppress_ocr_auto_check as a
+        defensive measure in case the click ever leaves the text widget
+        focused (clicking the checkbox normally moves focus to it instead,
+        which already makes _on_text_modified's had_focus check skip this
+        on its own) - either way, this must never masquerade as a user edit
+        and immediately re-check (or re-uncheck) itself via
+        _on_ocr_box_user_edit."""
+        index, role = key
+        text_widget = self._text_widgets[key]
+        checked = self._checkbox_vars[key].get()
+        self._checkbox_checked[key] = checked
+        image_index = int(role[len("ocr"):])
+        ocr_default = self._items[index].initial_ocr_texts[image_index]
+        text_to_show = self._user_edited_texts.get(key, ocr_default) if checked else ocr_default
+
+        self._suppress_ocr_auto_check.add(key)
+        # Tk's autoseparator logic (on by default for an undo=True widget)
+        # inserts a separator on every insert<->delete type transition, which
+        # would otherwise split this delete-then-insert pair into two
+        # separate undo groups - a single Ctrl+Z would then only reverse the
+        # insert half, landing on the empty post-delete/pre-reinsert text
+        # rather than back on whatever this toggle just swapped away from.
+        # Marking a boundary *before* turning autoseparators off (not just
+        # after) matters just as much: without it, disabling autoseparators
+        # before the delete leaves no separator between whatever edit came
+        # right before this toggle and the toggle's own delete - merging the
+        # two into one group, so a single Ctrl+Z would undo *both* instead
+        # of just the toggle.
+        text_widget.edit_separator()
+        text_widget.configure(autoseparators=False)
+        text_widget.delete("1.0", "end")
+        text_widget.insert("1.0", text_to_show)
+        text_widget.edit_separator()
+        text_widget.configure(autoseparators=True)
+        text_widget.mark_set("insert", "1.0")
+        text_widget.see("insert")
+        text_widget.edit_modified(False)
+        self.after_idle(lambda k=key: self._suppress_ocr_auto_check.discard(k))
+
+        self._log_event(
+            "ocr_checkbox_toggled",
+            key=key,
+            checked=checked,
+            **logging_config.text_fingerprint(text_to_show),
+        )

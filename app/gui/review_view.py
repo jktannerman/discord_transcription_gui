@@ -209,6 +209,41 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         # persisted across a session save/resume - only self._saved_texts is -
         # so a resumed box's cursor still starts at "1.0", same as before.
         self._saved_cursor: Dict[Tuple[int, str], str] = {}
+        # Per-OCR-box "edited vs. not" checkbox state (see row_building.py's
+        # _build_editable_text_box/_on_ocr_checkbox_toggle) - keyed the same
+        # way as every other per-box dict here, and never cleared by
+        # _destroy_row, so it survives a row being torn down and rebuilt
+        # with no extra teardown/rebuild plumbing. self._user_edited_texts
+        # holds the last user-edited version of a box's text, kept distinct
+        # from whatever it currently *displays* (the OCR default, while
+        # unchecked). Seeded eagerly below - not lazily the first time a row
+        # is built - since collect_edited_texts/autosave need every item's
+        # checked-state regardless of whether its row has ever been
+        # materialized this session.
+        self._checkbox_checked: Dict[Tuple[int, str], bool] = {}
+        self._user_edited_texts: Dict[Tuple[int, str], str] = {}
+        for idx, item in enumerate(items):
+            for image_index in range(len(item.image_paths)):
+                key = (idx, f"ocr{image_index}")
+                saved = self._saved_texts.get(key)
+                default = item.initial_ocr_texts[image_index]
+                checked = saved is not None and saved != default
+                self._checkbox_checked[key] = checked
+                if checked:
+                    self._user_edited_texts[key] = saved
+        # tk.BooleanVar backing each currently-built OCR box's checkbox -
+        # only exists while that box's row is materialized, same as
+        # self._text_widgets.
+        self._checkbox_vars: Dict[Tuple[int, str], tk.BooleanVar] = {}
+        # Keys whose next deferred <<Modified>> event(s) should NOT be
+        # treated as "the user edited this OCR box" - set around a box's
+        # own build-time insert/replay and around the checkbox's own
+        # programmatic content swap, both of which fire <<Modified>> just
+        # like a real edit (see row_building.py's _populate_text_box and
+        # ARCHITECTURE.md's "<<Modified>> fires on a box's initial
+        # population" section for why that event can't be trusted at face
+        # value).
+        self._suppress_ocr_auto_check: set = set()
         # One UndoLog per box, recording every insert/delete/undo/redo it's
         # had since first built this session (see text_undo.py) - replayed
         # onto a fresh widget when that box's row is rebuilt after being
@@ -447,6 +482,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
                 **logging_config.text_fingerprint(text),
             )
             self._text_containers.pop(key, None)
+            self._checkbox_vars.pop(key, None)
             detach = self._undo_detach.pop(key, None)
             if detach is not None:
                 detach()
@@ -832,11 +868,26 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         from a row that was paged out, else None (meaning "never touched",
         or this item has no box for this role at all - both are handled
         identically by callers, which fall back to the item's matching
-        initial_*_text)."""
-        widget = self._text_widgets.get((index, role))
+        initial_*_text).
+
+        An "ocr*" role is a special case: while its checkbox is unchecked,
+        this always reports None - even though the box's live content is
+        real text (the OCR default it's currently displaying) - since
+        unchecked literally means "use the default", and a real edit
+        sitting in self._user_edited_texts for if the box gets re-checked
+        isn't the thing that should be written out or persisted to the
+        session file while it's hidden behind that checkbox. This doesn't
+        change what Finalize ever writes (None already falls back to the
+        same default text in review_item.lines_for_item) - only what
+        collect_edited_texts reports, which is what autosave/the session
+        file's "edited_texts" field actually persist."""
+        key = (index, role)
+        if role.startswith("ocr") and not self._checkbox_checked.get(key, False):
+            return None
+        widget = self._text_widgets.get(key)
         if widget is not None:
             return widget.get("1.0", "end-1c")
-        return self._saved_texts.get((index, role))
+        return self._saved_texts.get(key)
 
     def collect_edited_texts(self) -> List[Dict[str, Optional[str]]]:
         """Current role->text mapping for every item, in transcript order -

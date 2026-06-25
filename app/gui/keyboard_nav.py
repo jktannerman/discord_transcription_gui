@@ -70,6 +70,13 @@ class KeyboardNavMixin:
         # UndoLog.suppress's docstring).
         if log is not None:
             log.suppress = True
+        # Also suppress _on_text_modified's unconditional "any change checks
+        # the box" reaction (row_building.py) - undo/redo always re-derives
+        # checked/unchecked by comparing the resulting text to the OCR
+        # default instead (see _resync_ocr_checkbox_after_undo), never the
+        # unconditional rule that applies to ordinary typing/paste.
+        if key is not None:
+            self._suppress_ocr_auto_check.add(key)
         try:
             widget.edit_undo()
         except tk.TclError:
@@ -79,6 +86,7 @@ class KeyboardNavMixin:
             )
         else:
             self._record_undo_marker(widget, "undo")
+            self._resync_ocr_checkbox_after_undo(key, widget)
             logger.info(
                 "ctrl+z pressed, undo applied",
                 extra=logging_config.extra(
@@ -92,6 +100,8 @@ class KeyboardNavMixin:
         finally:
             if log is not None:
                 log.suppress = False
+            if key is not None:
+                self.after_idle(lambda k=key: self._suppress_ocr_auto_check.discard(k))
         return "break"
 
     def _redo_text(self, event: tk.Event) -> str:
@@ -101,6 +111,8 @@ class KeyboardNavMixin:
         op_count_before = len(log.ops) if log is not None else None
         if log is not None:
             log.suppress = True
+        if key is not None:
+            self._suppress_ocr_auto_check.add(key)
         try:
             widget.edit_redo()
         except tk.TclError:
@@ -110,6 +122,7 @@ class KeyboardNavMixin:
             )
         else:
             self._record_undo_marker(widget, "redo")
+            self._resync_ocr_checkbox_after_undo(key, widget)
             logger.info(
                 "ctrl+shift+z pressed, redo applied",
                 extra=logging_config.extra(
@@ -123,7 +136,34 @@ class KeyboardNavMixin:
         finally:
             if log is not None:
                 log.suppress = False
+            if key is not None:
+                self.after_idle(lambda k=key: self._suppress_ocr_auto_check.discard(k))
         return "break"
+
+    def _resync_ocr_checkbox_after_undo(self, key: Optional[Tuple[int, str]], widget: tk.Text) -> None:
+        """After a successful undo/redo on an "ocr" box, re-derive its
+        checkbox's checked state by comparing the resulting text to the OCR
+        default - the same rule used to seed it at build time
+        (ReviewFrame.__init__) - rather than leaving it at whatever an
+        earlier edit or checkbox click last set it to. Undo/redo can land
+        the box back on exactly its OCR default (e.g. undoing a checkbox
+        toggle's own delete/insert, or undoing the only edit a box ever
+        had), and without this the checkbox would keep showing "edited"
+        for text that no longer is - or vice versa for a redo that lands
+        back on edited text."""
+        if key is None or not key[1].startswith("ocr"):
+            return
+        index, role = key
+        image_index = int(role[len("ocr"):])
+        ocr_default = self._items[index].initial_ocr_texts[image_index]
+        current_text = widget.get("1.0", "end-1c")
+        checked = current_text != ocr_default
+        self._checkbox_checked[key] = checked
+        if checked:
+            self._user_edited_texts[key] = current_text
+        var = self._checkbox_vars.get(key)
+        if var is not None:
+            var.set(checked)
 
     def _record_undo_marker(self, widget: tk.Text, name: str) -> None:
         """Append an "undo"/"redo" marker to `widget`'s UndoLog (see
