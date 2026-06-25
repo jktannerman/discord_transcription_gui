@@ -11,7 +11,7 @@ image's OCR text, and a one-line "spacer" box (no left-column counterpart
 at all) between/after each of those, holding the literal "\n" tokens that
 control the blank-line gap on either side of it - independently editable,
 so a message with a caption and multiple images gets all of those boxes.
-See pipeline.ReviewItem.slot_roles for the exact ordering and
+See review_item.ReviewItem.slot_roles for the exact ordering and
 ARCHITECTURE.md's "Spacer slots" section for the full design. Copy/paste
 and arbitrary edits are allowed in every text box; nothing is parsed or
 restricted there. Nothing is written to disk until the Finalize button at
@@ -112,7 +112,7 @@ from tkinter import ttk
 from typing import Callable, Dict, List, Optional, Tuple
 
 from .. import logging_config
-from ..pipeline import ReviewItem
+from ..review_item import ReviewItem
 from . import theme
 from .image_loading import ImageLoader
 from .keyboard_nav import KeyboardNavMixin
@@ -168,7 +168,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         self._initial_scroll_fraction = initial_scroll_fraction
         # Flat, transcript-ordered list of every editable box this item
         # list has, as (item_index, role) pairs - one entry per
-        # item.slot_roles (see pipeline.ReviewItem), in order: "message" (a
+        # item.slot_roles (see review_item.ReviewItem), in order: "message" (a
         # copy of the message's own text), "ocr{N}" (the Nth attached
         # image's OCR text), and a "spacer_*" box between/after each of
         # those, all stacked to match _build_row's layout. This is what
@@ -737,9 +737,21 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         canvas.configure(scrollregion=(0, 0, canvas_width, total_height))
         canvas.coords(self._canvas_window, 0, self._offset_of(first_idx))
 
-        assert sorted(self._row_frames) == list(range(first_idx, last_idx + 1)), (
-            sorted(self._row_frames), first_idx, last_idx,
-        )
+        materialized = sorted(self._row_frames)
+        expected = list(range(first_idx, last_idx + 1))
+        if materialized != expected:
+            # A real bug if it ever fires (this invariant is what
+            # _sync_materialized_rows is supposed to guarantee), but crashing
+            # the whole review screen over it would lose whatever wasn't
+            # autosaved yet - log it and keep going with whatever's actually
+            # built, same as this method's other defense-in-depth fallbacks
+            # (_settle_pending_geometry, _remeasure_built_rows).
+            logger.error(
+                "materialized rows do not match computed range after reconcile",
+                extra=logging_config.extra(
+                    materialized=materialized, first_idx=first_idx, last_idx=last_idx,
+                ),
+            )
 
         self._update_visible_images()
         self._update_finalize_button_visibility()

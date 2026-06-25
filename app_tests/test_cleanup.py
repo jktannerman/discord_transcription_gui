@@ -8,7 +8,7 @@ from gui_transcription.app.cleanup import clean_transcript
 
 def test_deliberately_large_gap_is_not_collapsed():
     # Blank-line spacing is now entirely owned by the review screen's
-    # spacer slots (see pipeline.ReviewItem.slot_roles), so a gap larger
+    # spacer slots (see review_item.ReviewItem.slot_roles), so a gap larger
     # than the old 3-blank-line cap is left exactly as written rather than
     # being clobbered back down.
     text = "a\n\n\n\n\n\nb"

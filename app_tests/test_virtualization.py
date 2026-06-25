@@ -13,7 +13,7 @@ from gui_transcription.app.gui.virtualization import (
     compute_visible_range,
     estimate_row_height,
 )
-from gui_transcription.app.pipeline import ReviewItem
+from gui_transcription.app.review_item import ReviewItem
 
 
 def test_estimate_row_height_image_item_is_positive():

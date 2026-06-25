@@ -1,6 +1,6 @@
 # Regex find/replace rules for common Tesseract OCR misreads, applied once
 # to each image's freshly-OCR'd text before it becomes a review item's
-# starting OCR-box content (see ocr_corrections.py/pipeline.build_review_items)
+# starting OCR-box content (see ocr_corrections.py/review_item.build_review_items)
 # - never to a box once the user has edited it.
 #
 # Format: one entry per blank-line-separated block, each block being:

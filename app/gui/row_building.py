@@ -21,7 +21,7 @@ from tkinter import ttk
 from typing import Optional, Tuple
 
 from .. import logging_config
-from ..pipeline import ReviewItem
+from ..review_item import ReviewItem
 from . import theme
 from .image_loading import THUMBNAIL_SIZE, fitted_image_size
 from .layout_constants import (
@@ -86,7 +86,7 @@ class RowBuildingMixin:
         # their left-column counterpart, plus a left-column-less spacer
         # role between/after them) - every element but the last gets a gap
         # below it so stacked boxes (and their immutable counterparts)
-        # don't touch. See ReviewItem.slot_roles for the ordering.
+        # don't touch. See review_item.ReviewItem.slot_roles for the ordering.
         roles = item.slot_roles
         for position, role in enumerate(roles):
             gap = GAP_BETWEEN_STACKED_PX if position < len(roles) - 1 else 0
@@ -279,8 +279,8 @@ class RowBuildingMixin:
         (between a message's text and its first image), "spacer_img{N}"
         (between the Nth and (N+1)th image on the same message), or
         "spacer_end" (the gap before the next message) - see
-        ReviewItem.slot_roles. Unlike _build_editable_text_box, there is no
-        left-column counterpart to pair against: the box is fixed at
+        review_item.ReviewItem.slot_roles. Unlike _build_editable_text_box,
+        there is no left-column counterpart to pair against: the box is fixed at
         exactly one Tk text line tall (SPACER_BOX_HEIGHT_PX, via `height=1`
         on the real Text widget) regardless of content, with no internal
         scrollbar - it's meant to hold only a handful of literal "\\n"

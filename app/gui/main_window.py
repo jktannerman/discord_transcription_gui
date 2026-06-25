@@ -29,7 +29,7 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Optional
 
-from .. import chatlog, config, logging_config, pipeline, state
+from .. import chatlog, config, logging_config, pipeline, review_item, state
 from . import theme
 from .progress_view import ProgressFrame
 from .review_view import ReviewFrame
@@ -38,18 +38,8 @@ from .setup_view import SetupFrame
 logger = logging_config.get_logger(__name__)
 
 
-def _is_old_session_format(saved_texts: dict) -> bool:
-    """Whether saved_texts is in the pre-spacer-slot session format (each
-    per-message edit was a fixed {"message": ..., "ocr": [...]} shape) -
-    detected by the literal key "ocr", which is never a valid role name in
-    the current role->text format ("message", "ocr0", "ocr1", ...,
-    "spacer_*"). There's no version field in the session file to check
-    directly, so this structural fingerprint is what tells the two apart."""
-    return any(isinstance(edit, dict) and "ocr" in edit for edit in saved_texts.values())
-
-
 def _match_saved_edits(
-    review_items: list["pipeline.ReviewItem"], saved_texts: dict
+    review_items: list["review_item.ReviewItem"], saved_texts: dict
 ) -> list[dict[str, Optional[str]]]:
     """Translate a session's message_id-keyed saved edits onto the
     freshly-parsed review_items' current positions. Saved entries whose
@@ -103,7 +93,7 @@ def _match_saved_edits(
 
 
 def _match_focus_slot(
-    review_items: list["pipeline.ReviewItem"], focus_slot: Optional[list]
+    review_items: list["review_item.ReviewItem"], focus_slot: Optional[list]
 ) -> Optional[tuple[int, str]]:
     """Translate a saved (message_id, role) focus slot onto its current
     index, or None if that message no longer appears (falls back to the
@@ -155,7 +145,7 @@ class App:
 
         self.current_frame: tk.Widget | None = None
 
-        self._review_items: list[pipeline.ReviewItem] | None = None
+        self._review_items: list[review_item.ReviewItem] | None = None
         self._run: Optional[RunContext] = None
         self._autosave_job: Optional[str] = None
         self._resume_payload: Optional[dict] = None
@@ -466,7 +456,7 @@ class App:
         try:
             html_text = run.html_path.read_text(encoding="utf8")
             entries = chatlog.parse_message_groups(html_text, run.start_time, run.approved_author_ids)
-            self._review_items = pipeline.build_review_items(entries, file_info, run.image_folder)
+            self._review_items = review_item.build_review_items(entries, file_info, run.image_folder)
         except OSError as exc:
             self._on_run_error(f"Could not read HTML file: {exc}")
             return
@@ -499,11 +489,6 @@ class App:
                 logger.warning(
                     "saved session edited_texts has unexpected shape, discarding",
                     extra=logging_config.extra(saved_texts_type=type(saved_texts).__name__),
-                )
-            elif _is_old_session_format(saved_texts):
-                logger.warning(
-                    "saved session uses the pre-spacer-slot edited_texts format, discarding",
-                    extra=logging_config.extra(message_count=len(saved_texts)),
                 )
             else:
                 initial_saved_texts = _match_saved_edits(self._review_items, saved_texts)

@@ -440,7 +440,7 @@ transcription elements, holding literal `\n` *tokens* (the two characters
 `\` and `n`, not real newlines) that the user can freely edit. Nothing
 else in a spacer box has any effect - see "Finalize-time parsing" below.
 
-### Slot ordering (`pipeline.ReviewItem.slot_roles`)
+### Slot ordering (`review_item.ReviewItem.slot_roles`)
 
 Four different places used to each independently re-derive "message, then
 ocr0, ocr1, ..." from `item.initial_message_text`/`item.image_paths` -
@@ -449,7 +449,7 @@ output writing. Adding spacer slots meant inserting new roles into that
 sequence, so `ReviewItem.slot_roles` now computes the full ordered list
 once and every one of those four places (`row_building.RowBuildingMixin
 ._build_row`, `virtualization.estimate_row_height`, `review_view
-.ReviewFrame.__init__`'s `self._slots`, `pipeline.lines_for_item`) just
+.ReviewFrame.__init__`'s `self._slots`, `review_item.lines_for_item`) just
 walks it, rather than each re-deriving its own copy that could drift out
 of sync with the others.
 
@@ -491,12 +491,12 @@ item's immediate predecessor/successor in the (already author/date-
 filtered) entries list. Die-roll messages are assumed to never have
 images, so they only ever get a `"message"` slot plus a single trailing
 `"spacer_end"` slot. The token count written into a spacer box's default
-content (`pipeline._spacer_default`) is always the empty-line count plus
+content (`review_item._spacer_default`) is always the empty-line count plus
 one, since the gap also includes the newline that terminates the line
 right before it - see "Finalize-time parsing" below for why that one
 extra newline isn't *also* added by the preceding content box.
 
-### Finalize-time parsing (`pipeline.lines_for_item`)
+### Finalize-time parsing (`review_item.lines_for_item`)
 
 - **Content roles** (`"message"`/`"ocr{i}"`): only *trailing* real
   newline/carriage-return characters are stripped from the box's text; the
@@ -509,7 +509,7 @@ extra newline isn't *also* added by the preceding content box.
 - **Spacer roles**: every real newline/carriage-return character anywhere
   in the box - leading, trailing, or mixed through the middle - is
   discarded first, then the remaining literal `"\n"` tokens are counted
-  (`pipeline._count_spacer_tokens`) and that many real newline characters
+  (`review_item._count_spacer_tokens`) and that many real newline characters
   are written. Any other stray character typed into a spacer box is
   ignored, never written - nothing but backslash/`n` characters has any
   effect there.
@@ -527,13 +527,11 @@ extra newline isn't *also* added by the preceding content box.
 field changed shape from a fixed per-item `(message_text, ocr_texts)`
 tuple to a per-item `{role: text}` dict (covering every role in that
 item's `slot_roles`, content and spacer alike) - the old shape had no way
-to address a spacer slot at all. There's no version field in the session
-file, so `main_window._is_old_session_format` detects the old shape
-structurally (a saved per-message edit dict containing the literal key
-`"ocr"`, which is never a valid role name now) and `_show_review` discards
-the whole saved session's edits if it's seen, logging rather than
-crashing - matching the existing "drop and log" pattern already used for
-orphaned edits/stale focus slots elsewhere in this resume path.
+to address a spacer slot at all. `_show_review` discarded a saved session
+in the old shape (detected structurally, via a saved per-message edit dict
+containing the literal key `"ocr"`) for a transition period after this
+change shipped; that detection has since been removed now that no
+pre-spacer-slot session is expected to still be on disk.
 
 ## Logging
 

@@ -8,7 +8,7 @@ import bisect
 import textwrap
 from typing import List, Optional, Tuple
 
-from ..pipeline import ReviewItem
+from ..review_item import ReviewItem
 from .image_loading import THUMBNAIL_SIZE, fitted_image_size
 from .layout_constants import (
     GAP_BETWEEN_STACKED_PX,

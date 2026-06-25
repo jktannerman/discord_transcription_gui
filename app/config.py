@@ -67,7 +67,7 @@ TIMESTAMP_FORMAT = "%d/%m/%Y %H:%M"
 # "%draw 1 20") - its result is assumed to be the very next approved
 # message, so spacer defaults treat the pair as one continuous block
 # rather than separating them like a normal message - see
-# pipeline.build_review_items and ARCHITECTURE.md's "Spacer slots" section.
+# review_item.build_review_items and ARCHITECTURE.md's "Spacer slots" section.
 DICE_COMMAND_RE = re.compile(r"^%roll \d*(d|l|h)\d+|^%draw \d+ \d+")
 
 # Default blank-line counts a spacer slot is pre-filled with (see

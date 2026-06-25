@@ -16,7 +16,7 @@ from PIL import Image
 from gui_transcription.app.chatlog import MessageEntry
 from gui_transcription.app.gui.layout_constants import ROW_PACK_PADY_PX
 from gui_transcription.app.gui.review_view import ReviewFrame
-from gui_transcription.app.pipeline import ReviewItem, build_review_items
+from gui_transcription.app.review_item import ReviewItem, build_review_items
 
 # Unlike the other GUI-backed test files, this one can't withdraw() its
 # root - a withdrawn window never gets real pixel geometry, which these

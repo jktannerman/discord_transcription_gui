@@ -262,8 +262,11 @@ gui_transcription/
     chatlog.py            # HTML parsing + date/author filtering
     cleanup.py            # post-run regex cleanup pass (structural only -
                           # OCR-misread fixes moved to ocr_corrections.py)
-    pipeline.py           # OCR batch runner, review-item building,
-                          # bulk output writing, finalization
+    pipeline.py           # OCR batch runner, bulk output writing,
+                          # finalization - orchestration glue only
+    review_item.py        # ReviewItem domain model: slot-role ordering +
+                          # spacer-token parsing shared by row building,
+                          # height estimation, keyboard nav, output writing
     logging_config.py     # JSON file + console logging setup
     gui/
       main_window.py      # run orchestration + session persistence on the

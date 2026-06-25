@@ -1,12 +1,8 @@
 from pathlib import Path
 
 from gui_transcription.app.chatlog import MessageEntry
-from gui_transcription.app.gui.main_window import (
-    _is_old_session_format,
-    _match_focus_slot,
-    _match_saved_edits,
-)
-from gui_transcription.app.pipeline import ReviewItem
+from gui_transcription.app.gui.main_window import _match_focus_slot, _match_saved_edits
+from gui_transcription.app.review_item import ReviewItem
 
 
 def _item(message_id: str) -> ReviewItem:
@@ -124,17 +120,3 @@ def test_focus_slot_translates_message_id_to_new_index_after_insertion():
     items = [_item("A"), _item("B"), _item("C")]
 
     assert _match_focus_slot(items, ["C", "ocr0"]) == (2, "ocr0")
-
-
-def test_is_old_session_format_detects_pre_spacer_slot_shape():
-    saved_texts = {"A": {"message": "edited A", "ocr": ["edited ocr"]}}
-    assert _is_old_session_format(saved_texts) is True
-
-
-def test_is_old_session_format_false_for_current_role_keyed_shape():
-    saved_texts = {"A": {"message": "edited A", "ocr0": "edited ocr"}}
-    assert _is_old_session_format(saved_texts) is False
-
-
-def test_is_old_session_format_false_for_no_saved_edits():
-    assert _is_old_session_format({}) is False

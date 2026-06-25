@@ -2,7 +2,7 @@ from pathlib import Path
 
 from gui_transcription.app.chatlog import MessageEntry
 from gui_transcription.app.gui.keyboard_nav import KeyboardNavMixin
-from gui_transcription.app.pipeline import ReviewItem
+from gui_transcription.app.review_item import ReviewItem
 
 
 class _FakeTextWidget:

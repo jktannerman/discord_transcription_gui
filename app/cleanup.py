@@ -12,14 +12,14 @@ logger = logging_config.get_logger(__name__)
 def clean_transcript(text: str) -> str:
     # Blank-line spacing (between text/images and between messages,
     # including die-roll command/result pairs) is now entirely owned by
-    # the review screen's spacer slots (see pipeline.ReviewItem.slot_roles
+    # the review screen's spacer slots (see review_item.ReviewItem.slot_roles
     # and ARCHITECTURE.md's "Spacer slots" section) - it used to be patched
     # up here by collapsing %roll/%draw runs and capping excess blank lines
     # to 3, which would silently clobber a spacer count the user
     # deliberately chose, so neither regex runs anymore.
     #
     # The "|" -> "I" OCR-misread fix that used to run here moved to
-    # ocr_corrections.py/pipeline.build_review_items, which runs on each
+    # ocr_corrections.py/review_item.build_review_items, which runs on each
     # image's text individually, before the user ever sees it, rather than
     # over the whole accumulated output file (including already-finalized
     # text from past runs) every time Finalize is clicked. What's left
