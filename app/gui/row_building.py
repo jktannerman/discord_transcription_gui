@@ -469,8 +469,28 @@ class RowBuildingMixin:
                 replay_onto(
                     text_widget,
                     log,
-                    on_op=lambda name, args, k=key: self._log_event(
-                        "box_replay_op", key=k, op=name, args=repr(args)[:200]
+                    # Fingerprint the widget's content after *every* replayed
+                    # op (not just once at the end, via box_build_replay_done)
+                    # - this is what lets a future divergence between live
+                    # and replayed execution be pinned to the exact op index
+                    # where they first disagree, by diffing this op-by-op
+                    # against attach_undo_recording's own on_op below (which
+                    # logs the equivalent live-side fingerprint at record
+                    # time), rather than only knowing the *final* results
+                    # differed.
+                    on_op=lambda name, args, k=key, t=text_widget: self._log_event(
+                        "box_replay_op",
+                        key=k,
+                        op=name,
+                        args=repr(args)[:200],
+                        # repr(args) can be far longer than the 200-char
+                        # slice above (e.g. a pasted paragraph) - this makes
+                        # it unambiguous from the log line alone whether
+                        # `args` was actually truncated, rather than leaving
+                        # a reader to guess whether a short `args` value
+                        # means the real op was short too.
+                        args_full_len=len(repr(args)),
+                        **logging_config.text_fingerprint(t.get("1.0", "end-1c")),
                     ),
                 )
             except tk.TclError:
@@ -570,8 +590,20 @@ class RowBuildingMixin:
         self._undo_detach[key] = attach_undo_recording(
             text_widget,
             log,
-            on_op=lambda name, args, k=key: self._log_event(
-                "box_op_recorded", key=k, op=name, args=repr(args)[:200], total_ops=len(log.ops)
+            # Fingerprint the widget's content after every live-recorded op
+            # too, mirroring _populate_text_box's replay-side on_op above -
+            # the pair lets a future rebuild's box_replay_op sequence be
+            # diffed op-by-op against this box's original, live
+            # box_op_recorded sequence, to find exactly where they first
+            # disagree instead of only being able to compare final results.
+            on_op=lambda name, args, k=key, t=text_widget: self._log_event(
+                "box_op_recorded",
+                key=k,
+                op=name,
+                args=repr(args)[:200],
+                args_full_len=len(repr(args)),
+                total_ops=len(log.ops),
+                **logging_config.text_fingerprint(t.get("1.0", "end-1c")),
             ),
         )
 

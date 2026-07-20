@@ -3,4 +3,4 @@
 # Add Discord usernames, campaign-specific names/jargon, or slang here as
 # they come up.
 
-gil
+centre

@@ -90,8 +90,17 @@ def setup_logging(level: int = logging.INFO) -> None:
     # competing with - and potentially evicting - LOG_FILE's lower-volume
     # lifecycle events. Not attached to the console handler: this volume of
     # output would drown out everything else printed there.
+    #
+    # maxBytes/backupCount sized generously (rather than just "big enough for
+    # a typical session") specifically so that debugging a rare, hard-to-
+    # reproduce bug isn't also a race against this file rotating the
+    # relevant window away before anyone thinks to look - a single busy
+    # review session can log deep into six figures of trace events (per-op
+    # fingerprinting added for INVESTIGATION_undo_redo_replay_divergence.md
+    # made each op noisier still), and 10MB x 3 backups worked out to only a
+    # session or two of headroom in practice.
     trace_handler = logging.handlers.RotatingFileHandler(
-        config.SCROLL_TRACE_LOG_FILE, maxBytes=10_000_000, backupCount=3, encoding="utf8"
+        config.SCROLL_TRACE_LOG_FILE, maxBytes=40_000_000, backupCount=6, encoding="utf8"
     )
     trace_handler.setFormatter(formatter)
     trace_logger = logging.getLogger(TRACE_LOGGER_NAME)

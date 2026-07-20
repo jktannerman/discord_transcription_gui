@@ -173,12 +173,32 @@ class KeyboardNavMixin:
         down right after an undo would replay back to the *un-undone* text,
         since edit_undo()/edit_redo() act on Tk's internal undo stack
         directly rather than via the widget's Tcl "insert"/"delete"
-        subcommands that text_undo.py's recording proxy observes."""
+        subcommands that text_undo.py's recording proxy observes.
+
+        Also traces this exact moment to scroll_trace.log (via
+        self._log_event, the same "box_op_recorded" event row_building.py's
+        attach_undo_recording on_op hook emits for ordinary insert/delete
+        ops) - unlike those, this marker was previously invisible in
+        scroll_trace.log entirely: it's appended directly to log.ops here,
+        never through attach_undo_recording's proxy, so nothing logged the
+        fact that a Ctrl+Z/Ctrl+Shift+Z happened until this box's *next*
+        rebuild replayed it (see INVESTIGATION_undo_redo_replay_divergence.md
+        - diagnosing that bug required inferring an undo/redo from a later
+        box_replay_op entry rather than seeing it recorded live)."""
         for key, candidate in self._text_widgets.items():
             if candidate is widget:
                 log = self._undo_logs.get(key)
                 if log is not None:
                     log.ops.append((name, ()))
+                    self._log_event(
+                        "box_op_recorded",
+                        key=key,
+                        op=name,
+                        args="()",
+                        args_full_len=len("()"),
+                        total_ops=len(log.ops),
+                        **logging_config.text_fingerprint(widget.get("1.0", "end-1c")),
+                    )
                 return
 
     def _on_page_up(self, event: Optional[tk.Event] = None) -> str:
