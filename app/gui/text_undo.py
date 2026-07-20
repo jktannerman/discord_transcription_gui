@@ -15,20 +15,35 @@ technique idlelib's WidgetRedirector uses, since it's the only way to
 observe edits made by Tk's C-level key bindings rather than by this
 codebase's own Python calls.
 
-edit_undo()/edit_redo() are recorded too (as bare markers, via
-keyboard_nav.py's _undo_text/_redo_text), even though they don't go through
-the Tcl command above (Tk performs them directly on its internal undo
-stack, not by re-invoking the widget's "insert"/"delete" subcommands) -
-without that, a box torn down partway through an undone edit would replay
-back to the *un-undone* text, since the recorded insert/delete ops alone
-don't capture that an undo happened in between.
+edit_undo()/edit_redo() are recorded too, via keyboard_nav.py's
+_undo_text/_redo_text - but NOT as bare markers that get replayed by
+calling text_widget.edit_undo()/.edit_redo() again. An earlier version of
+this module did exactly that, on the theory that replaying the same
+insert/delete call sequence would make Tk's own autoseparator logic
+re-derive the same undo-step grouping it used live, since that grouping is
+a deterministic function of the call sequence. That theory was wrong in
+practice: grouping also depends on things that never make it into `ops` at
+all - e.g. a checkbox toggle's own edit_separator() calls (see
+row_building.py's _on_ocr_checkbox_toggle), which aren't insert/delete
+calls and so are invisible to this log - so a fresh widget's replay-time
+grouping isn't guaranteed to match the live grouping, and calling
+edit_undo() against a differently-grouped stack can revert a different
+amount of text than it did live. No exception, no log line - just silently
+wrong content. See INVESTIGATION_undo_redo_replay_divergence.md for the
+reproduced case.
 
-Replaying the recorded ops back onto a freshly built widget (in the same
-order, via plain .insert()/.delete()/.edit_undo()/.edit_redo() calls) lets
-Tk's own autoseparator logic re-derive the same undo-step grouping it used
-originally, since that grouping is a deterministic function of the
-insert/delete call sequence - so there's no need to separately record where
-Tk decided to place a separator.
+Instead, a successful edit_undo()/edit_redo() is recorded as a "replace" op
+- the box's exact resulting text, captured live right after the call - so
+replay never needs to touch Tk's undo stack for this step at all; it's just
+another content mutation through the same insert/delete primitives every
+other op already uses, which is what the resolved-index fix above already
+made safe to replay. The tradeoff: a replayed "replace" collapses back into
+one atomic step on the rebuilt widget's own native stack (see its handling
+in replay_onto below, which reuses the same edit_separator()/autoseparators
+bracketing _on_ocr_checkbox_toggle uses), but a *further* Ctrl+Z pressed
+after that rebuild isn't guaranteed to have the same step boundaries it
+would have live - a smaller, user-visible granularity difference rather
+than silent content corruption.
 """
 
 import tkinter as tk
@@ -189,16 +204,24 @@ def replay_onto(text_widget: tk.Text, log: UndoLog, on_op: Optional[OpCallback] 
     a diagnostic hook for tracing exactly what a rebuilt box's content was
     reconstructed from."""
     for name, args in log.ops:
-        if name == "undo":
-            try:
-                text_widget.edit_undo()
-            except tk.TclError:
-                pass  # nothing to undo - shouldn't happen on a faithful replay
-        elif name == "redo":
-            try:
-                text_widget.edit_redo()
-            except tk.TclError:
-                pass  # nothing to redo - shouldn't happen on a faithful replay
+        if name == "replace":
+            (after_text,) = args
+            # Bracket as one atomic native undo step, the same trick
+            # row_building.py's _on_ocr_checkbox_toggle already uses for
+            # its own delete+insert pair - without it, Tk's default
+            # autoseparator behavior (a separator on every insert<->delete
+            # type transition) would split this into two steps on the
+            # rebuilt widget's stack, so a single further Ctrl+Z would only
+            # undo half of it (see this module's docstring and
+            # INVESTIGATION_undo_redo_replay_divergence.md).
+            text_widget.edit_separator()
+            autoseparators = bool(text_widget.cget("autoseparators"))
+            text_widget.configure(autoseparators=False)
+            text_widget.delete("1.0", "end")
+            text_widget.insert("1.0", after_text)
+            text_widget.edit_separator()
+            if autoseparators:
+                text_widget.configure(autoseparators=True)
         else:
             getattr(text_widget, name)(*args)
         if on_op is not None:

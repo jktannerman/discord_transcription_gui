@@ -549,6 +549,42 @@ class RowBuildingMixin:
                 key=key,
                 **logging_config.text_fingerprint(result_text),
             )
+            saved = self._saved_texts.get(key)
+            # Broader regression alarm, self-healing: self._saved_texts[key]
+            # is this box's own content as of its last teardown
+            # (ReviewFrame._destroy_row), captured independently of
+            # whatever replay just produced - so any disagreement between
+            # them is unambiguous evidence that replay landed on the wrong
+            # text, regardless of what that wrong text happens to look like
+            # (the older check right below only ever caught the narrower
+            # case of landing back on the item's bare default). See
+            # INVESTIGATION_undo_redo_replay_divergence.md - a replay that
+            # diverges like this produces no exception and no other log
+            # line, so this box would otherwise get autosaved (and
+            # eventually Finalized) with silently wrong content.
+            if saved is not None and result_text != saved:
+                logger.error(
+                    "replay result doesn't match this box's content as of "
+                    "its last teardown - possible silent replay divergence",
+                    extra=logging_config.extra(
+                        key=key,
+                        result=logging_config.text_fingerprint(result_text),
+                        saved_texts_on_record=logging_config.text_fingerprint(saved),
+                        log_baseline=logging_config.text_fingerprint(log.baseline),
+                        op_count=len(log.ops),
+                    ),
+                )
+                # Self-heal the same way the TclError guard above does:
+                # overwrite onto the last-known-good text and re-baseline,
+                # so the box shows (and next autosaves/finalizes) the
+                # correct content, and its next rebuild starts clean
+                # instead of replaying the same divergent ops again.
+                text_widget.delete("1.0", "end")
+                text_widget.insert("1.0", saved)
+                text_widget.edit_reset()
+                log.ops = []
+                log.baseline = saved
+                result_text = saved
             # Regression alarm, not a test: if this rebuild landed back on
             # the item's bare default while self._saved_texts disagrees -
             # the box had a different edit recorded as recently as its
@@ -558,8 +594,12 @@ class RowBuildingMixin:
             # possible in principle) but cheap and loud, so a future
             # regression of this shape surfaces in app.log immediately
             # instead of requiring the kind of multi-hour forensic
-            # reconstruction this bug originally took to diagnose.
-            saved = self._saved_texts.get(key)
+            # reconstruction this bug originally took to diagnose. Left
+            # unchanged (including its exact message text) so
+            # archive/INVESTIGATION_shift_tab_reconcile_lockup.md's grep
+            # instructions still work - the divergence self-heal above
+            # already means this condition can basically only still fire
+            # when self-heal itself wasn't reached (saved is None).
             if result_text == initial_text and saved is not None and saved != initial_text:
                 logger.error(
                     "box rebuilt back to its bare default despite a different "

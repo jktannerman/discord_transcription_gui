@@ -50,7 +50,7 @@ class KeyboardNavMixin:
     def _key_for_widget(self, widget: tk.Text) -> Optional[Tuple[int, str]]:
         """(item_index, role) of the box currently backed by `widget`, or
         None if it isn't one of this frame's currently-materialized boxes -
-        used both by _record_undo_marker and by the logging in
+        used both by _record_undo_replacement and by the logging in
         _undo_text/_redo_text below."""
         for key, candidate in self._text_widgets.items():
             if candidate is widget:
@@ -64,10 +64,10 @@ class KeyboardNavMixin:
         op_count_before = len(log.ops) if log is not None else None
         # Suppress the recording proxy (text_undo.py) while edit_undo()
         # runs - its own internal delete/insert side effects would
-        # otherwise get captured as ordinary ops *in addition to* the bare
-        # "undo" marker _record_undo_marker appends below, double-recording
-        # this single undo and making a later replay apply it twice (see
-        # UndoLog.suppress's docstring).
+        # otherwise get captured as ordinary ops *in addition to* the
+        # "replace" op _record_undo_replacement appends below, double-
+        # recording this single undo and making a later replay apply it
+        # twice (see UndoLog.suppress's docstring).
         if log is not None:
             log.suppress = True
         # Also suppress _on_text_modified's unconditional "any change checks
@@ -85,7 +85,7 @@ class KeyboardNavMixin:
                 extra=logging_config.extra(key=key, widget=str(widget)),
             )
         else:
-            self._record_undo_marker(widget, "undo")
+            self._record_undo_replacement(widget, "undo")
             self._resync_ocr_checkbox_after_undo(key, widget)
             logger.info(
                 "ctrl+z pressed, undo applied",
@@ -121,7 +121,7 @@ class KeyboardNavMixin:
                 extra=logging_config.extra(key=key, widget=str(widget)),
             )
         else:
-            self._record_undo_marker(widget, "redo")
+            self._record_undo_replacement(widget, "redo")
             self._resync_ocr_checkbox_after_undo(key, widget)
             logger.info(
                 "ctrl+shift+z pressed, redo applied",
@@ -165,39 +165,52 @@ class KeyboardNavMixin:
         if var is not None:
             var.set(checked)
 
-    def _record_undo_marker(self, widget: tk.Text, name: str) -> None:
-        """Append an "undo"/"redo" marker to `widget`'s UndoLog (see
+    def _record_undo_replacement(self, widget: tk.Text, source: str) -> None:
+        """Record a successful Ctrl+Z/Ctrl+Shift+Z as a "replace" op -
+        `widget`'s exact resulting text, captured right after edit_undo()/
+        edit_redo() ran - appended directly to `widget`'s UndoLog (see
         text_undo.py), so that if this box's row is later torn down and
-        rebuilt, replaying its log reproduces this undo/redo too - not just
-        the insert/delete calls either side of it. Without this, a box torn
-        down right after an undo would replay back to the *un-undone* text,
-        since edit_undo()/edit_redo() act on Tk's internal undo stack
-        directly rather than via the widget's Tcl "insert"/"delete"
-        subcommands that text_undo.py's recording proxy observes.
+        rebuilt, replaying its log reproduces this undo/redo's result too -
+        not just the insert/delete calls either side of it.
+
+        This replaced an earlier design that recorded a bare "undo"/"redo"
+        marker and replayed it by calling text_widget.edit_undo()/
+        .edit_redo() again on the rebuilt widget - which silently produced
+        the *wrong* result whenever the rebuilt widget's own native undo
+        stack happened to group the replayed insert/delete calls
+        differently than the live widget's stack was grouped at the moment
+        of the original Ctrl+Z (e.g. because of edit_separator() calls -
+        such as row_building.py's _on_ocr_checkbox_toggle makes - that
+        never appear in `ops` at all, so replay can't reproduce their
+        effect on grouping). Recording the *result* directly instead makes
+        replay of this step deterministic and content-correct regardless
+        of how replay's own native stack ends up grouped - see
+        text_undo.py's module docstring and
+        INVESTIGATION_undo_redo_replay_divergence.md for the full story.
 
         Also traces this exact moment to scroll_trace.log (via
         self._log_event, the same "box_op_recorded" event row_building.py's
         attach_undo_recording on_op hook emits for ordinary insert/delete
-        ops) - unlike those, this marker was previously invisible in
+        ops) - unlike those, this was previously invisible in
         scroll_trace.log entirely: it's appended directly to log.ops here,
         never through attach_undo_recording's proxy, so nothing logged the
         fact that a Ctrl+Z/Ctrl+Shift+Z happened until this box's *next*
-        rebuild replayed it (see INVESTIGATION_undo_redo_replay_divergence.md
-        - diagnosing that bug required inferring an undo/redo from a later
-        box_replay_op entry rather than seeing it recorded live)."""
+        rebuild replayed it."""
         for key, candidate in self._text_widgets.items():
             if candidate is widget:
                 log = self._undo_logs.get(key)
                 if log is not None:
-                    log.ops.append((name, ()))
+                    after_text = widget.get("1.0", "end-1c")
+                    log.ops.append(("replace", (after_text,)))
                     self._log_event(
                         "box_op_recorded",
                         key=key,
-                        op=name,
-                        args="()",
-                        args_full_len=len("()"),
+                        op="replace",
+                        source=source,
+                        args=repr((after_text,))[:200],
+                        args_full_len=len(repr((after_text,))),
                         total_ops=len(log.ops),
-                        **logging_config.text_fingerprint(widget.get("1.0", "end-1c")),
+                        **logging_config.text_fingerprint(after_text),
                     )
                 return
 

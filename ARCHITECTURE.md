@@ -6,14 +6,44 @@ and logging conventions, for whoever's about to change either.
 
 ## General heuristic: test where features compose, not just each feature alone
 
-A real data-loss bug (see "A box's `UndoLog` must record what it actually
-started from" below) shipped, with passing tests, because two features -
-session resume and the review screen's virtualized row rebuild - were each
-tested thoroughly in isolation, but never *together*. Each test's author
-reasonably treated their own feature as the unit under test and used the
-simplest setup that exercised it; neither setup happened to also exercise
-the other feature, so the one combination where they interacted badly
-(a resumed box, rebuilt with no further edits) went unexercised by either.
+Three separate real bugs have now shipped at the exact same seam -
+`_populate_text_box`'s replay branch (`row_building.py`), the code that
+reconstructs a torn-down review-screen text box from `UndoLog.ops` rather
+than rebuilding it fresh:
+
+1. **`UndoLog.baseline`** (see "A box's `UndoLog` must record what it
+   actually started from" below): a rebuild re-based replay onto the
+   item's static `initial_text`, silently discarding a resumed edit that
+   had zero further ops recorded on top of it.
+2. **`sel.first`/`sel.last`** (see "Symbolic marks recorded in a `UndoLog`
+   must be resolved before they can drift" below,
+   `archive/INVESTIGATION_shift_tab_reconcile_lockup.md`): a recorded
+   `delete sel.first sel.last` call replayed onto a fresh widget with
+   nothing selected, raising `TclError` and wedging the whole review
+   screen's virtualization for the rest of the session.
+3. **Undo/redo replay divergence** (see "A recorded undo/redo must not be
+   replayed by calling edit_undo()/edit_redo() again" below,
+   `INVESTIGATION_undo_redo_replay_divergence.md`): replaying a bare
+   `"undo"`/`"redo"` marker by calling `edit_undo()`/`edit_redo()` again
+   silently reverted a *different amount* of text than the live press did,
+   with no exception and no log line.
+
+All three are the same failure shape wearing different clothes: **replay
+implicitly assumed the reconstructed widget was equivalent to the live one
+it's standing in for, and something true of the live widget - its actual
+starting point, a mark's live resolution, the undo stack's grouping
+history - wasn't actually captured in the log.** The log looks like a
+complete causal description of "what happened to this box," but each time
+it turned out to be missing a piece of context that only lived on the live
+widget instance, so replay silently filled the gap with a wrong default.
+None of these three needed rapid Tab/Shift-Tab to be *possible* - a single
+ordinary teardown/rebuild is enough - but virtualization's whole design is
+"destroy and reconstruct widget state from a compact model," and rapid
+navigation is what reliably produces many teardown/rebuild cycles in a
+short window, which is what turns a latent bug into a frequent, real one.
+All three were also found by forensic reconstruction from production
+logs after the fact, not by the existing test suite, for the same
+underlying reason described below.
 
 The general failure mode: a new feature gets layered on top of existing
 code that already has its own internal state machine (here, `_populate_
@@ -26,15 +56,16 @@ rebuild may only assume what the box's own history recorded, never the
 item's static default) and written them down somewhere other than in the
 original author's head.
 
-Two concrete habits this argues for in this codebase specifically:
+Concrete habits this argues for in this codebase specifically:
 
 - When adding a feature that touches state another feature already
   manages (session resume touching the same per-box dicts virtualization
   owns), write at least one test that exercises *both* in the same test,
   in the order a real user would actually hit them - not just one test
   per feature with the other feature absent. If two such tests already
-  exist separately (as they did here), that's a sign the combined test is
-  still missing, not that coverage is already adequate.
+  exist separately (as they did for the `UndoLog.baseline` bug), that's a
+  sign the combined test is still missing, not that coverage is already
+  adequate.
 - When a piece of code's correctness depends on an assumption about how
   it got into its current state (e.g. "this log's ops are deltas from
   `initial_text`"), encode that assumption as actual stored data (`UndoLog.
@@ -43,6 +74,41 @@ Two concrete habits this argues for in this codebase specifically:
   silently out of sync with the code the moment a new caller is added that
   the original author didn't have in mind; an assumption recorded as data
   the code itself reads back can't.
+- **Resolve ambiguous/context-dependent things at record time, not replay
+  time.** Every fix here converged on the same technique: turn something
+  whose meaning depends on hidden or mutable context (a symbolic mark, an
+  undo/redo call whose effect depends on the live widget's own grouping
+  history) into something absolute and self-contained *before* it goes
+  into the log, so replay never has to re-derive it. When adding a new
+  kind of recordable interaction to these boxes (rich text tags, IME
+  composition, drag-and-drop, ...), ask up front: does this op's effect
+  depend on anything beyond its own literal arguments plus the box's
+  current text? If yes, resolve that dependency before recording it,
+  rather than finding out via a fourth production incident.
+- **Verify replay against independently-captured ground truth by default,
+  not per-bug.** `_populate_text_box`'s replay branch now unconditionally
+  compares its result against `self._saved_texts[key]` - the box's own
+  content as of its last teardown, captured completely independently of
+  whatever replay just produced - and self-heals on any mismatch. This
+  started as a targeted fix for the undo/redo bug specifically, but it's
+  actually a generic property of *any* replay, and now runs for all of
+  them. Treat it as a standing structural guarantee of this subsystem, the
+  same way `main.py`'s `root.report_callback_exception` is a blanket net
+  for *any* uncaught Tk-callback exception rather than a fix for one - not
+  as a mechanism that only needs revisiting when a fifth bug of this shape
+  turns up.
+- **A dedicated regression test per discovered bug only covers
+  combinations someone has already hit.** All three bugs above were
+  invisible to the test suite until someone hand-wrote a test for the
+  exact scenario each one turned out to require. A structurally stronger
+  complement, not yet done: a property-style test that applies a
+  randomized sequence of this subsystem's interaction types (type,
+  select+delete, undo, redo, checkbox toggle, paste) to a box in random
+  order and count, tears its row down, rebuilds it, and asserts the
+  rebuilt content matches whatever was live immediately before teardown -
+  targeting "does replay reproduce reality" as an invariant directly,
+  rather than waiting to discover the next specific combination that
+  breaks it.
 
 ## Review screen internals
 
@@ -350,6 +416,66 @@ debounce/Finalize-button machinery:
   the investigation doc's "Why nothing shows up in app.log"). This isn't
   specific to the `sel.first` bug either - it's a blanket safety net for
   whatever the *next* uncaught Tk-callback exception turns out to be.
+
+- **A recorded undo/redo must not be replayed by calling `edit_undo()`/
+  `edit_redo()` again.** (`text_undo.py`.) A real, reproduced bug, distinct
+  from the `sel.first` one above despite sharing the same file - see
+  `INVESTIGATION_undo_redo_replay_divergence.md` for the full log forensics.
+  `keyboard_nav.py`'s `_undo_text`/`_redo_text` used to append a bare
+  `("undo", ())`/`("redo", ())` marker to `UndoLog.ops`, and `replay_onto`
+  replayed it by literally calling `text_widget.edit_undo()`/`.edit_redo()`
+  again on the rebuilt widget - on the theory that replaying the same
+  insert/delete call sequence would make Tk's own autoseparator logic
+  re-derive the same undo-step grouping it used live, since that grouping
+  is a deterministic function of the call sequence. False in practice:
+  grouping also depends on things that never make it into `log.ops` at all
+  - e.g. `_on_ocr_checkbox_toggle`'s own `edit_separator()` calls, which
+  aren't insert/delete calls and so are invisible to this log - so a
+  rebuilt widget's replay-time grouping isn't guaranteed to match the live
+  grouping, and `edit_undo()` against a differently-grouped stack can
+  revert a different *amount* of text than it did live. Worse than the
+  `sel.first` bug in one way: that one crashed loudly (`TclError`), which -
+  while bad - is at least conspicuous; this one raised nothing and logged
+  nothing, so the box just silently ended up holding different content
+  than it held at teardown, which then got autosaved and could reach
+  Finalize unnoticed.
+
+  Fixed at the source, the same way `sel.first` was: a successful
+  `edit_undo()`/`edit_redo()` is now recorded as a `"replace"` op -
+  `widget`'s exact resulting text, captured live right after the call -
+  instead of a bare marker, so replay never touches Tk's undo stack for
+  this step at all; it's just another content mutation through the same
+  insert/delete primitives every other op already uses. `replay_onto`
+  brackets the replayed delete+insert with `edit_separator()`/
+  `autoseparators` suppression, the same trick `_on_ocr_checkbox_toggle`
+  already uses, so it lands as one atomic step on the rebuilt widget's own
+  stack rather than splitting into two. The tradeoff this leaves: a
+  *further* Ctrl+Z pressed after such a rebuild isn't guaranteed to have
+  the same step boundaries it would have live (e.g. one Ctrl+Z landing on
+  an intermediate empty state instead of a real prior one, recoverable with
+  a second Ctrl+Z or a Redo) - a user-visible granularity difference, not
+  silent content corruption.
+
+  `_populate_text_box`'s replay branch also gained a second, broader
+  regression check alongside the pre-existing "landed back on the item's
+  bare default" alarm (left completely unchanged, including its exact
+  message text, so `archive/INVESTIGATION_shift_tab_reconcile_lockup.md`'s
+  grep instructions still work): it compares the replay's `result_text`
+  directly against `self._saved_texts[key]` - the box's own content as of
+  its last teardown (`review_view.py`'s `_destroy_row`, captured
+  independently of whatever replay just produced) - and, on any mismatch,
+  logs `ERROR` (`"replay result doesn't match this box's content as of its
+  last teardown - possible silent replay divergence"`) and *self-heals*:
+  overwrites the widget onto `self._saved_texts[key]` and re-baselines
+  `log`, the same recovery `_populate_text_box`'s existing `TclError`
+  guard already does. This is a detection-and-recovery backstop, not a
+  substitute for the record-time fix above - it exists for whatever future
+  replay-divergence mechanism this doesn't anticipate, the same
+  relationship the `sel.first` fix's own defense-in-depth backstops have to
+  its record-time fix. Like the `TclError` recovery it mirrors, self-
+  healing discards `log.ops`, so a Ctrl+Z pressed immediately after a
+  self-heal event finds nothing to undo - preferable to silently wrong
+  content, but still a real, visible difference from an ordinary rebuild.
 
 - **Spellcheck tagging.** (`app/spellcheck.py`, wired in via
   `row_building.RowBuildingMixin._configure_spellcheck_tag`/
@@ -956,8 +1082,10 @@ Every undo/redo-capable text box's edit history (`app/gui/text_undo.py`'s
 `UndoLog`) is fully traced on both the recording and replay side - every op
 appended to `log.ops`, whether via `attach_undo_recording`'s Tcl-command-
 interception proxy (ordinary insert/delete) or `keyboard_nav.py`'s
-`_record_undo_marker` (the bare `"undo"`/`"redo"` markers Ctrl+Z/Ctrl+Shift+Z
-append directly to `log.ops`, bypassing that proxy entirely), logs a
+`_record_undo_replacement` (the `"replace"` op a successful Ctrl+Z/
+Ctrl+Shift+Z appends directly to `log.ops`, bypassing that proxy entirely -
+see "A recorded undo/redo must not be replayed by calling edit_undo()/
+edit_redo() again" above), logs a
 `box_op_recorded` event to `scroll_trace.log` carrying the widget's content
 fingerprint (`logging_config.text_fingerprint` - length + short hash)
 *immediately after* that op took effect. `_populate_text_box`'s replay
@@ -982,12 +1110,13 @@ alarm (`row_building.py`, still present unchanged, together with its
 associated grep pattern in `archive/INVESTIGATION_shift_tab_reconcile_
 lockup.md`): it compares the replay's `result_text` directly against
 `self._saved_texts[key]` - the box's own content as of its last teardown
-(`review_view.py`'s `_destroy_row`) - and logs an `ERROR`-level "replay
-result doesn't match this box's content as of its last teardown - possible
-silent replay divergence" whenever they disagree, regardless of whether the
-wrong result happens to look like the bare default or like some other,
-still-edited-looking text. The bare-default check only ever covered the
-former; this covers both, and is exactly the check
-`INVESTIGATION_undo_redo_replay_divergence.md`'s reproduced case would have
-tripped immediately instead of requiring a manual cross-session log
-reconstruction to notice at all.
+(`review_view.py`'s `_destroy_row`) - and, on any mismatch, logs an
+`ERROR`-level "replay result doesn't match this box's content as of its
+last teardown - possible silent replay divergence" and self-heals onto
+`self._saved_texts[key]` (same recovery as the `TclError` guard just above
+it), regardless of whether the wrong result happens to look like the bare
+default or like some other, still-edited-looking text. The bare-default
+check only ever covered the former; this covers both, and is exactly the
+check `INVESTIGATION_undo_redo_replay_divergence.md`'s reproduced case
+would have tripped and corrected immediately instead of requiring a manual
+cross-session log reconstruction to notice at all.

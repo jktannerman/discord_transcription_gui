@@ -114,3 +114,38 @@ def test_ordinary_typing_still_replays_correctly_after_the_index_resolution_chan
     replay_onto(fresh, log)
 
     assert fresh.get("1.0", "end-1c") == expected_text
+
+
+def test_replace_op_replays_as_one_atomic_undo_step(root):
+    """Regression test for INVESTIGATION_undo_redo_replay_divergence.md: a
+    successful Ctrl+Z/Ctrl+Shift+Z is recorded as a "replace" op
+    (keyboard_nav.py's _record_undo_replacement), not a bare "undo"/"redo"
+    marker replayed via edit_undo()/edit_redo() again - see this module's
+    docstring for why that used to silently diverge. This checks the two
+    properties that matter: replay lands on the exact recorded text, and a
+    single further edit_undo() reverts the whole "replace" in one step
+    (landing back on what preceded it) rather than splitting into a
+    delete-only intermediate state, which is what replay_onto's
+    edit_separator()/autoseparators bracketing around the "replace" case
+    exists to guarantee."""
+    log = UndoLog()
+    log.baseline = "hello"
+    log.ops = [
+        ("insert", ("end", " world")),
+        ("replace", ("goodbye",)),
+    ]
+
+    # undo=True: the real text boxes this replays onto always set this (see
+    # row_building.py's _build_editable_text_box/_build_spacer_text_box) -
+    # a plain tk.Text() defaults to undo *disabled*, which would make
+    # edit_undo() below silently do nothing rather than exercise what this
+    # test is actually checking.
+    fresh = tk.Text(root, undo=True)
+    fresh.insert("1.0", log.baseline)
+    fresh.edit_reset()
+
+    replay_onto(fresh, log)
+    assert fresh.get("1.0", "end-1c") == "goodbye"
+
+    fresh.edit_undo()
+    assert fresh.get("1.0", "end-1c") == "hello world"

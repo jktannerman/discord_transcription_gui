@@ -1,10 +1,26 @@
 # Investigation: `edit_undo()`/`edit_redo()` replay can silently reproduce the *wrong* text after a rapid Tab/Shift-Tab burst
 
 Status as of this writeup: **root cause identified and reproduced from real
-production logs (`app.log`/`scroll_trace.log`); not yet fixed.** This file
-exists so a future session (human or Claude) does not have to re-derive the
-analysis below from scratch - the log forensics alone took a full pass
-through two session logs to pin down. Read "Root cause" first.
+production logs (`app.log`/`scroll_trace.log`); fixed.** This file exists so
+a future session (human or Claude) does not have to re-derive the analysis
+below from scratch - the log forensics alone took a full pass through two
+session logs to pin down. Read "Root cause" first, then "What's still open"
+at the bottom for exactly what shipped and what's left.
+
+**Update, later session:** direction #1 below ("recommended fix direction")
+has since shipped - `keyboard_nav.py` no longer records a bare `"undo"`/
+`"redo"` marker; a successful Ctrl+Z/Ctrl+Shift+Z is recorded as a
+`"replace"` op (the box's exact resulting text) instead, and `replay_onto`
+no longer calls `edit_undo()`/`edit_redo()` during replay at all. Direction
+#2's detection also gained the self-heal recovery step that was previously
+only sketched as "still open" (see below). See `ARCHITECTURE.md`'s "A
+recorded undo/redo must not be replayed by calling edit_undo()/edit_redo()
+again" for the shipped design and its own tradeoff (a further Ctrl+Z after
+a rebuild can land on an intermediate state rather than the exact live step
+boundary - visible, not silent). Everything below this point is kept as
+originally written, as the historical record of how the bug was found and
+what was considered - only "What's still open" at the very end has been
+updated to reflect current status.
 
 **Important - do not confuse this with `archive/INVESTIGATION_shift_tab_
 reconcile_lockup.md`.** That investigation covers a *different*, already-
@@ -217,28 +233,6 @@ timestamps before assuming it's evidence of something new - two different
 bugs in the same file, at different points in the fix history, can produce
 identical-looking alarms.
 
-## On the "greyed out" symptom
-
-The user described this as something that "sometimes" happens, alongside
-the overwrite. This investigation found **no fresh evidence of it in the
-`21:03`-`21:06` sessions** examined for the overwrite case - no
-`ERROR`/`WARNING` lines, no stuck `materialized_range`, no repeated
-`"already has a live widget"` warnings anywhere near that window. The only
-concrete instance of a screen-freezing symptom found anywhere in the
-available logs is the 18:01 incident, which - per the above - belongs to
-the already-fixed `sel.first` bug and its now-shipped `_try_build_row`/
-`_reclaim_widget_if_present` hardening. It's possible the user's "greyed
-out" memory is of that same (now-resolved) incident; it's also possible
-there's a still-live, separate trigger for it that simply didn't recur in
-the two sessions checked here. **Do not assume this is fixed just because
-no fresh evidence turned up** - the absence of a repeat in two sessions is
-weak evidence at best. If it recurs, capture console output the same way
-the sel.first investigation did (`discord-transcription-gui > console.log
-2>&1`), since an uncaught exception is still the most likely explanation
-for a genuinely stuck render, and `root.report_callback_exception` should
-now route it into `app.log` automatically per the sel.first fix - so if it
-recurs, `app.log` itself is the first place to check, not the console.
-
 ## Recommended fix direction (not yet implemented)
 
 The core problem is relying on Tk's own `edit_undo()`/`edit_redo()` to
@@ -282,8 +276,11 @@ guaranteed to match. Two directions, not mutually exclusive:
 Fixing only #2 without #1 would still silently *attempt* the wrong replay
 first before catching it - probably fine given #2's recovery path, but #1 is
 the real fix; #2 is the safety net, the same relationship the sel.first
-investigation drew between its own two fix components. **#1 (the actual
-fix) is still not implemented** - only #2 (detection) has shipped so far.
+investigation drew between its own two fix components. (Historical note:
+at the time this was written, #1 was not yet implemented and only #2's
+detection had shipped - see the "Update, later session" note at the top of
+this document and "What's still open" at the bottom for current status;
+both #1 and #2's recovery step have since shipped.)
 
 ## Logging/detection coverage added as a result of this investigation
 
@@ -399,17 +396,31 @@ that same run) involve one.
 
 ## What's still open
 
-- **The actual bug is not yet fixed.** Detection is now in place (see
-  "Logging/detection coverage added as a result of this investigation"
-  above - direction #2), but direction #1 (stop relying on `edit_undo()`/
-  `edit_redo()` to re-derive matching Tk undo-grouping during replay at
-  all) has not been implemented. A box can still silently end up wrong;
-  the difference is that it now logs loudly (`"possible silent replay
-  divergence"`, `ERROR` level) instead of leaving no trace, and there's no
-  automatic recovery yet - the wrong text still stays in the box and gets
-  autosaved unless a human notices the alarm and intervenes.
-- The "greyed out" symptom's current status is unconfirmed either way - see
-  "On the 'greyed out' symptom" above.
+- **Fixed.** Both directions from "Recommended fix direction" above have
+  shipped:
+  - Direction #1 (the actual fix): a successful Ctrl+Z/Ctrl+Shift+Z is now
+    recorded as a `"replace"` op (`keyboard_nav.py`'s
+    `_record_undo_replacement`) - the box's exact resulting text, captured
+    live right after `edit_undo()`/`edit_redo()` ran - instead of a bare
+    `("undo", ())`/`("redo", ())` marker. `replay_onto` (`text_undo.py`)
+    replays a `"replace"` op as a plain, bracketed delete+insert and never
+    calls `edit_undo()`/`edit_redo()` during replay at all, so this step's
+    *content* is no longer at the mercy of whether replay's own native
+    undo stack happens to group the same way the live one did. Residual,
+    accepted tradeoff: the replayed step's own undo-*granularity* isn't
+    guaranteed to match live exactly - a further Ctrl+Z pressed after such
+    a rebuild can land on an intermediate state (e.g. empty, if the
+    replace's delete and insert ever aren't bracketed as one step) rather
+    than the same state one Ctrl+Z reached live - recoverable with a
+    second Ctrl+Z or a Redo, and visibly wrong rather than silently wrong.
+    See `ARCHITECTURE.md`'s "A recorded undo/redo must not be replayed by
+    calling edit_undo()/edit_redo() again" for the full design.
+  - Direction #2 (detection): as before, plus the self-heal recovery step
+    that was previously called out as still open - a detected mismatch now
+    overwrites the box onto `self._saved_texts[key]` and re-baselines its
+    `UndoLog`, the same recovery `_populate_text_box`'s existing `TclError`
+    guard already used, rather than only logging and leaving the wrong
+    text in place.
 - Two copies of `archive/INVESTIGATION_shift_tab_reconcile_lockup.md` exist
   in the repo: the correct, up-to-date "Status: fixed" version in
   `archive/`, and a stale, pre-fix "not yet fixed" duplicate still sitting

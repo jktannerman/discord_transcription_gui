@@ -1221,6 +1221,47 @@ def test_unreplayable_op_recovers_last_saved_text_instead_of_crashing(root, samp
     assert frame._undo_logs[key].baseline == edited_text
 
 
+def test_replay_divergence_self_heals_onto_last_saved_text(root, sample_image, caplog):
+    """Regression test for INVESTIGATION_undo_redo_replay_divergence.md's
+    direction #2 (detection + recovery): if a rebuild's replay ever lands
+    on text that disagrees with self._saved_texts[key] - the box's own
+    content as of its last teardown, captured independently of replay -
+    _populate_text_box must log loudly and self-heal onto that saved text,
+    the same recovery already used for an unreplayable (TclError) op,
+    rather than leaving the wrong (but not necessarily default-looking)
+    text sitting in the box. Injects a "replace" op with mismatched text
+    directly, since the actual record-time fix (keyboard_nav.py's
+    _record_undo_replacement) makes a real divergence very hard to trigger
+    end-to-end anymore - this exercises the detection/recovery backstop in
+    isolation, the same way test_unreplayable_op_recovers_last_saved_text_
+    instead_of_crashing does for the TclError guard right above it."""
+    items = _items(sample_image, count=5)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    key = (text_item, "message")
+    frame, _ = _build_frame(root, items)
+
+    widget = frame._text_widgets[key]
+    widget.insert("end", " an edit")
+    edited_text = widget.get("1.0", "end-1c")
+
+    frame._destroy_row(text_item)
+    assert frame._saved_texts[key] == edited_text
+    log = frame._undo_logs[key]
+    log.ops.append(("replace", ("this text was never actually seen live",)))
+
+    with caplog.at_level("ERROR"):
+        frame._build_row(text_item)
+
+    rebuilt = frame._text_widgets[key]
+    assert rebuilt.get("1.0", "end-1c") == edited_text
+    assert frame._undo_logs[key].ops == []
+    assert frame._undo_logs[key].baseline == edited_text
+    assert any(
+        "possible silent replay divergence" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def test_double_build_reclaims_the_orphaned_widgets_content_into_saved_texts(root, sample_image):
     """_build_row being called twice for the same index without an
     intervening _destroy_row should be impossible (see
