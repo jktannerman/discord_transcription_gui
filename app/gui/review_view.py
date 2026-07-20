@@ -532,6 +532,51 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
             canvas.yview_moveto(self._offset_of(index) / total_height)
         self._reconcile()
 
+    def _try_build_row(self, index: int, before: Optional[tk.Widget] = None) -> Optional[tk.Widget]:
+        """_build_row, but a single row's build failure doesn't propagate
+        out of this Tk callback and abort the rest of _sync_materialized_
+        rows's batch. row_building.py's _populate_text_box already
+        recovers from the one concrete failure mode this hit in practice
+        (a UndoLog op that can't be replayed - see
+        INVESTIGATION_shift_tab_reconcile_lockup.md), but that recovery
+        can only run for the box it happens in - this is a backstop for
+        that fix missing something, or any other future per-row build
+        failure, not a substitute for fixing what's actually raising.
+
+        Before that recovery existed, an uncaught exception here (a) left
+        this row's index missing from self._text_widgets while still
+        listed in the static self._slots nav list (later KeyError on
+        Tab/Shift-Tab), (b) aborted the rest of this batch, so every row
+        after the failure in build order was silently never built either,
+        and (c) never let _reconcile reach the self._materialized_range
+        assignment that runs after this method returns - leaving it
+        permanently stale relative to self._row_frames's real contents,
+        corrupting every subsequent reconcile's idea of what's already
+        built. Catching here instead means one bad row is missing (and
+        retried on every future reconcile that wants it) rather than the
+        whole screen wedging.
+
+        Tears down whatever this attempt did manage to build via
+        _destroy_row - which also captures into self._saved_texts/
+        self._saved_cursor anything that succeeded before the failure -
+        rather than leaving a half-built row Frame sitting in the packed
+        order. Returns None on failure so callers can skip it: leave it
+        out of newly_built, and (for the backward-growth loop) keep the
+        existing anchor rather than advancing to a row that doesn't exist."""
+        try:
+            return self._build_row(index, before=before)
+        except Exception:
+            logger.error(
+                "building this row raised an uncaught exception - tearing "
+                "down whatever was built and skipping it for now, rather "
+                "than aborting the rest of this reconcile's build batch",
+                exc_info=True,
+                extra=logging_config.extra(index=index),
+            )
+            if index in self._row_frames:
+                self._destroy_row(index)
+            return None
+
     def _sync_materialized_rows(
         self, old_range: Optional[Tuple[int, int]], new_range: Tuple[int, int]
     ) -> List[int]:
@@ -551,9 +596,10 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         if not overlap:
             for idx in list(self._row_frames):
                 self._destroy_row(idx)
-            newly_built = list(range(new_first, new_last + 1))
-            for idx in newly_built:
-                self._build_row(idx)
+            newly_built = []
+            for idx in range(new_first, new_last + 1):
+                if self._try_build_row(idx) is not None:
+                    newly_built.append(idx)
             return newly_built
 
         old_first, old_last = old_range
@@ -565,8 +611,8 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         # Growth below the old window, appended in index order at the end
         # of the pack order - mirrors the old design's forward paging.
         for idx in range(old_last + 1, new_last + 1):
-            self._build_row(idx)
-            newly_built.append(idx)
+            if self._try_build_row(idx) is not None:
+                newly_built.append(idx)
         # Growth above the old window, inserted in descending index order
         # immediately before the current first materialized row - pack()
         # has no "insert at index" beyond before=/after= a sibling, so this
@@ -575,8 +621,10 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         if new_first < old_first:
             anchor = self._row_frames.get(old_first)
             for idx in range(old_first - 1, new_first - 1, -1):
-                anchor = self._build_row(idx, before=anchor)
-                newly_built.append(idx)
+                built = self._try_build_row(idx, before=anchor)
+                if built is not None:
+                    anchor = built
+                    newly_built.append(idx)
         return newly_built
 
     # Bound on _settle_pending_geometry's retry loop - cheap (an idle-queue

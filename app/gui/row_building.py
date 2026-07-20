@@ -206,6 +206,49 @@ class RowBuildingMixin:
         self._images.register(index, image_index, image_path, image_label)
         return image_h
 
+    def _reclaim_widget_if_present(self, key: Tuple[int, str]) -> None:
+        """If `key` already has a live widget registered (should be
+        impossible - _sync_materialized_rows only builds an index that
+        isn't already in self._row_frames - but a prior bug in the
+        virtualization core's own bookkeeping could get here anyway, see
+        INVESTIGATION_shift_tab_reconcile_lockup.md), capture its current
+        content/cursor into self._saved_texts/self._saved_cursor and tear
+        it down properly - the same rescue _destroy_row gives a row that's
+        being paged out normally - instead of just overwriting
+        self._text_widgets[key] and silently orphaning whatever was typed
+        into it since its last teardown. Also destroys the stale
+        container/detaches its undo recording so no widget or Tcl command
+        is leaked."""
+        old_widget = self._text_widgets.pop(key, None)
+        if old_widget is None:
+            return
+        logger.warning(
+            "building a box for a key that already has a live widget - "
+            "reclaiming its content before replacing it, rather than "
+            "silently orphaning it",
+            extra=logging_config.extra(key=key, old_widget=str(old_widget)),
+        )
+        try:
+            text = old_widget.get("1.0", "end-1c")
+            self._saved_texts[key] = text
+            self._saved_cursor[key] = old_widget.index("insert")
+        except tk.TclError:
+            # The widget is in some unusable state - nothing more to
+            # reclaim, but still worth cleaning up below.
+            logger.error(
+                "could not read back the orphaned widget's content - "
+                "whatever it held since its last teardown is lost",
+                exc_info=True,
+                extra=logging_config.extra(key=key),
+            )
+        self._checkbox_vars.pop(key, None)
+        detach = self._undo_detach.pop(key, None)
+        if detach is not None:
+            detach()
+        container = self._text_containers.pop(key, None)
+        if container is not None:
+            container.destroy()
+
     def _build_editable_text_box(
         self,
         parent: tk.Widget,
@@ -225,19 +268,7 @@ class RowBuildingMixin:
         the label's, for a "message" box, or that image's, for an "ocrN"
         box - see _fixed_text_box_height."""
         key = (index, role)
-        if key in self._text_widgets:
-            # Should be impossible - _sync_materialized_rows only builds an
-            # index that isn't already in self._row_frames - but if it ever
-            # happens, the old widget's content (anything typed into it
-            # since its last teardown) is about to be silently orphaned:
-            # _destroy_row never runs for it, so it's never captured into
-            # self._saved_texts. Logged loudly rather than just overwriting
-            # self._text_widgets[key] without a trace.
-            logger.warning(
-                "building a box for a key that already has a live widget - "
-                "the old widget's content is about to be orphaned",
-                extra=logging_config.extra(key=key, old_widget=str(self._text_widgets[key])),
-            )
+        self._reclaim_widget_if_present(key)
         # Fixed-height container (same pack_propagate(False) trick as the
         # left column's placeholders) so the text box's height is exactly
         # _fixed_text_box_height's verdict, computed once up front, rather
@@ -330,12 +361,7 @@ class RowBuildingMixin:
         Tab/Shift-Tab and just as covered by row-teardown/resume edit
         persistence."""
         key = (index, role)
-        if key in self._text_widgets:
-            logger.warning(
-                "building a box for a key that already has a live widget - "
-                "the old widget's content is about to be orphaned",
-                extra=logging_config.extra(key=key, old_widget=str(self._text_widgets[key])),
-            )
+        self._reclaim_widget_if_present(key)
         text_container = ttk.Frame(parent, height=SPACER_BOX_HEIGHT_PX)
         text_container.pack(side="top", fill="x", pady=(0, pady_bottom))
         text_container.pack_propagate(False)
@@ -421,13 +447,64 @@ class RowBuildingMixin:
                 op_count=len(log.ops),
                 **logging_config.text_fingerprint(baseline),
             )
-            replay_onto(
-                text_widget,
-                log,
-                on_op=lambda name, args, k=key: self._log_event(
-                    "box_replay_op", key=k, op=name, args=repr(args)[:200]
-                ),
-            )
+            try:
+                replay_onto(
+                    text_widget,
+                    log,
+                    on_op=lambda name, args, k=key: self._log_event(
+                        "box_replay_op", key=k, op=name, args=repr(args)[:200]
+                    ),
+                )
+            except tk.TclError:
+                # Last-resort guard, not the primary fix - text_undo.py's
+                # recording proxy now resolves symbolic indices (sel.first,
+                # insert, end, ...) to absolute positions at record time
+                # specifically so a recorded op can't fail to replay like
+                # this in the first place. If it still does (an op recorded
+                # before that fix shipped, still sitting in a UndoLog from
+                # earlier this session, or some other replay failure this
+                # doesn't anticipate), a bad delete/insert call here used to
+                # propagate all the way out of this Tk callback uncaught -
+                # wedging the whole review screen's virtualization for the
+                # rest of the session (see
+                # INVESTIGATION_shift_tab_reconcile_lockup.md): the crash
+                # happens before self._text_widgets[key] is ever set, so
+                # every later row in the same reconcile's build batch is
+                # left silently missing, self._materialized_range is never
+                # updated, and every future rebuild of this exact box hits
+                # the exact same crash forever (the poisoned op is a
+                # permanent part of log.ops).
+                #
+                # Recover onto self._saved_texts[key] - the box's actual
+                # last-known-good content, captured independently of the
+                # (evidently unreliable) op replay by _destroy_row/
+                # _reclaim_widget_if_present every time this box's widget
+                # was last torn down - never onto `baseline` or
+                # `initial_text`, either of which could be staler than what
+                # the user actually left in this box. Then *self-heal*: wipe
+                # the poisoned ops and re-baseline the log on the recovered
+                # text, so this box's next rebuild starts clean instead of
+                # replaying the same broken op again.
+                recovered_text = self._saved_texts.get(key)
+                if recovered_text is None:
+                    recovered_text = baseline
+                logger.error(
+                    "replaying this box's undo history raised a TclError - "
+                    "recovering its last-known-good text instead of leaving "
+                    "the row (and the rest of this reconcile batch) broken",
+                    exc_info=True,
+                    extra=logging_config.extra(
+                        key=key,
+                        op_count=len(log.ops),
+                        recovered_from="saved_texts" if key in self._saved_texts else "baseline",
+                        **logging_config.text_fingerprint(recovered_text),
+                    ),
+                )
+                text_widget.delete("1.0", "end")
+                text_widget.insert("1.0", recovered_text)
+                text_widget.edit_reset()
+                log.ops = []
+                log.baseline = recovered_text
             result_text = text_widget.get("1.0", "end-1c")
             self._log_event(
                 "box_build_replay_done",

@@ -87,7 +87,60 @@ def attach_undo_recording(
     tcl = text_widget.tk
     tcl.call("rename", widget_path, shadow_path)
 
+    def _resolve_index(value):
+        """Turn a possibly-symbolic index argument (`"sel.first"`,
+        `"insert"`, `"end"`, `"1.0 lineend"`, ...) into the absolute
+        `"line.column"` string it means *right now* - queried against the
+        live widget, before whatever op is about to mutate it.
+
+        This is the fix for a real, reproduced bug: Tk's own built-in
+        Text bindings remove a selection via `delete sel.first sel.last`
+        (e.g. Delete/Backspace/typing-over-a-selection), and recording
+        that literally means replay_onto later calls
+        `text_widget.delete("sel.first", "sel.last")` on a freshly-built
+        widget that has never had anything selected - raising
+        `_tkinter.TclError: text doesn't contain any characters tagged
+        with "sel"` and wedging the whole review screen's virtualization
+        (see INVESTIGATION_shift_tab_reconcile_lockup.md). Resolving to an
+        absolute position at record time, while the mark is still live,
+        makes every recorded op replay-safe by construction - not just
+        `sel.*`, but any mark (`insert`, `end`, ...), since those are just
+        as capable of meaning something different (or nothing at all) on a
+        freshly-built widget as `sel.*` is.
+
+        Queried via the shadow (real) widget's own Tcl command directly,
+        not through `text_widget.index()` - the latter would route back
+        through this same proxy (it calls the real widget path, which is
+        this function), which works but is needlessly indirect. Best-
+        effort: if the index can't be resolved at all (e.g. a genuinely
+        nonexistent mark), the raw value is kept as a fallback - no worse
+        than before this fix existed."""
+        try:
+            # str(...): tcl.call can hand back a Tcl_Obj ("textindex")
+            # rather than a plain Python str - fine as a replay argument
+            # either way, but this module's contract ("resolved to an
+            # absolute line.column string") and every log/equality check
+            # against a recorded op both assume a plain str.
+            return str(tcl.call(shadow_path, "index", value))
+        except tk.TclError:
+            return value
+
+    def _resolve_op_args(name, rest):
+        if name == "delete":
+            return tuple(_resolve_index(arg) for arg in rest)
+        if name == "insert" and rest:
+            # Only the leading index argument is a position - the rest are
+            # (text, tags...) pairs and must be left untouched.
+            return (_resolve_index(rest[0]),) + tuple(rest[1:])
+        return rest
+
     def _proxy(*args):
+        recordable = bool(args) and args[0] in ("insert", "delete") and not log.suppress
+        # Resolved *before* the real call below actually performs the
+        # insert/delete - a symbolic mark like "sel.first" only means
+        # anything relative to the widget's state right before the
+        # mutation, not after.
+        resolved_rest = _resolve_op_args(args[0], args[1:]) if recordable else None
         try:
             result = tcl.call((shadow_path,) + args)
         except tk.TclError:
@@ -107,8 +160,8 @@ def attach_undo_recording(
             # plain Tcl catch around the real (un-redirected) command would
             # have done with the result anyway.
             return ""
-        if args and args[0] in ("insert", "delete") and not log.suppress:
-            op = (args[0], args[1:])
+        if recordable:
+            op = (args[0], resolved_rest)
             log.ops.append(op)
             if on_op is not None:
                 on_op(*op)

@@ -1057,3 +1057,142 @@ def test_finalized_ocr_edit_and_checkbox_survive_page_out_and_back_in(root, samp
     assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized ocr text"
     assert frame._checkbox_checked[key] is True
     assert frame._checkbox_vars[key].get() is True
+
+
+# --- Regression tests for INVESTIGATION_shift_tab_reconcile_lockup.md -----
+#
+# A selection-delete (Tk's own Delete/Backspace-with-a-selection binding
+# calls `delete sel.first sel.last` internally) used to get recorded
+# verbatim, then crash with an uncaught TclError the next time that box's
+# row was rebuilt on a fresh widget with nothing selected - wedging the
+# whole review screen's virtualization for the rest of the session. See
+# text_undo.py's docstring and app_tests/test_text_undo.py for the
+# lower-level mechanics; these tests exercise the same failure shape
+# end-to-end through the real ReviewFrame.
+
+
+def test_selecting_and_deleting_text_survives_a_row_being_paged_out_and_back_in(root, sample_image):
+    """The end-to-end regression test for the shift-tab reconcile lockup:
+    selecting text (as double-click/drag-select/Shift+Arrow would) and then
+    deleting it goes through Tk's own sel.first/sel.last-based delete, the
+    same call a real Delete/Backspace keypress on a selection makes. Before
+    text_undo.py resolved symbolic indices to absolute positions at record
+    time, paging this row away and back in raised an uncaught TclError from
+    inside _reconcile and never got this far."""
+    items = _items(sample_image, count=40)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    key = (text_item, "message")
+    frame, _ = _build_frame(root, items)
+    widget = frame._text_widgets[key]
+
+    widget.insert("1.0", "PREFIX ")
+    widget.tag_add("sel", "1.0", "1.7")
+    widget.delete("sel.first", "sel.last")  # mirrors a real Delete-key-on-selection
+    expected_text = widget.get("1.0", "end-1c")
+
+    # Page far away (tears the row down) and back to the top again - this
+    # is exactly where the crash used to happen, via _populate_text_box's
+    # replay_onto call.
+    frame._ensure_materialized(len(items) - 1)
+    frame._canvas.yview_moveto(0.0)
+    frame._reconcile()  # must not raise
+
+    assert key in frame._text_widgets
+    assert frame._text_widgets[key].get("1.0", "end-1c") == expected_text
+
+
+def test_unreplayable_op_recovers_last_saved_text_instead_of_crashing(root, sample_image):
+    """Last-resort guard in _populate_text_box: even if a UndoLog somehow
+    still ends up holding an op that can't be replayed (this test injects
+    one directly, bypassing the now-fixed recording proxy, to exercise the
+    guard in isolation), a rebuild must recover the box's actual
+    last-known-good text (self._saved_texts, captured at the box's last
+    teardown) rather than letting the exception propagate and wedge the
+    rest of the reconcile batch."""
+    items = _items(sample_image, count=5)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    key = (text_item, "message")
+    frame, _ = _build_frame(root, items)
+
+    widget = frame._text_widgets[key]
+    widget.insert("end", " an edit")
+    edited_text = widget.get("1.0", "end-1c")
+
+    # Tear the row down normally first (captures edited_text into
+    # self._saved_texts, exactly as a real page-away would), then poison
+    # this box's UndoLog with an op that can never replay cleanly onto a
+    # fresh widget - simulating whatever residual failure mode the
+    # record-time fix might not cover.
+    frame._destroy_row(text_item)
+    assert frame._saved_texts[key] == edited_text
+    log = frame._undo_logs[key]
+    log.ops.append(("delete", ("sel.first", "sel.last")))
+
+    frame._build_row(text_item)  # must not raise
+
+    rebuilt = frame._text_widgets[key]
+    assert rebuilt.get("1.0", "end-1c") == edited_text
+    # Self-healed: the poisoned op must not still be sitting in the log,
+    # or this exact crash would recur on the box's very next rebuild.
+    assert frame._undo_logs[key].ops == []
+    assert frame._undo_logs[key].baseline == edited_text
+
+
+def test_double_build_reclaims_the_orphaned_widgets_content_into_saved_texts(root, sample_image):
+    """_build_row being called twice for the same index without an
+    intervening _destroy_row should be impossible (see
+    _reclaim_widget_if_present's docstring) - but a bookkeeping bug in the
+    virtualization core could get here anyway, and before this fix it
+    silently discarded whatever the live widget held. Directly exercises
+    RowBuildingMixin._reclaim_widget_if_present's rescue path."""
+    items = _items(sample_image, count=5)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    key = (text_item, "message")
+    frame, _ = _build_frame(root, items)
+
+    live_widget = frame._text_widgets[key]
+    live_widget.insert("end", " typed but never torn down")
+    live_text = live_widget.get("1.0", "end-1c")
+    old_container = frame._text_containers[key]
+
+    # Simulate the "should be impossible" double-build directly, without
+    # going through _destroy_row first.
+    right_column = live_widget.master.master  # text_container -> right column frame
+    frame._build_editable_text_box(
+        right_column, text_item, "message", items[text_item].initial_message_text, 20,
+    )
+
+    assert frame._saved_texts[key] == live_text
+    assert frame._text_widgets[key] is not live_widget
+    # The orphaned widget's container must be torn down, not leaked.
+    assert str(old_container) not in root.tk.call("info", "commands")
+
+
+def test_one_row_build_failure_does_not_abort_the_rest_of_the_reconcile_batch(root, sample_image):
+    """Before _try_build_row existed, a single row raising partway through
+    _sync_materialized_rows's build loop propagated out of _reconcile
+    entirely - every later row in that same batch was silently left
+    unbuilt (still listed in self._slots, missing from self._text_widgets),
+    and self._materialized_range was never updated to match reality. This
+    directly exercises that a poisoned row is skipped, logged, and does not
+    prevent its neighbors from building."""
+    items = _items(sample_image, count=40)
+    frame, _ = _build_frame(root, items)
+    poisoned_index = len(items) - 5  # inside the far-away jump's build batch
+
+    real_build_row = frame._build_row
+
+    def _poisoned_build_row(index, before=None):
+        if index == poisoned_index:
+            raise RuntimeError("simulated row build failure")
+        return real_build_row(index, before=before)
+
+    frame._build_row = _poisoned_build_row
+
+    frame._ensure_materialized(len(items) - 1)  # must not raise
+
+    assert poisoned_index not in frame._row_frames
+    assert poisoned_index not in frame._text_widgets
+    # Its neighbors in the same jump-triggered batch must still be built.
+    assert (len(items) - 1) in frame._row_frames
+    assert frame._materialized_range is not None

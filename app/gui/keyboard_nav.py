@@ -389,7 +389,23 @@ class KeyboardNavMixin:
         scrolled to wherever its cursor happened to be, which isn't
         necessarily the start of its text."""
         self._log_event("focus_text_box", index=index, role=role)
-        widget = self._text_widgets[(index, role)]
+        widget = self._text_widgets.get((index, role))
+        if widget is None:
+            # Listed in self._slots (the static, built-once nav list) but
+            # missing from self._text_widgets - normally impossible, since
+            # _goto_slot always calls _ensure_materialized first, but a
+            # row whose build failed (see review_view.py's _try_build_row)
+            # leaves exactly this gap. Log once per attempt rather than
+            # raising KeyError on every Tab/Shift-Tab press aimed at it -
+            # that repeated-crash-on-every-keypress was itself part of the
+            # user-visible damage in
+            # INVESTIGATION_shift_tab_reconcile_lockup.md.
+            logger.warning(
+                "no live widget for this slot - its row's build likely "
+                "failed; nothing to focus",
+                extra=logging_config.extra(index=index, role=role),
+            )
+            return
         widget.focus_set()
         widget.see("insert")
         self._scroll_box_into_view((index, role))

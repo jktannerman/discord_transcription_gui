@@ -169,3 +169,34 @@ def test_move_focus_with_no_slots_at_all_does_not_raise():
     nav = _NavStub([])
     nav._move_focus(1)
     assert nav.focus_get() is None
+
+
+def test_focus_text_box_on_a_slot_with_no_live_widget_does_not_raise():
+    """A slot listed in self._slots (built once, up front) but missing from
+    self._text_widgets - normally impossible, since _goto_slot always calls
+    _ensure_materialized first, but exactly the gap a failed row build
+    leaves (see review_view.py's _try_build_row and
+    INVESTIGATION_shift_tab_reconcile_lockup.md). Before this guard, every
+    Tab/Shift-Tab press aimed at that slot raised KeyError - repeating on
+    every keypress for as long as the user kept trying to navigate there."""
+    nav = _NavStub([_text_item(), _image_item()])
+    missing_slot = (1, "ocr0")
+    del nav._text_widgets[missing_slot]
+
+    nav._focus_text_box(*missing_slot)  # must not raise
+
+    assert nav.focus_get() is None
+
+
+def test_move_focus_skips_over_nothing_specially_but_does_not_crash_on_a_missing_widget():
+    """_move_focus itself doesn't need to know about a missing widget - it
+    just calls _goto_slot, which calls the now-guarded _focus_text_box -
+    confirms the guard holds through the real Tab/Shift-Tab entry point,
+    not just a direct call."""
+    nav = _NavStub([_text_item()])
+    only_slot = (0, "message")
+    del nav._text_widgets[only_slot]
+
+    nav._move_focus(1)  # must not raise KeyError
+
+    assert nav.focus_get() is None
