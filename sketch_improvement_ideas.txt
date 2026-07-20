@@ -227,33 +227,35 @@ Ask any other questions about desired behaviour now, if needed. Before beginning
 Please make it so that the Yes/No dialog for resuming a saved session for a given chatlog shows the start date for that session, in order to reduce confusion. 
 
 
+- done
 why is it redoing OCR?
 why are some transcriptions still not being saved? connected with the above? 
 something to do with changing the regexes?
 
 shift-tabbing shows very weird behaviour. original OCR even after a transcription, images don't load. how to reproduce?
 
-
-
-
-
-
 Please carefully consider the behaviour of Tab/Shift-Tab. To be specific, these buttons can be held down, which can lead to very fast changes in position; there have been instances of users getting most of the way into a transcription, Shift-Tabbing upwards rapidly to reference something, and finding their edited versions of a given text input box overwritten with the original OCR version. Upon closing and resuming the session, the original OCR remains, requiring work to be redone. Furthermore, sometimes rapid changes in position lead to loading failing entirely - large parts 
 
 
+- idk what this was for
 Please find all spacing-related edits and confirm whether or 
 
 
 
 make it possible to open a given image in browser?
 
-Please add a right-click menu that displays upon right-clicking images. There should be three options:
+Please add a standard right-click menu that displays upon right-clicking images. There should be three options:
 
 - Open Image in Browser
 - Open Image Location
 - Copy Image
 
+As usual for these menus, it should exit upon clicking elsewhere, or pressing Esc. The user's interactions with this menu should be logged. 
 
+
+right click menu should link to the place in the chatlog
+
+It would often be useful to able to see the context surrounding a given image in the original chatlog. Please add an option to the right click menu for images which opens the chatlog in browser at the specific location of that image. Investigate the HTML examples for `id`-type tags which can be used for this purpose.
 
 
 doesn't transcribe everything
@@ -288,7 +290,7 @@ A very minor bug: the window bar does not appear black on startup. This is fixed
 image size issues? add zoom?
 
 
-right click menu should link to the place in the chatlog
+
 
 
 
