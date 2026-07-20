@@ -240,6 +240,11 @@ Please carefully consider the behaviour of Tab/Shift-Tab. To be specific, these 
 - idk what this was for
 Please find all spacing-related edits and confirm whether or 
 
+- done
+flag/highlight common misspellings? (scan upper/lowercase) just actual spellcheck with red underlines??
+check in general for words that are not words but would be words with m replaced by rn?
+
+The OCR text usually contains many misspellings. I would like a basic spellcheck feature that underlines potentially misspelt words in red. It should not apply to spacer input boxes. Consider how this would be done and assess its feasibility and the likelihood that it would lead to critical bugs. Is this a common thing to do with Tkinter? Make a plan.
 
 
 make it possible to open a given image in browser?
@@ -311,7 +316,6 @@ Please add Ctrl-F functionality for quick navigation. It should find matches in 
 
 
 
-flag/highlight common misspellings? (scan upper/lowercase) just actual spellcheck with red underlines??
 
 I's -> It's - 7
 I'l -> It'll - 1
@@ -338,8 +342,9 @@ swom -> sworn - 2
 Ifyou -> If you - 1
 
 
-check in general for words that are not words but would be words with m replaced by rn?
 
+
+dangerous regex?
 
 
 (make sure they read ARCHITECTURE.md first)

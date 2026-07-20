@@ -144,7 +144,9 @@ def build_review_items(
             # avoids that without changing how real paragraph breaks are
             # rendered.
             joined = "\n\n".join(stripped for para in paragraphs if (stripped := para.strip()))
-            initial_ocr_texts.append(ocr_corrections.apply_corrections(joined, corrections))
+            initial_ocr_texts.append(
+                ocr_corrections.apply_corrections(joined, corrections, context=image_name)
+            )
 
         image_count = len(entry.image_names)
         spacer_texts: dict[str, str] = {}

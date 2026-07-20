@@ -46,7 +46,7 @@ I'm
 # single-capital-letter abbreviation, e.g. misreading "(A)." as "A,".
 
 ,(\n+)
-,(\1)
+.\1
 # A comma just before a paragraph break should usually be a period.
 
 
@@ -55,30 +55,29 @@ C
 # Misread copyright symbol.
 
 \btum(s|ed|ing)?\b
-turn(\1)
+turn\1
 # OCR sometimes reads "rn" as "m", turning "turn"/"turns"/"turned"/
 # "turning" into "tum"/"tums"/"tumed"/"tuming".
-# NOT VERIFIED - flagged by the project owner as possibly wrong: as
-# written, the bare "tum" case (no suffix) replaces with "turn()" (empty
-# parentheses) rather than plain "turn", since \1 expands to "" when the
-# optional suffix group doesn't match. Fix to plain "turn\1" (no
-# parentheses) once confirmed, or split into a separate suffix-less entry.
 
 
 
 
 \b([Ss])til
-(\1)till
+\1till
 
 
 
 \b([Ll])eam
-(\1)earn
+\1earn
 
 
 \b([Ll])itle\b
-(\1)ittle
+\1ittle
 
 
 \b\(s\)tilll?\b
 still
+
+
+\bcomer\b
+corner

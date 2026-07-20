@@ -55,6 +55,34 @@ def test_build_review_items_applies_corrections_to_ocr_text_only():
     assert items[0].initial_message_text == "foo here too"
 
 
+def test_build_review_items_applies_multiple_corrections_in_order_across_images():
+    """Several rules, applied in file order (a later rule can see what an
+    earlier one produced), each running against the real raw OCR text
+    (joined from Tesseract-style per-paragraph output) for every image on
+    every message - not just the first image/message. Uses synthetic
+    rules unrelated to app/ocr_corrections.txt's actual contents, since
+    this is only checking that corrections get applied at all, not
+    verifying any particular real-world rule."""
+    corrections = [
+        Correction(re.compile(r"\|"), "I", ""),
+        Correction(re.compile(r"\bteh\b"), "the", ""),
+        Correction(re.compile(r"\b([A-Z])'"), r"\1'm", ""),
+    ]
+    entries = [
+        MessageEntry(message_id="m1", text_lines=[], image_names=["one.png"]),
+        MessageEntry(message_id="m2", text_lines=[], image_names=["two.png"]),
+    ]
+    file_info = {
+        "one.png": ["teh ||| store"],
+        "two.png": ["I' going teh wrong way"],
+    }
+
+    items = build_review_items(entries, file_info, image_folder=Path("/images"), corrections=corrections)
+
+    assert items[0].initial_ocr_texts == ["the III store"]
+    assert items[1].initial_ocr_texts == ["I'm going the wrong way"]
+
+
 def test_build_review_items_image_with_caption_gets_both_boxes():
     entries = [MessageEntry(message_id="m", text_lines=["look at this"], image_names=["card.png"])]
     file_info = {"card.png": ["ocr text"]}

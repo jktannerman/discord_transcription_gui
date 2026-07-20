@@ -91,3 +91,42 @@ def test_default_corrections_fix_pipe_misread_as_capital_i():
 def test_default_corrections_fix_im_missing_apostrophe():
     corrections = load_corrections(config.OCR_CORRECTIONS_FILE)
     assert apply_corrections("Im going home", corrections) == "I'm going home"
+
+
+def test_load_corrections_logs_the_full_rule_set(tmp_path, caplog):
+    path = _write(tmp_path, "a\nb\n# comment\n\nc\nd\n")
+    with caplog.at_level("INFO", logger="gui_transcription.app.ocr_corrections"):
+        load_corrections(path)
+    records = [r for r in caplog.records if r.getMessage() == "loaded OCR corrections"]
+    assert len(records) == 1
+    fields = records[0].extra_fields
+    assert fields["path"] == str(path)
+    assert fields["count"] == 2
+    assert fields["rules"] == [
+        {"find": "a", "replacement": "b"},
+        {"find": "c", "replacement": "d"},
+    ]
+
+
+def test_apply_corrections_logs_each_matching_substitution(tmp_path, caplog):
+    corrections = load_corrections(_write(tmp_path, "\\b([A-Z]),\nfix(\\1)\n"))
+    with caplog.at_level("INFO", logger="gui_transcription.app.ocr_corrections"):
+        apply_corrections("X, Y,", corrections, context="some_image.png")
+    records = [r for r in caplog.records if r.getMessage() == "OCR correction applied"]
+    assert len(records) == 1
+    fields = records[0].extra_fields
+    assert fields["context"] == "some_image.png"
+    assert fields["find"] == "\\b([A-Z]),"
+    assert fields["replacement"] == "fix(\\1)"
+    assert fields["count"] == 2
+    assert fields["substitutions"] == [
+        {"from": "X,", "to": "fix(X)"},
+        {"from": "Y,", "to": "fix(Y)"},
+    ]
+
+
+def test_apply_corrections_logs_nothing_when_no_match(tmp_path, caplog):
+    corrections = load_corrections(_write(tmp_path, "zzz\nyyy\n"))
+    with caplog.at_level("INFO", logger="gui_transcription.app.ocr_corrections"):
+        apply_corrections("no match here", corrections)
+    assert not [r for r in caplog.records if r.getMessage() == "OCR correction applied"]

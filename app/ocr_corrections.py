@@ -25,7 +25,7 @@ entry missing its replacement line.
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from . import config, logging_config
 
@@ -46,7 +46,14 @@ def load_corrections(path: Path = config.OCR_CORRECTIONS_FILE) -> List[Correctio
     entry can clean up after an earlier one, e.g. a broad fix followed by
     a narrower exception to it). A missing file just means no corrections
     run - a fresh checkout/install that hasn't created one yet behaves the
-    same as an empty one, rather than erroring."""
+    same as an empty one, rather than erroring.
+
+    Logs the full loaded rule set (every find/replacement pair, in order)
+    once, up front - separate from apply_corrections' per-substitution
+    logging of what a rule actually matched. Since this file is user-
+    editable and expected to change over time, a run's app.log otherwise
+    has no record of exactly which rules were in play for that run's
+    substitutions - this line is what ties the two together."""
     if not path.exists():
         return []
 
@@ -78,16 +85,52 @@ def load_corrections(path: Path = config.OCR_CORRECTIONS_FILE) -> List[Correctio
         corrections.append(Correction(pattern, replacement, "\n".join(comment_lines)))
 
     logger.info(
-        "loaded OCR corrections", extra=logging_config.extra(path=str(path), count=len(corrections))
+        "loaded OCR corrections",
+        extra=logging_config.extra(
+            path=str(path),
+            count=len(corrections),
+            rules=[
+                {"find": c.pattern.pattern, "replacement": c.replacement} for c in corrections
+            ],
+        ),
     )
     return corrections
 
 
-def apply_corrections(text: str, corrections: List[Correction]) -> str:
+def apply_corrections(text: str, corrections: List[Correction], context: Optional[str] = None) -> str:
     """Run every correction over `text`, in order. Callers must only ever
     pass freshly-OCR'd text, never a box's current (possibly user-edited)
     content - see the module docstring for why build_review_items is the
-    only place this is meant to be called from."""
+    only place this is meant to be called from.
+
+    Every correction that actually matches something logs one line per
+    correction (not per match, to avoid flooding the log on a pattern that
+    fires dozens of times in one block of text) recording exactly what
+    changed - the matched substrings and what they became, not just "this
+    rule ran" - so a rule that's misfiring (too broad, or clobbering text it
+    shouldn't) can be diagnosed straight from app.log without having to
+    reproduce it interactively. `context` (e.g. an image's filename) is
+    stamped onto that line to identify which image's OCR text it came from,
+    since this runs once per image across a whole batch."""
     for correction in corrections:
-        text = correction.pattern.sub(correction.replacement, text)
+        matches: list[tuple[str, str]] = []
+
+        def _replace(m: re.Match, matches: list = matches, correction: Correction = correction) -> str:
+            original = m.group(0)
+            replaced = m.expand(correction.replacement)
+            matches.append((original, replaced))
+            return replaced
+
+        text = correction.pattern.sub(_replace, text)
+        if matches:
+            logger.info(
+                "OCR correction applied",
+                extra=logging_config.extra(
+                    context=context,
+                    find=correction.pattern.pattern,
+                    replacement=correction.replacement,
+                    count=len(matches),
+                    substitutions=[{"from": original, "to": replaced} for original, replaced in matches],
+                ),
+            )
     return text
