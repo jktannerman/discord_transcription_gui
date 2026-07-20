@@ -138,6 +138,89 @@ def test_ensure_materialized_jumps_to_a_far_away_row_without_crashing(root, samp
     assert target in frame._row_frames
 
 
+def test_misspelled_word_gets_tagged_in_a_content_box(root, sample_image):
+    items = _items(sample_image)
+    frame, _ = _build_frame(root, items)
+    first_text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    key = (first_text_item, "message")
+    widget = frame._text_widgets[key]
+
+    widget.delete("1.0", "end")
+    widget.insert("1.0", "this is definitly garbld")
+    # Debounced in real use (row_building.SPELLCHECK_DEBOUNCE_MS) - run the
+    # pass directly rather than waiting on the timer, same as other tests
+    # here call internal methods directly instead of driving real timing.
+    frame._run_spellcheck(key, widget)
+
+    ranges = widget.tag_ranges("misspelled")
+    assert len(ranges) > 0
+    tagged_words = {
+        widget.get(ranges[i], ranges[i + 1]) for i in range(0, len(ranges), 2)
+    }
+    assert tagged_words == {"definitly", "garbld"}
+
+
+def test_correctly_spelled_content_box_gets_no_tag(root, sample_image):
+    items = _items(sample_image)
+    frame, _ = _build_frame(root, items)
+    first_text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    key = (first_text_item, "message")
+    widget = frame._text_widgets[key]
+
+    widget.delete("1.0", "end")
+    widget.insert("1.0", "this is a perfectly normal sentence")
+    frame._run_spellcheck(key, widget)
+
+    assert widget.tag_ranges("misspelled") == ()
+
+
+def test_spacer_box_never_gets_the_misspelled_tag_configured(root, sample_image):
+    items = _items(sample_image)
+    frame, _ = _build_frame(root, items)
+    spacer_key = next(k for k in frame._text_widgets if k[1].startswith("spacer"))
+    widget = frame._text_widgets[spacer_key]
+
+    assert "misspelled" not in widget.tag_names()
+    assert spacer_key not in frame._spellcheck_after_ids
+
+
+def test_spellcheck_tag_is_reapplied_after_a_row_is_paged_out_and_back_in(root, sample_image):
+    items = _items(sample_image)
+    frame, _ = _build_frame(root, items)
+    first_text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    key = (first_text_item, "message")
+    widget = frame._text_widgets[key]
+    widget.delete("1.0", "end")
+    widget.insert("1.0", "definitly misspelled")
+    frame._run_spellcheck(key, widget)
+    assert widget.tag_ranges("misspelled") != ()
+
+    # Page far away (tears the row down, destroying that Text widget - tags
+    # live on the widget instance, not text_undo.py's UndoLog, so they don't
+    # survive this the way edited text/undo history do) and back to the top.
+    frame._ensure_materialized(len(items) - 1)
+    frame._canvas.yview_moveto(0.0)
+    frame._reconcile()
+
+    rebuilt_widget = frame._text_widgets[key]
+    assert rebuilt_widget is not widget
+    # The rebuild schedules its own debounced pass (_build_editable_text_box)
+    # rather than applying immediately - run it directly, as above.
+    frame._run_spellcheck(key, rebuilt_widget)
+    assert rebuilt_widget.tag_ranges("misspelled") != ()
+
+
+def test_destroying_a_row_cancels_its_pending_spellcheck_timer(root, sample_image):
+    items = _items(sample_image)
+    frame, _ = _build_frame(root, items)
+    key = next(k for k in frame._text_widgets if k[1] == "message")
+    assert key in frame._spellcheck_after_ids
+
+    frame._destroy_row(key[0])
+
+    assert key not in frame._spellcheck_after_ids
+
+
 def test_edited_text_survives_a_row_being_paged_out_and_back_in(root, sample_image):
     items = _items(sample_image)
     frame, _ = _build_frame(root, items)

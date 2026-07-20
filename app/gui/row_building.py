@@ -20,7 +20,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Optional, Tuple
 
-from .. import logging_config
+from .. import logging_config, spellcheck
 from ..review_item import ReviewItem
 from . import theme
 from .image_loading import THUMBNAIL_SIZE, fitted_image_size
@@ -50,6 +50,16 @@ TEXT_BOX_INNER_PADX = 6
 # to reveal the target" positioning doesn't line it up pixel-perfectly with
 # the viewport edge). Capping below 1.0 leaves room to spare instead.
 TEXT_BOX_MAX_HEIGHT_FRACTION = 0.7
+
+# How long to wait, after the most recent keystroke, before actually running
+# a spellcheck pass on a box - keeps typing from re-scanning the whole box's
+# text on every single character.
+SPELLCHECK_DEBOUNCE_MS = 300
+
+# Tag name used to mark a misspelled word's range in a text widget (see
+# RowBuildingMixin._run_spellcheck) - never applied to a spacer box, only to
+# "message"/"ocr{N}" content boxes.
+SPELLCHECK_TAG = "misspelled"
 
 
 class RowBuildingMixin:
@@ -245,6 +255,12 @@ class RowBuildingMixin:
         detach = self._undo_detach.pop(key, None)
         if detach is not None:
             detach()
+        pending_spellcheck = self._spellcheck_after_ids.pop(key, None)
+        if pending_spellcheck is not None:
+            try:
+                old_widget.after_cancel(pending_spellcheck)
+            except tk.TclError:
+                pass
         container = self._text_containers.pop(key, None)
         if container is not None:
             container.destroy()
@@ -289,6 +305,7 @@ class RowBuildingMixin:
             highlightcolor=theme.DARK_FOCUS_HIGHLIGHT,
             padx=TEXT_BOX_INNER_PADX, pady=4,
         )
+        self._configure_spellcheck_tag(text_widget)
 
         # An "ocr" box (one per attached image) gets a checkbox in an
         # otherwise-invisible column at its top-right, tracking "edited vs.
@@ -338,6 +355,7 @@ class RowBuildingMixin:
         self._populate_text_box(key, text_widget, initial_text)
         self._text_widgets[key] = text_widget
         self._text_containers[key] = text_container
+        self._schedule_spellcheck(key, text_widget)
 
     def _build_spacer_text_box(
         self,
@@ -640,6 +658,69 @@ class RowBuildingMixin:
             scrollbar.pack(side="right", fill="y", before=before_widget)
         scrollbar.set(first, last)
 
+    def _configure_spellcheck_tag(self, text_widget: tk.Text) -> None:
+        """Configure this box's "misspelled" tag - a straight red underline
+        (Tk doesn't support wavy/squiggly underlines) via the tag-level
+        "underlinefg" option, so the underline is red without recoloring the
+        word's own text. That option was only added in Tk 8.6.6 - guarded
+        with a fallback to a plain (uncolored) underline for the rare case
+        of an older Tk, rather than raising and losing the text box
+        entirely over a cosmetic feature."""
+        try:
+            text_widget.tag_configure(
+                SPELLCHECK_TAG, underline=True, underlinefg=theme.SPELLCHECK_UNDERLINE
+            )
+        except tk.TclError:
+            logger.warning(
+                "this Tk version doesn't support underlinefg - falling back "
+                "to a plain (uncolored) underline for misspelled words",
+            )
+            text_widget.tag_configure(SPELLCHECK_TAG, underline=True)
+
+    def _schedule_spellcheck(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
+        """Debounce a spellcheck pass on this box: cancel whatever pass was
+        already pending for it and schedule a fresh one SPELLCHECK_DEBOUNCE_MS
+        from now. Called on every keystroke (_on_text_modified) as well as
+        right after a box is (re)built (_build_editable_text_box) - the
+        latter so a rebuilt row's tags (which don't survive the old widget
+        being destroyed - see text_undo.py's note that tag_add/tag_remove
+        aren't recorded/replayed) are always recomputed rather than left
+        blank until the user's next keystroke in that specific box."""
+        pending = self._spellcheck_after_ids.pop(key, None)
+        if pending is not None:
+            try:
+                text_widget.after_cancel(pending)
+            except tk.TclError:
+                pass
+        self._spellcheck_after_ids[key] = text_widget.after(
+            SPELLCHECK_DEBOUNCE_MS,
+            lambda k=key, t=text_widget: self._run_spellcheck(k, t),
+        )
+
+    def _run_spellcheck(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
+        """Actually run the spellcheck pass and (re)tag this box's misspelled
+        words. Guarded against the widget having been destroyed (its row
+        paged out) between this being scheduled and it firing - _destroy_row/
+        _reclaim_widget_if_present already cancel any pending timer up front,
+        but this is a cheap last-resort backstop rather than relying on that
+        alone, the same defensive posture the rest of this module takes
+        toward a torn-down widget (see _populate_text_box's TclError guard)."""
+        self._spellcheck_after_ids.pop(key, None)
+        try:
+            content = text_widget.get("1.0", "end-1c")
+        except tk.TclError:
+            return
+        try:
+            spans = spellcheck.find_misspelled_spans(content)
+            text_widget.tag_remove(SPELLCHECK_TAG, "1.0", "end")
+            for start, end in spans:
+                text_widget.tag_add(SPELLCHECK_TAG, f"1.0+{start}c", f"1.0+{end}c")
+        except tk.TclError:
+            logger.warning(
+                "spellcheck tagging failed on a box that was torn down mid-pass",
+                extra=logging_config.extra(key=key),
+            )
+
     def _on_text_modified(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
         """Bound to a text box's <<Modified>> event. The box's own height is
         now fixed at build time (see _fixed_text_box_height) and never
@@ -671,6 +752,15 @@ class RowBuildingMixin:
             **logging_config.text_fingerprint(text_widget.get("1.0", "end-1c")),
         )
         text_widget.edit_modified(False)
+        # Re-run spellcheck on any real content change, regardless of focus -
+        # unlike the had_focus-gated logic below, a box's underline should
+        # reflect its actual current text whether or not the user is looking
+        # at it right now (e.g. an undo/redo, or a checkbox toggle swapping
+        # the box's content). Never scheduled for a spacer box - those never
+        # get the "misspelled" tag configured in the first place (see
+        # _build_spacer_text_box), and hold nothing but "\n" tokens anyway.
+        if not key[1].startswith("spacer"):
+            self._schedule_spellcheck(key, text_widget)
         # Gated on had_focus for the same reason _scroll_box_into_view below
         # already is: a build-time insert/replay (see _populate_text_box)
         # fires this same deferred <<Modified>> event, but the widget is

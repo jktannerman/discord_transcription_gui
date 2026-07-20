@@ -20,6 +20,7 @@ DARK_TEXT_BG = "#171717"  # Darker than DARK_BG, so text boxes read as the
                           # panel's DARK_BG_ALT background next to them)
 DARK_INSERT = "white"  # Brighter text-cursor color than DARK_FG
 DARK_FOCUS_HIGHLIGHT = "#569cd6"  # Border color for a focused input box
+SPELLCHECK_UNDERLINE = "#ff5555"  # Underline color for a flagged misspelling
 
 TEXT_FONT_FAMILY = "Consolas"
 TEXT_FONT_SIZE = 14

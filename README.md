@@ -201,6 +201,18 @@ What's in scope for v1:
    unchecked and the box is visually indistinguishable from an ordinary
    fresh OCR result.
 
+   Every "message"/"ocr" box also gets a basic spellcheck: a word not found
+   in a standard English dictionary is underlined in red, the same way a
+   word processor flags one - checked shortly after you stop typing (not on
+   every keystroke), against a small user-editable whitelist
+   (`app/spellcheck_whitelist.txt`, one word per line) for Discord
+   usernames/slang that would otherwise be flagged every time, and skipping
+   short words and ALL-CAPS acronyms to keep obvious false positives down.
+   It's a plain dictionary lookup, not a language model, so it's meant to
+   catch obvious OCR garbling rather than to be a correctness oracle for
+   informal chat text - and it never applies to a spacer box (see below),
+   which holds nothing but `\n` tokens anyway.
+
    Between every text/image piece - text and its first image, one image
    and the next, and the gap before the next message - there's also a
    **spacer box**: a one-line-tall, editable box holding nothing but
@@ -310,6 +322,9 @@ gui_transcription/
     ocr.py                # Tesseract OCR behind a swappable backend interface
     ocr_corrections.py     # loads/applies ocr_corrections.txt's regex fixes
     ocr_corrections.txt    # user-editable OCR-misread find/replace rules
+    spellcheck.py          # dictionary-lookup spellcheck (misspelled word
+                          # spans) + spellcheck_whitelist.txt loading
+    spellcheck_whitelist.txt  # user-editable words never flagged as misspelled
     chatlog.py            # HTML parsing + date/author filtering
     cleanup.py            # post-run regex cleanup pass (structural only -
                           # OCR-misread fixes moved to ocr_corrections.py)

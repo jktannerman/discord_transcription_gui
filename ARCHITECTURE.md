@@ -351,6 +351,47 @@ debounce/Finalize-button machinery:
   specific to the `sel.first` bug either - it's a blanket safety net for
   whatever the *next* uncaught Tk-callback exception turns out to be.
 
+- **Spellcheck tagging.** (`app/spellcheck.py`, wired in via
+  `row_building.RowBuildingMixin._configure_spellcheck_tag`/
+  `_schedule_spellcheck`/`_run_spellcheck`.) A misspelled word is underlined
+  in red via a plain Tk text tag (`tag_configure("misspelled", underline=True,
+  underlinefg=...)`) - a straight underline, since Tk has no wavy/squiggly
+  underline primitive. This was the first use of `tk.Text` tags anywhere in
+  this codebase, which mattered for one reason: `text_undo.py`'s recording
+  proxy (see "A box's UndoLog must record what it actually started from"
+  above) only records `insert`/`delete` calls - `tag_add`/`tag_remove` pass
+  through unrecorded, so spellcheck tagging can't corrupt or interact with
+  undo history the way a naive approach touching the widget's content might.
+  The tradeoff: tags live on the `tk.Text` *instance*, not in any per-box
+  bookkeeping dict, so they don't survive a row being torn down and rebuilt
+  (a fresh widget) - `_build_editable_text_box` schedules a fresh spellcheck
+  pass on every (re)build, not just the first, to compensate. Applied only to
+  "message"/"ocr{N}" boxes - `_build_spacer_text_box` never calls into this
+  at all, so a spacer box (holding nothing but `\n` tokens) is never even
+  candidate for the tag.
+
+  Debounced per box (`SPELLCHECK_DEBOUNCE_MS`, via `text_widget.after`) so
+  typing doesn't re-scan a box's text on every keystroke - `_destroy_row`/
+  `_reclaim_widget_if_present` cancel a box's pending timer before tearing
+  its widget down, the same defensive posture as everything else here that
+  reaches back into an about-to-be-destroyed widget. That per-row
+  cancellation isn't enough on its own, though: rows still materialized when
+  the *whole* `ReviewFrame` goes away (screen switch, app close, or a test's
+  `root.destroy()`) never go through `_destroy_row` at all, so their pending
+  timers would otherwise leak. This surfaced immediately as a real,
+  reproduced test failure - not a hypothetical - once spellcheck shipped:
+  `test_review_view.py`'s GUI tests build and tear down many `ReviewFrame`s
+  (and their many text boxes) back to back in the same process, and Tcl's
+  `after` timer queue turned out to be shared across every `tk.Tk()`
+  interpreter in that process (it's per-thread, not per-interpreter) - so
+  leaked timers from earlier tests piled up and measurably slowed a later
+  test's own `update()`/`update_idletasks()` calls, enough to occasionally
+  exhaust `_settle_pending_geometry`'s bounded retry count (see "A row's
+  first-ever build can measure as winfo_height()==1" above) and leave that
+  test's own first row never actually built. Fixed the same way
+  `self._update_job`/`self._initial_position_job` already were: the
+  `ReviewFrame`'s own `<Destroy>` handler now cancels every remaining entry
+  in `self._spellcheck_after_ids` too, not just per-row teardown.
 - **Slot-addressed boxes.** Since a row can now have a "message" box (a
   copy of the message's own text) and any number of OCR boxes - one per
   attached image, since a single message can have more than one - a
@@ -746,7 +787,7 @@ eligible for storage and pre-population.
 
 ## Test coverage
 
-256 tests total: 186 run by default, plus 70 marked `gui` (build a real,
+271 tests total: 195 run by default, plus 76 marked `gui` (build a real,
 withdrawn Tk window - see the README's "Testing" section) that are skipped
 unless run with `-m gui` or `-m ""`.
 
@@ -799,6 +840,13 @@ the deepest coverage:
   re-deriving the right checked state after undoing a toggle.
 - The editable text box height rule (`_fixed_text_box_height`'s capping
   logic).
+- Spellcheck tagging (`test_spellcheck.py`, pure logic - flagged/not-flagged
+  words, short-word and ALL-CAPS skipping, whitelist loading/caching - plus
+  `test_review_view.py`'s GUI tests for the real `tk.Text` tag behavior: a
+  misspelled word getting tagged, a correctly-spelled box getting no tag, a
+  spacer box never having the tag configured at all, the tag being
+  recomputed after a row is paged out and rebuilt onto a fresh widget, and a
+  torn-down row's pending debounce timer actually getting cancelled).
 - Image preview sizing/visibility (`app/gui/image_loading.py`'s
   aspect-fit math and its load/unload viewport-boundary decision, plus
   real load/failure/unload behavior against actual Tk widgets).

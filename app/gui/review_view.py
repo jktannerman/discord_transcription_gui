@@ -270,6 +270,12 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         # box's widget is destroyed, to release the Tcl command the
         # recording proxy installed.
         self._undo_detach: Dict[Tuple[int, str], Callable[[], None]] = {}
+        # after()-id of a pending debounced spellcheck pass for a currently-
+        # built content box (see row_building.py's _schedule_spellcheck) -
+        # only ever set for "message"/"ocr{N}" boxes, never a spacer box.
+        # Cancelled in _destroy_row/_reclaim_widget_if_present so a timer
+        # never fires against an already-destroyed widget.
+        self._spellcheck_after_ids: Dict[Tuple[int, str], str] = {}
         # The slot whose box had focus at the moment its row was torn down
         # (see _destroy_row), restored once that row is rebuilt - see
         # _build_row. None means either nothing was focused when a row was
@@ -377,6 +383,28 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
             if self._initial_position_job is not None:
                 self.after_cancel(self._initial_position_job)
                 self._initial_position_job = None
+            # Rows still materialized when the whole frame goes away (screen
+            # switch, app close, or - in tests - the root window being torn
+            # down) never go through _destroy_row, so any of their pending
+            # debounced spellcheck timers (row_building.py's
+            # _schedule_spellcheck) would otherwise fire after this frame's
+            # widgets are gone. Left uncancelled, Tcl still queues and
+            # attempts them - harmless individually (each just logs
+            # "invalid command name" and no-ops), but real GUI tests run many
+            # ReviewFrames back to back in the same process, and Tcl's timer
+            # queue is shared across all of them (it's per-thread, not
+            # per-interpreter) - enough leaked timers from earlier tests can
+            # measurably delay a later test's own update()/update_idletasks()
+            # calls, which _settle_pending_geometry's bounded retry counts
+            # assume stay cheap (see its docstring). Cancelling explicitly
+            # here, the same way self._update_job/self._initial_position_job
+            # already are, keeps that assumption true.
+            for after_id in self._spellcheck_after_ids.values():
+                try:
+                    self.after_cancel(after_id)
+                except tk.TclError:
+                    pass
+            self._spellcheck_after_ids.clear()
 
         self.bind("<Destroy>", _on_destroy)
 
@@ -499,6 +527,12 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
             detach = self._undo_detach.pop(key, None)
             if detach is not None:
                 detach()
+            pending_spellcheck = self._spellcheck_after_ids.pop(key, None)
+            if pending_spellcheck is not None:
+                try:
+                    text_widget.after_cancel(pending_spellcheck)
+                except tk.TclError:
+                    pass
         self._images.unregister_row(index)
         row.destroy()
 

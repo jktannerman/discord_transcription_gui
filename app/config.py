@@ -35,6 +35,13 @@ BREAK_MARKER = "[BREAK]"
 # runtime state.
 OCR_CORRECTIONS_FILE = Path(__file__).resolve().parent / "ocr_corrections.txt"
 
+# User-editable list of words the review screen's spellcheck (see
+# spellcheck.py) should never flag - one word per line, blank lines and
+# lines starting with "#" ignored - for Discord usernames/slang/jargon that
+# would otherwise be (mis)flagged on every box that contains them. Kept next
+# to the source for the same reason OCR_CORRECTIONS_FILE is.
+SPELLCHECK_WHITELIST_FILE = Path(__file__).resolve().parent / "spellcheck_whitelist.txt"
+
 APP_DATA_DIR = Path.home() / ".discord_transcription_gui"
 RUN_DATE_FILE = APP_DATA_DIR / "run_dates.json"
 # {image_folder: {image_name: [paragraphs]}} - one entry per image folder,
