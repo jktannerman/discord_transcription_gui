@@ -273,7 +273,11 @@ class App:
                 prompt = (
                     "A saved in-progress review session exists for this chatlog. Resume it?"
                 )
-            if messagebox.askyesno("Resume previous session", prompt):
+            resume_choice = messagebox.askyesnocancel("Resume previous session", prompt)
+            if resume_choice is None:
+                # Cancel - leave the saved session untouched and don't start a run.
+                return
+            if resume_choice:
                 self._resume_session(html_path, pending_session)
                 return
             state.clear_session(html_path)

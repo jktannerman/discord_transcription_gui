@@ -84,16 +84,19 @@ def app(tmp_path, monkeypatch):
     root.destroy()
 
 
-def _start(app, setup, *, resume_answer=None):
+_NO_DIALOG = object()
+
+
+def _start(app, setup, *, resume_answer=_NO_DIALOG):
     app._setup_frame = setup
     begin_run_calls = []
     app._begin_run = lambda *a, **kw: begin_run_calls.append((a, kw))
     resume_calls = []
     app._resume_session = lambda *a, **kw: resume_calls.append((a, kw))
-    if resume_answer is None:
+    if resume_answer is _NO_DIALOG:
         app._on_start()
     else:
-        with patch.object(main_window.messagebox, "askyesno", return_value=resume_answer):
+        with patch.object(main_window.messagebox, "askyesnocancel", return_value=resume_answer):
             app._on_start()
     return begin_run_calls, resume_calls
 
@@ -163,6 +166,17 @@ def test_pending_session_declined_clears_it_and_starts_a_fresh_run(app):
     assert resume_calls == []
     assert len(begin_run_calls) == 1
     clear_session.assert_called_once_with("chat.html")
+
+
+def test_pending_session_cancelled_leaves_it_untouched_and_does_not_start(app):
+    setup = _FakeSetupFrame()
+    with patch.object(main_window.state, "load_session", return_value={"html_path": "chat.html"}), \
+         patch.object(main_window.state, "clear_session") as clear_session:
+        begin_run_calls, resume_calls = _start(app, setup, resume_answer=None)
+
+    assert begin_run_calls == []
+    assert resume_calls == []
+    clear_session.assert_not_called()
 
 
 def test_pending_session_accepted_resumes_instead_of_starting_fresh(app):
