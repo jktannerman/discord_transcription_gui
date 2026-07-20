@@ -207,6 +207,7 @@ Upon tabbing/shift-tabbing into a text input box, please ensure that the entire 
 Please improve the backups of the user-edited transcriptions. Currently, there is only one backup, which is edited more or less immediately. I would like backups of the data at the end of the last N sessions before the current saved state, where N should be 3 for now.
 
 
+- done
 checkbox that can be checked to restore original state; automatically unchecks when user has made edits; can be rechecked to restore edited mode; only overwritten when user makes edits to unchecked
 
 To each text input box that corresponds to a chatlog image, please add a checkbox that behaves as follows:
@@ -222,6 +223,12 @@ To each text input box that corresponds to a chatlog image, please add a checkbo
 Ask any other questions about desired behaviour now, if needed. Before beginning work, read `./gui_transcription/ARCHITECTURE.md` and make a plan.
 
 
+
+why is it redoing OCR?
+why are some transcriptions still not being saved? connected with the above? 
+something to do with changing the regexes?
+
+shift-tabbing shows very weird behaviour. original OCR even after a transcription, images don't load
 
 
 Please improve behavior or/and test coverage around Tab/Shift-Tab. To be specific, these buttons can be held down, which can lead to very fast changes in position.

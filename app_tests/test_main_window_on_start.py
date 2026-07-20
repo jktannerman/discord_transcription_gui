@@ -201,6 +201,78 @@ def test_pending_session_declined_archives_it_before_clearing(app):
     archive_session_backup.assert_called_once_with("chat.html", pending)
 
 
+# -- _resume_session tests ---------------------------------------------------
+
+def _resume_session_directly(app, session):
+    """Call app._resume_session with _begin_run mocked out, returning the
+    args/kwargs it was called with (or None if it wasn't called)."""
+    begin_run_calls = []
+    app._begin_run = lambda *a, **kw: begin_run_calls.append((a, kw))
+    app._resume_session("chat.html", session)
+    return begin_run_calls
+
+
+def test_resume_session_forces_use_cache_true_even_when_session_saved_false(app, tmp_path):
+    """Resuming must never redo OCR - newly added images are handled by a
+    later fresh run, not a resume. A session's saved use_cache reflects
+    whatever the *original* run was started with (see _snapshot_and_save),
+    which could be False (e.g. that first run deliberately forced fresh OCR)
+    - that stale value must not leak into every future resume of the same
+    session and keep re-running OCR forever."""
+    session = {
+        "html_path": str(tmp_path / "chat.html"),
+        "image_folder": str(tmp_path / "images"),
+        "output_path": str(tmp_path / "out.txt"),
+        "start_time": 0,
+        "approved_author_ids": None,
+        "use_cache": False,
+    }
+
+    begin_run_calls = _resume_session_directly(app, session)
+
+    assert len(begin_run_calls) == 1
+    _, kwargs = begin_run_calls[0]
+    assert kwargs["use_cache"] is True
+
+
+def test_resume_session_forces_use_cache_true_when_saved_use_cache_missing(app, tmp_path):
+    """use_cache is no longer read from the saved session at all, so its
+    absence (e.g. an older session file predating this field) must not be
+    treated as a malformed session - resuming still forces True."""
+    session = {
+        "html_path": str(tmp_path / "chat.html"),
+        "image_folder": str(tmp_path / "images"),
+        "output_path": str(tmp_path / "out.txt"),
+        "start_time": 0,
+        "approved_author_ids": None,
+    }
+
+    begin_run_calls = _resume_session_directly(app, session)
+
+    assert len(begin_run_calls) == 1
+    _, kwargs = begin_run_calls[0]
+    assert kwargs["use_cache"] is True
+
+
+def test_resume_session_discards_session_missing_other_required_fields(app, tmp_path):
+    """A session missing a field _resume_session still actually needs (not
+    use_cache, which is no longer read) is discarded via clear_session,
+    same as before this change."""
+    session = {
+        "html_path": str(tmp_path / "chat.html"),
+        # image_folder missing
+        "output_path": str(tmp_path / "out.txt"),
+        "start_time": 0,
+        "approved_author_ids": None,
+    }
+
+    with patch.object(main_window.state, "clear_session") as clear_session:
+        begin_run_calls = _resume_session_directly(app, session)
+
+    assert begin_run_calls == []
+    clear_session.assert_called_once_with("chat.html")
+
+
 # -- _on_finalize_clicked tests -----------------------------------------------
 
 def _make_text_item(message_id: str) -> ReviewItem:

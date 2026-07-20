@@ -386,7 +386,7 @@ also runs Tcl/Tk's one-time subsystem init. Run
 `py -3.13 -m pytest gui_transcription\app_tests -v -m gui` to include just
 those, or add `-m ""` to run the whole suite including them.
 
-183 tests (242 including the `gui`-marked ones, which now also cover a
+183 tests (245 including the `gui`-marked ones, which now also cover a
 box's undo/redo history surviving its row being paged out and back in -
 `text_undo.py` - a focused box always scrolling fully into view, not
 just its row, a far-away Tab/resume target landing fully within the
@@ -443,7 +443,9 @@ message more images than the saved session knew about, and ignoring any
 extras if it gave it fewer), and a stale focus slot falling back to no
 restore), `App._on_start`'s
 validation branches (missing fields, an invalid start date, an empty
-approved-users list) and its pending-session resume prompt, the malformed-
+approved-users list) and its pending-session resume prompt (including
+`_resume_session` always forcing `use_cache=True` regardless of what the
+saved session originally recorded, so resuming never redoes OCR), the malformed-
 chatlog error path (`App._on_ocr_done` surfacing a clear dialog instead of
 letting the error escape uncaught from a background Tk callback), image
 preview sizing/visibility (`app/gui/image_loading.py`'s aspect-fit math and

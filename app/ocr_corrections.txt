@@ -78,3 +78,7 @@ turn(\1)
 
 \b([Ll])itle\b
 (\1)ittle
+
+
+\b\(s\)tilll?\b
+still

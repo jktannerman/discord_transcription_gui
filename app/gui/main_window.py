@@ -360,13 +360,24 @@ class App:
 
     def _resume_session(self, html_path_key: str, session: dict) -> None:
         """Re-run the saved session's inputs through the normal OCR/parse
-        pipeline (use_cache forced from the saved value, so resuming
-        doesn't necessarily redo OCR) - _show_review then re-applies the
-        saved edits/focus/scroll position once that finishes, the same way
-        a fresh run's review items are built either way. html_path_key is
-        the exact key this session was loaded under (the chatlog's HTML
-        path), used to clear the right chatlog's saved session if it turns
-        out to be malformed."""
+        pipeline - _show_review then re-applies the saved edits/focus/scroll
+        position once that finishes, the same way a fresh run's review items
+        are built either way. html_path_key is the exact key this session
+        was loaded under (the chatlog's HTML path), used to clear the right
+        chatlog's saved session if it turns out to be malformed.
+
+        use_cache is always forced to True here, regardless of the setup
+        screen's checkbox or what the session originally recorded: resuming
+        is, by definition, continuing a review that already has OCR results
+        for this image folder (they were produced by that same session's
+        first run, or an earlier one), so redoing OCR on resume is always
+        wasted work - any newly-added images since then are handled by a
+        later fresh run, not a resume. Without this override, a session
+        whose *first* run happened to start with the checkbox unticked would
+        keep reusing that stale False forever (session["use_cache"] is only
+        ever the value the session was originally started with - see
+        _snapshot_and_save), redoing the full OCR batch on every resume even
+        though a matching cache already exists on disk."""
         try:
             html_path = Path(session["html_path"])
             image_folder = Path(session["image_folder"])
@@ -374,7 +385,6 @@ class App:
             start_time = session["start_time"]
             raw_ids = session["approved_author_ids"]
             approved_author_ids = set(raw_ids) if raw_ids is not None else None
-            use_cache = session["use_cache"]
         except KeyError as exc:
             logger.warning(
                 "malformed saved session, discarding",
@@ -387,7 +397,7 @@ class App:
         self._resume_payload = session
         self._begin_run(
             html_path, image_folder, output_path, start_time, approved_author_ids,
-            use_cache=use_cache,
+            use_cache=True,
         )
 
     # -- autosave -------------------------------------------------------------
