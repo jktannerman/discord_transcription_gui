@@ -63,3 +63,52 @@ def test_default_whitelist_file_parses_without_error(monkeypatch):
     monkeypatch.setattr(spellcheck, "_whitelist_loaded", False)
     words = spellcheck._get_whitelist(config.SPELLCHECK_WHITELIST_FILE)
     assert isinstance(words, set)
+
+
+def test_blacklisted_word_is_flagged_even_though_dictionary_knows_it(monkeypatch):
+    monkeypatch.setattr(spellcheck, "_blacklist_loaded", True)
+    monkeypatch.setattr(spellcheck, "_blacklist", {"there"})
+    text = "Put it over there please"
+    spans = spellcheck.find_misspelled_spans(text)
+    assert len(spans) == 1
+    start, end = spans[0]
+    assert text[start:end] == "there"
+
+
+def test_word_in_both_whitelist_and_blacklist_is_not_flagged(monkeypatch):
+    monkeypatch.setattr(spellcheck, "_whitelist_loaded", True)
+    monkeypatch.setattr(spellcheck, "_whitelist", {"there"})
+    monkeypatch.setattr(spellcheck, "_blacklist_loaded", True)
+    monkeypatch.setattr(spellcheck, "_blacklist", {"there"})
+    assert spellcheck.find_misspelled_spans("Put it over there please") == []
+
+
+def test_get_blacklist_parses_file_ignoring_blanks_and_comments(tmp_path, monkeypatch):
+    path = tmp_path / "blacklist.txt"
+    path.write_text("# comment\n\nAlice\nBOB\n", encoding="utf8")
+    monkeypatch.setattr(spellcheck, "_blacklist_loaded", False)
+    assert spellcheck._get_blacklist(path) == {"alice", "bob"}
+
+
+def test_get_blacklist_missing_file_returns_empty_set(tmp_path, monkeypatch):
+    monkeypatch.setattr(spellcheck, "_blacklist_loaded", False)
+    assert spellcheck._get_blacklist(tmp_path / "missing.txt") == set()
+
+
+def test_get_blacklist_caches_after_first_load(tmp_path, monkeypatch):
+    path = tmp_path / "blacklist.txt"
+    path.write_text("alice\n", encoding="utf8")
+    monkeypatch.setattr(spellcheck, "_blacklist_loaded", False)
+    first = spellcheck._get_blacklist(path)
+    path.write_text("bob\n", encoding="utf8")
+    # Second call reuses the cached result rather than re-reading the file -
+    # same convention as the whitelist's per-process loading.
+    assert spellcheck._get_blacklist(path) is first
+
+
+def test_default_blacklist_file_parses_without_error(monkeypatch):
+    # The real, user-editable app/spellcheck_blacklist.txt - this just
+    # confirms it stays well-formed as it's edited over time.
+    monkeypatch.setattr(spellcheck, "_blacklist_loaded", False)
+    words = spellcheck._get_blacklist(config.SPELLCHECK_BLACKLIST_FILE)
+    assert isinstance(words, set)

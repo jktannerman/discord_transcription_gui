@@ -1,0 +1,10 @@
+# One word per line - always flagged as (potentially) misspelled on the
+# review screen, regardless of case, even though the dictionary treats it as
+# a real word. Blank lines and lines starting with "#" are ignored. A word
+# listed in both this file and spellcheck_whitelist.txt is never flagged -
+# the whitelist wins.
+#
+# Add real English words here that keep turning out to be OCR misreads or
+# typos for something else in this transcript's context (e.g. a common word
+# that's frequently confused with a similar-looking Discord username) as
+# they come up.

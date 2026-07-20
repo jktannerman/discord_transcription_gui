@@ -2,3 +2,5 @@
 # regardless of case. Blank lines and lines starting with "#" are ignored.
 # Add Discord usernames, campaign-specific names/jargon, or slang here as
 # they come up.
+
+gil

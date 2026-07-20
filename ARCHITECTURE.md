@@ -370,6 +370,19 @@ debounce/Finalize-button machinery:
   at all, so a spacer box (holding nothing but `\n` tokens) is never even
   candidate for the tag.
 
+  `find_misspelled_spans` also loads a second, complementary sidecar file -
+  `spellcheck_blacklist.txt`, same one-word-per-line format and lazy-load-
+  and-cache convention as the whitelist (`_get_blacklist`/`_blacklist`/
+  `_blacklist_loaded`, mirroring `_get_whitelist`/`_whitelist`/
+  `_whitelist_loaded`) - for real English words that the dictionary
+  considers correctly spelled but that keep turning out to be OCR misreads
+  or typos for something else in this transcript's context. A candidate
+  word is flagged if it's either unrecognized by the dictionary *or* in the
+  blacklist; a word in both the whitelist and the blacklist is never
+  flagged, since the whitelist subtraction (`candidates = {...} -
+  whitelist`) happens before the blacklist union is computed, so a
+  whitelisted word is never even a blacklist candidate.
+
   Debounced per box (`SPELLCHECK_DEBOUNCE_MS`, via `text_widget.after`) so
   typing doesn't re-scan a box's text on every keystroke - `_destroy_row`/
   `_reclaim_widget_if_present` cancel a box's pending timer before tearing

@@ -208,6 +208,12 @@ What's in scope for v1:
    (`app/spellcheck_whitelist.txt`, one word per line) for Discord
    usernames/slang that would otherwise be flagged every time, and skipping
    short words and ALL-CAPS acronyms to keep obvious false positives down.
+   A complementary user-editable blacklist (`app/spellcheck_blacklist.txt`,
+   same one-word-per-line format) does the opposite - it flags a word even
+   though the dictionary considers it a real word, for real English words
+   that keep turning out to be OCR misreads or typos for something else in
+   this transcript's context. A word listed in both files is never flagged
+   - the whitelist wins.
    It's a plain dictionary lookup, not a language model, so it's meant to
    catch obvious OCR garbling rather than to be a correctness oracle for
    informal chat text - and it never applies to a spacer box (see below),
@@ -323,8 +329,10 @@ gui_transcription/
     ocr_corrections.py     # loads/applies ocr_corrections.txt's regex fixes
     ocr_corrections.txt    # user-editable OCR-misread find/replace rules
     spellcheck.py          # dictionary-lookup spellcheck (misspelled word
-                          # spans) + spellcheck_whitelist.txt loading
+                          # spans) + spellcheck_whitelist.txt/
+                          # spellcheck_blacklist.txt loading
     spellcheck_whitelist.txt  # user-editable words never flagged as misspelled
+    spellcheck_blacklist.txt  # user-editable words always flagged as misspelled
     chatlog.py            # HTML parsing + date/author filtering
     cleanup.py            # post-run regex cleanup pass (structural only -
                           # OCR-misread fixes moved to ocr_corrections.py)

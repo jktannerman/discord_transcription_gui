@@ -42,6 +42,16 @@ OCR_CORRECTIONS_FILE = Path(__file__).resolve().parent / "ocr_corrections.txt"
 # to the source for the same reason OCR_CORRECTIONS_FILE is.
 SPELLCHECK_WHITELIST_FILE = Path(__file__).resolve().parent / "spellcheck_whitelist.txt"
 
+# User-editable list of words the review screen's spellcheck should always
+# flag - one word per line, same file format as SPELLCHECK_WHITELIST_FILE -
+# for words the dictionary treats as real (so they'd never be flagged
+# otherwise) but that are usually OCR misreads/typos in this transcript
+# context (e.g. a common word that's frequently confused with a
+# similar-looking Discord username). Kept next to the source for the same
+# reason OCR_CORRECTIONS_FILE is. If a word appears in both files, the
+# whitelist wins - it stays unflagged.
+SPELLCHECK_BLACKLIST_FILE = Path(__file__).resolve().parent / "spellcheck_blacklist.txt"
+
 APP_DATA_DIR = Path.home() / ".discord_transcription_gui"
 RUN_DATE_FILE = APP_DATA_DIR / "run_dates.json"
 # {image_folder: {image_name: [paragraphs]}} - one entry per image folder,
