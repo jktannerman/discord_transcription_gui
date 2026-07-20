@@ -25,6 +25,7 @@ actually finalized, or if the user declines to resume it.
 import threading
 import tkinter as tk
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Optional
@@ -259,10 +260,20 @@ class App:
             # here first, covering the accepted case clear_session never
             # runs for.
             state.archive_session_backup(html_path, pending_session)
-            if messagebox.askyesno(
-                "Resume previous session",
-                "A saved in-progress review session exists for this chatlog. Resume it?",
-            ):
+            start_time = pending_session.get("start_time")
+            if start_time is not None:
+                start_date_str = datetime.fromtimestamp(
+                    start_time, tz=timezone.utc
+                ).strftime("%Y-%m-%d %H:%M:%S UTC")
+                prompt = (
+                    "A saved in-progress review session exists for this chatlog "
+                    f"(start date {start_date_str}). Resume it?"
+                )
+            else:
+                prompt = (
+                    "A saved in-progress review session exists for this chatlog. Resume it?"
+                )
+            if messagebox.askyesno("Resume previous session", prompt):
                 self._resume_session(html_path, pending_session)
                 return
             state.clear_session(html_path)

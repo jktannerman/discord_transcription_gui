@@ -223,15 +223,22 @@ To each text input box that corresponds to a chatlog image, please add a checkbo
 Ask any other questions about desired behaviour now, if needed. Before beginning work, read `./gui_transcription/ARCHITECTURE.md` and make a plan.
 
 
+- done
+Please make it so that the Yes/No dialog for resuming a saved session for a given chatlog shows the start date for that session, in order to reduce confusion. 
+
 
 why is it redoing OCR?
 why are some transcriptions still not being saved? connected with the above? 
 something to do with changing the regexes?
 
-shift-tabbing shows very weird behaviour. original OCR even after a transcription, images don't load
+shift-tabbing shows very weird behaviour. original OCR even after a transcription, images don't load. how to reproduce?
 
 
-Please improve behavior or/and test coverage around Tab/Shift-Tab. To be specific, these buttons can be held down, which can lead to very fast changes in position.
+
+
+
+
+Please carefully consider the behaviour of Tab/Shift-Tab. To be specific, these buttons can be held down, which can lead to very fast changes in position; there have been instances of users getting most of the way into a transcription, Shift-Tabbing upwards rapidly to reference something, and finding their edited versions of a given text input box overwritten with the original OCR version. Upon closing and resuming the session, the original OCR remains, requiring work to be redone. Furthermore, sometimes rapid changes in position lead to loading failing entirely - large parts 
 
 
 Please find all spacing-related edits and confirm whether or 

@@ -662,6 +662,113 @@ in an item's `slot_roles` (e.g. because the chatlog was re-exported with
 fewer images) are also dropped. All `slot_roles` including `spacer_*` are
 eligible for storage and pre-population.
 
+## Test coverage
+
+245 tests total: 183 run by default, plus 62 marked `gui` (build a real,
+withdrawn Tk window - see the README's "Testing" section) that are skipped
+unless run with `-m gui` or `-m ""`.
+
+### Review screen
+
+The most architecturally involved and historically bug-prone part of the
+app (see "Review screen internals" and "Row geometry" above), so it has
+the deepest coverage:
+
+- `ReviewFrame._reconcile`'s windowing core - idempotency, paging to the
+  end of a long transcript, a far-away Tab/resume target materializing
+  correctly, edits surviving a row being paged out and back in, and the
+  Finalize button's visibility toggle.
+- Row-height estimation/visible-range math (`app/gui/virtualization.py`,
+  the part of the windowing logic pure enough to unit-test without a
+  display) - including a row with multiple images estimating taller than
+  one with a single image.
+- Slot-based keyboard navigation (`_move_focus` stepping through
+  `(item_index, role)` slots in transcript order, message before one
+  `"ocrN"` slot per attached image).
+- Per-box undo/redo history (`text_undo.py`) surviving a row being paged
+  out and rebuilt.
+- A focused box always scrolling fully into view, not just its row, and a
+  far-away Tab/resume target landing fully within the *real* canvas
+  viewport rather than just the document-space model's own idea of where
+  it is (a since-fixed row-height accounting bug could get this wrong).
+- Each OCR box's checkbox (see "Per-OCR-box edited/checkbox state" above):
+  starting checked/unchecked correctly for an untouched vs. a
+  resumed-and-differing-from-default box, typing checking it
+  automatically, unchecking/rechecking round-tripping both the OCR
+  default and the edited version without either being discarded,
+  `collect_edited_texts` reporting `None` for an unchecked box despite its
+  edited version still being cached, both the checkbox state and both
+  text versions surviving a row being paged out and back in, and Ctrl+Z
+  re-deriving the right checked state after undoing a toggle.
+- The editable text box height rule (`_fixed_text_box_height`'s capping
+  logic).
+- Image preview sizing/visibility (`app/gui/image_loading.py`'s
+  aspect-fit math and its load/unload viewport-boundary decision, plus
+  real load/failure/unload behavior against actual Tk widgets).
+
+### Session resume
+
+- Message-id-based edit/focus matching (`_match_saved_edits`/
+  `_match_focus_slot`) - edits surviving messages appended or inserted
+  mid-transcript in a re-export, orphaned edits for now-filtered-out
+  messages being dropped, a saved message's per-image OCR edits being
+  aligned back onto its current images by position, and a stale focus
+  slot falling back to no restore.
+- `App._on_start`'s validation branches (missing fields, an invalid start
+  date, an empty approved-users list) and its pending-session resume
+  prompt, including `_resume_session` always forcing `use_cache=True`
+  regardless of what the saved session originally recorded, so resuming
+  never redoes OCR.
+- The malformed-chatlog error path (`App._on_ocr_done` surfacing a clear
+  dialog instead of letting the error escape uncaught from a background
+  Tk callback).
+
+### HTML parsing / OCR pipeline
+
+- HTML parsing/filtering - the export postamble's declared timezone
+  applied to every message timestamp, the clear error raised when that
+  timezone is missing or unparseable, the per-message Discord ID
+  extracted from each `chatlog__message-container`'s `data-message-id`,
+  the clear error raised when that container is missing, and - run
+  against a real DiscordChatExporter export fixture,
+  `example_inputs/short_test_input.html` - every image attachment a
+  message has being picked up rather than just the first.
+- OCR paragraph splitting and backend dispatch.
+- The OCR-misread corrections pass (`ocr_corrections.py`'s file
+  parsing/validation and regex application) and its wiring into
+  `build_review_items` - applied to OCR text only, never to a message's
+  own text.
+- The OCR batch runner/cache short-circuit.
+- The cleanup regexes.
+- Review-item building/output-writing - a text-only message's editable
+  spacing copy standing in for its immutable original when written out, a
+  message with both a caption and an image getting two
+  independently-edited text blocks, and a message with multiple images
+  getting one independently-edited OCR block per image, each falling back
+  to its own original OCR text when not edited.
+- The finalize pass (cleanup + run-date + clipboard + BREAK-marker
+  bookmarking).
+
+### Persistence
+
+- JSON state persistence - run dates, OCR cache and in-progress sessions
+  both kept per-chatlog/per-folder indefinitely rather than as a single
+  global slot, and recent-path history.
+- The atomic-write-plus-backup-rotation/recovery behavior of every state
+  file (`app/state.py`).
+- The JSON log formatter.
+- Start-date validation.
+
+### What's not covered
+
+- No automated test drives real Tk button *clicks* - only direct method
+  calls standing in for them - or a live Tesseract install.
+- `setup_view.py`'s widget wiring is still only covered by manual
+  smoke-testing: window construction, the review screen with synthetic
+  text-only/image-only/image-with-caption/multiple-images-on-one-message
+  items, an edit-then-finalize pass against a temp output file, and a
+  resumed session's saved edits/focus restoring correctly.
+
 ## Logging
 
 Every module logs through `app/logging_config.py`, which writes single-line

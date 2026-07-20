@@ -373,99 +373,36 @@ py -3.13 -m app.main
 
 ## Testing
 
+Run the default suite:
+
 ```powershell
 py -3.13 -m pytest gui_transcription\app_tests -v
 ```
 
-This skips every test that builds a real Tk window by default (marked
-`gui` in `pyproject.toml` - all of `test_review_view.py`, `test_main_window_
-ocr_error.py`, and `test_main_window_on_start.py`, plus three tests in
-`test_image_loading.py`), since even a withdrawn one can briefly flash on
-screen - most noticeably the very first `Tk()` call in a process, which
-also runs Tcl/Tk's one-time subsystem init. Run
-`py -3.13 -m pytest gui_transcription\app_tests -v -m gui` to include just
-those, or add `-m ""` to run the whole suite including them.
+### The `gui` marker
 
-183 tests (245 including the `gui`-marked ones, which now also cover a
-box's undo/redo history surviving its row being paged out and back in -
-`text_undo.py` - a focused box always scrolling fully into view, not
-just its row, a far-away Tab/resume target landing fully within the
-*real* canvas viewport rather than just the document-space model's own
-idea of where it is, which a since-fixed row-height accounting bug could
-get wrong - see ARCHITECTURE.md's "Row geometry" section - and each
-OCR box's checkbox: starting unchecked/checked correctly for an untouched
-vs. a resumed-and-differing-from-default box, typing checking it
-automatically, unchecking/rechecking round-tripping both the OCR default
-and the edited version without either ever discarding the other,
-`collect_edited_texts` (what autosave/the session file persist) reporting
-`None` for an unchecked box despite its edited version still being cached
-for restoration, both the checkbox state and both text versions surviving
-a row being paged out and back in, and Ctrl+Z re-deriving (and
-re-displaying) the right checked state after undoing a toggle - see
-ARCHITECTURE.md's "Per-OCR-box edited/checkbox state" section) cover the
-cleanup regexes, the OCR-misread corrections
-pass (`ocr_corrections.py`'s file parsing/validation and regex application,
-plus its wiring into `build_review_items` - applied to OCR text only,
-never to a message's own text),
-HTML parsing/filtering (including the export postamble's declared timezone
-being applied to every message timestamp, the clear error raised when that
-timezone is missing or unparseable, the per-message Discord ID extracted
-from each `chatlog__message-container`'s `data-message-id`, the clear
-error raised when that container is missing, and - run against a real
-DiscordChatExporter export fixture, `example_inputs/short_test_input.html`
-- every image attachment a message has being picked up rather than just
-the first), OCR paragraph splitting and backend dispatch, the JSON log
-formatter, JSON state persistence (run dates, OCR cache and in-progress
-sessions both kept per-chatlog/per-folder indefinitely rather than as a
-single global slot, recent-path history), start-date validation,
-review-item building/output-writing (including a text-only message's
-editable spacing copy standing in for its immutable original when written
-out, a message with both a caption and an image getting two
-independently-edited text blocks, and a message with multiple images
-getting one independently-edited OCR block per image, each falling back to
-its own original OCR text when not edited), the OCR batch runner/cache
-short-circuit, the atomic-write-plus-backup-rotation/recovery behavior of
-every state file (`app/state.py`), and the finalize pass (cleanup + run-date +
-clipboard + BREAK-marker bookmarking), the review screen's slot-based
-keyboard navigation (`_move_focus` stepping through `(item_index, role)`
-slots in transcript order, message before one "ocrN" slot per attached
-image), its row-height estimation/visible-range math
-(`app/gui/virtualization.py`, the part of the windowing logic that's pure
-enough to unit-test without a display, including a row with multiple
-images estimating taller than one with a single image), and resume's
-message-id-based edit/focus matching
-(`app/gui/main_window.py`'s `_match_saved_edits`/`_match_focus_slot` -
-edits surviving messages appended or inserted mid-transcript in a
-re-export, orphaned edits for now-filtered-out messages being dropped, a
-saved message's per-image OCR edits being aligned back onto its current
-images by position (padding with "not edited" if a re-export gave that
-message more images than the saved session knew about, and ignoring any
-extras if it gave it fewer), and a stale focus slot falling back to no
-restore), `App._on_start`'s
-validation branches (missing fields, an invalid start date, an empty
-approved-users list) and its pending-session resume prompt (including
-`_resume_session` always forcing `use_cache=True` regardless of what the
-saved session originally recorded, so resuming never redoes OCR), the malformed-
-chatlog error path (`App._on_ocr_done` surfacing a clear dialog instead of
-letting the error escape uncaught from a background Tk callback), image
-preview sizing/visibility (`app/gui/image_loading.py`'s aspect-fit math and
-its load/unload viewport-boundary decision, plus real load/failure/unload
-behavior against actual Tk widgets), the editable text box height rule
-(`app/gui/row_building.py`'s `_fixed_text_box_height` capping logic), and
-the review screen's windowing core itself (`ReviewFrame._reconcile`'s
-idempotency, paging to the end of a long transcript, a far-away Tab/resume
-target materializing correctly, edits surviving a row being paged out and
-back in, and the Finalize button's visibility toggle) - previously this
-rested entirely on manual smoke-testing, since it's the most
-architecturally involved (and historically bug-prone) part of the app; see
-`ARCHITECTURE.md`. There's still no automated test driving real Tk button
-*clicks* (only direct method calls standing in for them) or a live
-Tesseract install - the rest of the GUI (`setup_view.py`'s widget wiring)
-is still only covered by a manual smoke test (window construction, the
-review screen with synthetic text-only/image-only/image-with-caption/
-multiple-images-on-one-message items, an edit-then-finalize pass against a
-temp output file, and a resumed session's saved edits/focus restoring
-correctly).
+Some tests build a real (if withdrawn) Tk window - `test_review_view.py`,
+`test_main_window_ocr_error.py`, and `test_main_window_on_start.py` in
+full, plus three tests in `test_image_loading.py`. Even a withdrawn window
+can briefly flash on screen, most noticeably on the very first `Tk()` call
+in a process (which also runs Tcl/Tk's one-time subsystem init), so these
+are marked `gui` in `pyproject.toml` and excluded by default:
+
+```powershell
+# Just the GUI tests
+py -3.13 -m pytest gui_transcription\app_tests -v -m gui
+
+# Everything, GUI tests included
+py -3.13 -m pytest gui_transcription\app_tests -v -m ""
+```
+
+### What's covered where
+
+See ARCHITECTURE.md's "Test coverage" section for a breakdown of what each
+area of the app is tested for, and what's still only covered by manual
+smoke-testing. The review screen (`app/gui/review_view.py` and friends) is
+the most architecturally involved and historically bug-prone part of the
+app, so it gets the most detailed treatment there.
 
 ## Known gaps / next steps
 
