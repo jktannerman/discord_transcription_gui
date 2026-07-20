@@ -269,6 +269,88 @@ debounce/Finalize-button machinery:
   true at once, which is exactly the gap a single new test combining them
   had to be added to close, rather than expecting either existing test to
   generalize to it on its own.
+- **Symbolic marks recorded in a `UndoLog` must be resolved before they can
+  drift.** (`text_undo.py`'s `attach_undo_recording`.) A real, reproduced
+  bug: Tk's own built-in Text bindings remove a selection via the literal
+  call `delete sel.first sel.last` (Delete/Backspace/typing-over-a-
+  selection/Ctrl+X), not absolute positions - and the recording proxy used
+  to log that call's raw Tcl arguments verbatim, so a box with a
+  selection-delete in its history got `("delete", ("sel.first",
+  "sel.last"))` permanently written into `UndoLog.ops`. `sel.first`/
+  `sel.last` only mean anything while *that specific widget instance* has
+  a live selection - replaying that op onto a freshly-built widget (row
+  paged out and back in, or torn down and rebuilt for any other reason)
+  with nothing selected raised `_tkinter.TclError: text doesn't contain
+  any characters tagged with "sel"`, uncaught, from inside a Tk-bound
+  callback (`_reconcile`, reached from both keyboard nav and the scroll-
+  debounced path). Full analysis in
+  `archive/INVESTIGATION_shift_tab_reconcile_lockup.md` - kept in full even
+  though fixed, since the cross-feature interaction it traces
+  (virtualization's row rebuild + undo replay) is exactly the kind of thing
+  worth having on record rather than re-deriving if a similar bug
+  resurfaces. Every other in-code reference to this filename (row_building.py,
+  review_view.py, text_undo.py, keyboard_nav.py, main.py, and their tests)
+  cites it by bare filename only, without the `archive/` prefix - still
+  unambiguous to grep for, and not worth touching that many call sites just
+  to spell out a path.
+
+  Fixed at the source: `_proxy`'s recording now resolves *every*
+  insert/delete index argument - not just `sel.*`, since `insert`/`end`/
+  any other mark is just as capable of meaning something different (or
+  nothing) on a freshly-built widget - to an absolute `"line.column"`
+  string via `tcl.call(shadow_path, "index", value)`, called *before* the
+  real mutating call runs (a mark's meaning is only well-defined relative
+  to the widget's state right before the mutation, not after). This makes
+  every recorded op replay-safe by construction, the same way `UndoLog.
+  baseline` (above) made a rebuild's *starting point* trustworthy by
+  construction rather than by convention.
+
+  A record-time fix alone can't guarantee there's no other, still-unknown
+  way for a replay to fail - so three complementary, independently-useful
+  hardenings shipped alongside it, all backstops rather than substitutes
+  for the record-time fix (see `INVESTIGATION_shift_tab_reconcile_
+  lockup.md`'s "Recommended fix"/"What's still open" sections):
+  - `_populate_text_box`'s replay is wrapped in `try/except tk.TclError`.
+    On failure, it recovers the box's actual last-known-good text from
+    `self._saved_texts` (captured independently, at the box's last
+    teardown - never `log.baseline`/`initial_text`, either of which can be
+    staler than what the user actually left in the box) and *self-heals*:
+    wipes the poisoned `log.ops` and re-baselines on the recovered text, so
+    the same box doesn't crash again on its next rebuild.
+  - `_reclaim_widget_if_present` (called from both
+    `_build_editable_text_box` and `_build_spacer_text_box`, replacing
+    what used to be just a logged warning) closes a real data-loss
+    mechanism this investigation traced precisely: once
+    `self._materialized_range` gets stuck (as fallout from an uncaught
+    build exception), a later reconcile could call `_build_row` for an
+    index that's *already* live in `self._text_widgets` - silently
+    orphaning that widget's content, since `_destroy_row` (the only place
+    that captures `text_widget.get()` into `self._saved_texts`) never runs
+    for it. Now it does, every time, before the key is overwritten.
+  - `review_view.py`'s `_try_build_row` (used throughout
+    `_sync_materialized_rows` in place of calling `_build_row` directly)
+    catches any exception from a single row's build, tears down whatever
+    partially got built (via `_destroy_row`, capturing anything that did
+    succeed), logs loudly, and lets the rest of that reconcile's batch
+    continue - a backstop against *any* future per-row build failure, not
+    just this specific `TclError`, since before this fix one bad row
+    silently killed every row after it in the same batch and left
+    `self._materialized_range` permanently disagreeing with
+    `self._row_frames`'s real contents. `keyboard_nav.py`'s
+    `_focus_text_box` correspondingly uses `self._text_widgets.get(...)`
+    with a logged-and-skip fallback instead of a raw dict lookup, so a slot
+    whose row failed to build logs once instead of raising `KeyError` on
+    every subsequent Tab/Shift-Tab press aimed at it.
+
+  Separately, `main.py` now installs `root.report_callback_exception =
+  _log_tk_callback_exception`, routing *any* uncaught Tk-callback exception
+  through this app's own logger - this specific bug was invisible in
+  `app.log` and only ever reached an unlogged console, which is what made
+  it take a full log-forensics-then-console-capture pass to even find (see
+  the investigation doc's "Why nothing shows up in app.log"). This isn't
+  specific to the `sel.first` bug either - it's a blanket safety net for
+  whatever the *next* uncaught Tk-callback exception turns out to be.
+
 - **Slot-addressed boxes.** Since a row can now have a "message" box (a
   copy of the message's own text) and any number of OCR boxes - one per
   attached image, since a single message can have more than one - a
@@ -664,7 +746,7 @@ eligible for storage and pre-population.
 
 ## Test coverage
 
-245 tests total: 183 run by default, plus 62 marked `gui` (build a real,
+256 tests total: 186 run by default, plus 70 marked `gui` (build a real,
 withdrawn Tk window - see the README's "Testing" section) that are skipped
 unless run with `-m gui` or `-m ""`.
 
@@ -687,6 +769,21 @@ the deepest coverage:
   `"ocrN"` slot per attached image).
 - Per-box undo/redo history (`text_undo.py`) surviving a row being paged
   out and rebuilt.
+- `text_undo.py`'s recording proxy resolving symbolic index arguments
+  (`sel.first`/`sel.last`, the `insert` mark) to absolute positions at
+  record time (`app_tests/test_text_undo.py`), plus the end-to-end shape of
+  the bug this fixes: selecting and deleting text, then paging that row out
+  and back in, must not raise and must land on the correct final text
+  (`app_tests/test_review_view.py`). See "Symbolic marks recorded in a
+  UndoLog must be resolved before they can drift" above.
+- The three defense-in-depth backstops that shipped alongside that fix
+  (same section above): a replay failure that still somehow occurs recovers
+  the box's last-known-good text and self-heals its `UndoLog` instead of
+  crashing; rebuilding an already-live box (a "should be impossible"
+  double-build) reclaims its content into `self._saved_texts` instead of
+  orphaning it; and one row's build exception no longer aborts the rest of
+  its reconcile batch or leaves a dangling `KeyError` trap on later
+  Tab/Shift-Tab navigation to a row that failed to build.
 - A focused box always scrolling fully into view, not just its row, and a
   far-away Tab/resume target landing fully within the *real* canvas
   viewport rather than just the document-space model's own idea of where

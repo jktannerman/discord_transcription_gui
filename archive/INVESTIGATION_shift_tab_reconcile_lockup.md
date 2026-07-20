@@ -1,12 +1,21 @@
 # Investigation: Shift-Tab burst causes silent edit loss + "greyed out" screen
 
-Status as of this writeup: **root cause confirmed from an actual Python
-traceback (not just log inference); not yet fixed.** This file exists so a
-future session (human or Claude) does not have to re-derive the analysis
-below from scratch. Read "Root cause (confirmed)" first - it supersedes an
-earlier, wrong hypothesis kept below under "Superseded hypothesis" only
-because the trace analysis that produced it uncovered real, still-relevant
-downstream mechanics.
+**Status: fixed.** Root cause was confirmed from an actual Python traceback
+(not just log inference), and both the fix and defense-in-depth hardening
+described in "Recommended fix" below have since been implemented - see
+ARCHITECTURE.md's "Review screen internals" section (the entry titled
+"Symbolic marks recorded in a UndoLog must be resolved before they can
+drift") for what actually shipped and where, and this file's own "What's
+still open" section at the bottom for the up-to-date status of each item.
+This file is kept in full (not deleted) so a future session (human or
+Claude) has the original failure analysis available without having to
+re-derive it from scratch - the bug this documents is exactly the kind of
+subtle, cross-feature interaction (virtualization + undo replay) that's
+cheap to reintroduce by accident if the reasoning behind the fix isn't
+still on record somewhere. Read "Root cause (confirmed)" first - it
+supersedes an earlier, wrong hypothesis kept below under "Superseded
+hypothesis" only because the trace analysis that produced it uncovered
+real, still-relevant downstream mechanics.
 
 ## User-reported symptoms
 
@@ -341,21 +350,54 @@ investigation did, to confirm which specific box/run is affected.
 
 ## What's still open
 
-- Not yet fixed. See "Recommended fix" above.
-- Not yet confirmed whether `insert` ops ever carry a similarly
-  non-replayable symbolic index in practice (the fix should cover it
-  regardless, per point 1 above, but no concrete failing case has been
-  observed for `insert` the way it has for `delete`+`sel.*`).
-- Once fixed, worth adding a regression test that: selects text in a box
-  (or synthesizes an equivalent `("delete", ("sel.first", "sel.last"))` op
-  directly on a `UndoLog`), deletes it, tears the row down, and rebuilds it
-  - asserting the rebuild succeeds and reproduces the correct final text,
-  the same shape as the existing `test_resumed_edit_survives_being_paged_
-  out_and_back_in_with_no_further_edits` regression test described in
-  `ARCHITECTURE.md`.
-- Separately worth considering (not required for this specific bug, but
-  would have caught it immediately instead of requiring console-log
-  archaeology): setting `tk.Tk.report_callback_exception` on the root
-  window (`main.py`) to route through this app's own logger, so any future
-  uncaught Tk-callback exception - whatever its cause - lands in `app.log`
-  automatically instead of only ever reaching an unlogged console.
+Nothing - both items below, and the report_callback_exception idea, have
+since shipped:
+
+- **Fixed.** `text_undo.py`'s recording proxy now resolves every
+  insert/delete index argument (not just `sel.*` - `insert`, `end`, and any
+  other mark) to an absolute `"line.column"` string at record time, before
+  the mutating call runs - covering `insert` too, per the original "not yet
+  confirmed" note here, even though no concrete failing `insert` case had
+  been observed. See ARCHITECTURE.md's "Review screen internals" entry for
+  the full writeup, and `app_tests/test_text_undo.py` for the regression
+  tests (a selection-delete's recorded op holds absolute indices, not
+  `sel.first`/`sel.last`, and replays cleanly onto a fresh widget) - the
+  same shape as the existing `test_resumed_edit_survives_being_paged_
+  out_and_back_in_with_no_further_edits` test this file originally pointed
+  to as a model.
+- **Fixed**, as a last-resort backstop rather than the primary fix (per the
+  original "not sufficient as the only fix" caveat above, which still
+  holds - this doesn't replace the record-time fix, it only stops a future
+  unanticipated replay failure from wedging the whole screen): a `TclError`
+  from `replay_onto` is now caught in `row_building.py`'s
+  `_populate_text_box`, recovering the box's actual last-known-good text
+  from `self._saved_texts` (not `baseline`/`initial_text`, either of which
+  can be staler) and self-healing the `UndoLog` (clearing the poisoned ops,
+  re-baselining on the recovered text) so the same box doesn't crash again
+  on its next rebuild.
+- **Also fixed, beyond the two items above** (closing the actual
+  data-loss/cascade mechanics this investigation traced through points 1-4
+  of "What this breaks, concretely", as defense in depth against *any*
+  future per-row build failure, not just this specific `TclError`):
+  - The double-build orphaning hole (`row_building.py`'s
+    `_reclaim_widget_if_present`, called from both
+    `_build_editable_text_box` and `_build_spacer_text_box`) - rebuilding
+    an already-live key now captures its current content/cursor into
+    `self._saved_texts`/`self._saved_cursor` and tears it down properly
+    first, instead of just logging a warning and silently orphaning
+    whatever was typed into it.
+  - The all-or-nothing build batch (`review_view.py`'s new
+    `_try_build_row`, used throughout `_sync_materialized_rows`) - one
+    row's build exception no longer aborts the rest of that reconcile's
+    batch or leaves `self._materialized_range` permanently stale; the
+    failing row is torn down, logged, and skipped, and its neighbors still
+    get built.
+  - The `KeyError` cascade (`keyboard_nav.py`'s `_focus_text_box` now uses
+    `self._text_widgets.get(...)` with a logged-and-skip fallback instead
+    of a raw dict lookup) - a slot whose row failed to build no longer
+    raises on every subsequent Tab/Shift-Tab press aimed at it.
+- **Fixed.** `root.report_callback_exception` (`main.py`) now routes
+  through this app's own logger (`_log_tk_callback_exception`), so any
+  future uncaught Tk-callback exception - whatever its cause - lands in
+  `app.log` immediately instead of requiring the kind of console-log
+  archaeology this investigation originally needed.
