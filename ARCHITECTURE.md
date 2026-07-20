@@ -100,15 +100,34 @@ Concrete habits this argues for in this codebase specifically:
 - **A dedicated regression test per discovered bug only covers
   combinations someone has already hit.** All three bugs above were
   invisible to the test suite until someone hand-wrote a test for the
-  exact scenario each one turned out to require. A structurally stronger
-  complement, not yet done: a property-style test that applies a
-  randomized sequence of this subsystem's interaction types (type,
-  select+delete, undo, redo, checkbox toggle, paste) to a box in random
-  order and count, tears its row down, rebuilds it, and asserts the
-  rebuilt content matches whatever was live immediately before teardown -
-  targeting "does replay reproduce reality" as an invariant directly,
-  rather than waiting to discover the next specific combination that
-  breaks it.
+  exact scenario each one turned out to require. The structurally stronger
+  complement this used to call out as not yet done now exists:
+  `test_review_view.py`'s `_random_edit_sequence` applies a randomized
+  sequence of this subsystem's interaction types (type, select+delete via
+  Tk's own `sel.first`/`sel.last`, undo, redo, a paste-shaped delete-
+  selection-then-insert, and - for an "ocr" box - checkbox toggle) to a box
+  in random order and count, tears its row down, rebuilds it, and asserts the rebuilt
+  content, cursor position, and (for an "ocr" box) checked state all match
+  whatever was live immediately before teardown - targeting "does replay
+  reproduce reality" as an invariant directly, parametrized across every
+  role shape a box can have ("message", "ocr{N}", a spacer role).
+  `test_random_interaction_sequence_survives_two_consecutive_teardown_
+  rebuild_cycles` extends this to two consecutive cycles (the
+  `UndoLog.baseline` bug specifically needed a *second* rebuild, one whose
+  starting point was itself a replay result, to surface at all), and
+  `test_random_edits_after_a_seeded_baseline_survive_a_further_teardown_
+  and_rebuild` closes the specific gap every existing resumed/finalized
+  composition test left open - real further edits on top of a
+  resumed/finalized baseline, not just an empty op log, before the next
+  rebuild. Every one of these asserts no `ERROR`-level replay-divergence/
+  self-heal log line fired too - a property test that only checked final
+  content would still pass if replay were badly broken and silently
+  falling back to the self-heal backstop (see below) on every single
+  rebuild, since self-heal's own recovery target (`self._saved_texts`) is
+  kept correct independently of replay. This is randomized but seeded
+  (fixed per-test seeds), so a failure is reproducible, not flaky - it
+  isn't yet run with a broad seed sweep in CI the way a true fuzzing setup
+  would be, so it's still a probabilistic net, not a proof.
 
 ## Review screen internals
 
@@ -926,7 +945,7 @@ eligible for storage and pre-population.
 
 ## Test coverage
 
-271 tests total: 195 run by default, plus 76 marked `gui` (build a real,
+301 tests total: 205 run by default, plus 96 marked `gui` (build a real,
 withdrawn Tk window - see the README's "Testing" section) that are skipped
 unless run with `-m gui` or `-m ""`.
 

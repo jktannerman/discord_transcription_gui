@@ -8,6 +8,7 @@ explicitly the most failure-prone part of the app (see ARCHITECTURE.md's
 account of the oscillation bug its current design replaced), so it's the
 highest-value gap to close.
 """
+import random
 import tkinter as tk
 
 import pytest
@@ -1320,3 +1321,225 @@ def test_one_row_build_failure_does_not_abort_the_rest_of_the_reconcile_batch(ro
     # Its neighbors in the same jump-triggered batch must still be built.
     assert (len(items) - 1) in frame._row_frames
     assert frame._materialized_range is not None
+
+
+# --- Property-style composition tests ---------------------------------------
+#
+# ARCHITECTURE.md's "General heuristic: test where features compose, not just
+# each feature alone" section calls out that every dedicated regression test
+# above (the UndoLog.baseline bug, the sel.first/sel.last bug, the undo/redo
+# replay divergence bug) was only ever found by hand-writing a test for the
+# *exact* combination someone had already hit - and proposes, as the still-
+# missing structurally stronger complement, a property-style test that
+# applies a randomized sequence of this subsystem's interaction types to a
+# box, tears its row down, rebuilds it, and asserts the rebuilt content
+# matches whatever was live immediately before teardown - targeting "does
+# replay reproduce reality" as an invariant directly, rather than waiting to
+# discover the next specific combination that breaks it. The tests below are
+# that complement.
+
+_RANDOM_EDIT_SNIPPETS = [" x", " word", "\nnewline", " some more typed text", "!"]
+
+
+def _random_edit_sequence(frame, root, key, rng, num_ops, allow_checkbox):
+    """Applies a randomized sequence of every interaction type a review-
+    screen text box supports - typing, select+delete, undo, redo, a
+    paste-shaped delete-selection-then-insert (see the "paste" branch
+    below for why this doesn't go through the real OS clipboard), and
+    (only for an "ocr" box, which is the only role with one) checkbox
+    toggle - to whatever widget currently backs `key`. Each action is
+    followed by a real event-loop pump (root.update()) so the deferred
+    <<Modified>> handling (checkbox auto-check, spellcheck scheduling) that
+    a live user's keystrokes would trigger actually runs before the next
+    action, the same as it would interleaved with real typing - not just
+    the ops recorded in text_undo.UndoLog."""
+    actions = ["type", "select_delete", "undo", "redo", "paste"]
+    if allow_checkbox:
+        actions.append("checkbox_toggle")
+    for _ in range(num_ops):
+        widget = frame._text_widgets[key]
+        action = rng.choice(actions)
+        content = widget.get("1.0", "end-1c")
+        if action == "type":
+            widget.insert("insert", rng.choice(_RANDOM_EDIT_SNIPPETS))
+        elif action == "select_delete":
+            if not content:
+                continue
+            start = rng.randrange(len(content))
+            end = rng.randrange(start + 1, len(content) + 1)
+            # Mirrors what a real Delete/Backspace-on-a-selection keypress
+            # does at the Tcl level (see text_undo.py's _resolve_index
+            # docstring) - not widget.delete(start, end) directly, since
+            # sel.first/sel.last is exactly the symbolic-mark case that
+            # bug was about.
+            widget.tag_add("sel", f"1.0+{start}c", f"1.0+{end}c")
+            widget.delete("sel.first", "sel.last")
+        elif action == "undo":
+            frame._undo_text(type("Event", (), {"widget": widget})())
+        elif action == "redo":
+            frame._redo_text(type("Event", (), {"widget": widget})())
+        elif action == "paste":
+            # Mirrors what Tk's own <<Paste>> binding (tk::TextPaste) does at
+            # the Tcl level - delete any active selection, then insert at the
+            # cursor - without actually going through the real event/
+            # clipboard, which would clobber the *system* clipboard (Tk's
+            # clipboard is the OS clipboard, not sandboxed per-widget or
+            # per-process) and pollute the user's own clipboard history with
+            # every random snippet a test run happens to pick.
+            if widget.tag_ranges("sel"):
+                widget.delete("sel.first", "sel.last")
+            widget.insert("insert", rng.choice(_RANDOM_EDIT_SNIPPETS))
+        elif action == "checkbox_toggle":
+            var = frame._checkbox_vars[key]
+            var.set(not var.get())
+            frame._on_ocr_checkbox_toggle(key)
+        root.update()
+
+
+def _assert_no_replay_self_heal_logged(caplog):
+    """The dedicated regression tests above (test_unreplayable_op_recovers_
+    last_saved_text_instead_of_crashing, test_replay_divergence_self_heals_
+    onto_last_saved_text) already prove self-heal *works* by injecting a
+    poisoned op directly - but self-heal recovers onto self._saved_texts,
+    which is itself always kept correct independently of replay, so a
+    property test that only checks final content would pass even if replay
+    were badly broken and silently falling back to self-heal on every single
+    rebuild. Asserting these ERROR-level log lines never fired makes sure
+    replay actually reproduced the content on its own merits, not via the
+    safety net catching it."""
+    assert not any(
+        "replay divergence" in r.getMessage() or "raised a TclError" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+@pytest.mark.parametrize("seed", range(5))
+@pytest.mark.parametrize("role", ["message", "ocr0", "spacer_end"])
+def test_random_interaction_sequence_survives_a_row_teardown_and_rebuild(
+    root, sample_image, role, seed, caplog
+):
+    """For every role shape a box can have (a plain "message" box, an "ocr"
+    box with its checkbox, and a checkbox-less spacer box), a randomized
+    sequence of edits/undo/redo/paste/checkbox-toggle must survive that
+    box's row being torn down and rebuilt - reproducing not just the same
+    text, but the same cursor position and (for an "ocr" box) the same
+    checked state, with replay never needing its self-heal backstop."""
+    rng = random.Random(seed)
+    items = _items(sample_image, count=5)
+    frame, _ = _build_frame(root, items)
+    if role == "ocr0":
+        index = next(i for i, item in enumerate(items) if item.image_paths)
+    else:
+        index = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    key = (index, role)
+    widget = frame._text_widgets[key]
+    widget.focus_force()
+    root.update_idletasks()
+
+    _random_edit_sequence(frame, root, key, rng, num_ops=12, allow_checkbox=(role == "ocr0"))
+
+    live_widget = frame._text_widgets[key]
+    live_text = live_widget.get("1.0", "end-1c")
+    live_cursor = live_widget.index("insert")
+    live_checked = frame._checkbox_checked.get(key)
+
+    with caplog.at_level("ERROR"):
+        frame._destroy_row(index)
+        frame._build_row(index)
+    root.update()
+
+    rebuilt = frame._text_widgets[key]
+    assert rebuilt.get("1.0", "end-1c") == live_text
+    assert rebuilt.index("insert") == live_cursor
+    assert frame._checkbox_checked.get(key) == live_checked
+    _assert_no_replay_self_heal_logged(caplog)
+
+
+def test_random_interaction_sequence_survives_two_consecutive_teardown_rebuild_cycles(
+    root, sample_image, caplog
+):
+    """Extends the single-cycle property test above to two consecutive
+    teardown/rebuild cycles with further random edits in between. The
+    UndoLog.baseline bug this whole section responds to specifically needed
+    a *second* rebuild - one whose starting point was itself a replay result,
+    not a fresh baseline - to surface at all (see ARCHITECTURE.md's account
+    of it); a single cycle can't exercise that compounding."""
+    rng = random.Random(20260720)
+    items = _items(sample_image, count=5)
+    frame, _ = _build_frame(root, items)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    key = (image_item, "ocr0")
+    widget = frame._text_widgets[key]
+    widget.focus_force()
+    root.update_idletasks()
+
+    _random_edit_sequence(frame, root, key, rng, num_ops=8, allow_checkbox=True)
+    with caplog.at_level("ERROR"):
+        frame._destroy_row(image_item)
+        frame._build_row(image_item)
+    root.update()
+    frame._text_widgets[key].focus_force()
+    root.update_idletasks()
+
+    _random_edit_sequence(frame, root, key, rng, num_ops=8, allow_checkbox=True)
+    live_widget = frame._text_widgets[key]
+    live_text = live_widget.get("1.0", "end-1c")
+    live_checked = frame._checkbox_checked.get(key)
+
+    with caplog.at_level("ERROR"):
+        frame._destroy_row(image_item)
+        frame._build_row(image_item)
+    root.update()
+
+    rebuilt = frame._text_widgets[key]
+    assert rebuilt.get("1.0", "end-1c") == live_text
+    assert frame._checkbox_checked.get(key) == live_checked
+    _assert_no_replay_self_heal_logged(caplog)
+
+
+@pytest.mark.parametrize("seed_source", ["resumed_session", "finalized_edit"])
+def test_random_edits_after_a_seeded_baseline_survive_a_further_teardown_and_rebuild(
+    root, sample_image, seed_source, caplog
+):
+    """Every existing resumed-edit/finalized-edit composition test (test_
+    resumed_edit_survives_being_paged_out_and_back_in_with_no_further_edits,
+    test_finalized_edit_survives_page_out_and_back_in) covers a box's first
+    rebuild with *zero* further edits after the resumed/finalized text
+    seeded it - exactly the gap the UndoLog.baseline bug lived in. This
+    closes the still-missing combination: real further edits (not just an
+    empty op log) on top of a resumed/finalized baseline, then a rebuild -
+    UndoLog.baseline must still be the seeded text, not the item's raw
+    initial_message_text, for the ops on top of it to replay onto the right
+    starting point."""
+    rng = random.Random(42)
+    items = _items(sample_image, count=40)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    assert items[text_item].initial_message_text != "seeded baseline text"
+    seeded = [{} for _ in items]
+    seeded[text_item] = {"message": "seeded baseline text"}
+    kwargs = (
+        {"initial_saved_texts": seeded} if seed_source == "resumed_session"
+        else {"initial_finalized_texts": seeded}
+    )
+
+    frame, _ = _build_frame(root, items, **kwargs)
+    key = (text_item, "message")
+    assert frame._text_widgets[key].get("1.0", "end-1c") == "seeded baseline text"
+    widget = frame._text_widgets[key]
+    widget.focus_force()
+    root.update_idletasks()
+
+    _random_edit_sequence(frame, root, key, rng, num_ops=10, allow_checkbox=False)
+    live_text = frame._text_widgets[key].get("1.0", "end-1c")
+
+    # Page far enough away that this row is actually torn down (not just
+    # kept alive by the virtualization buffer), then back.
+    with caplog.at_level("ERROR"):
+        frame._ensure_materialized(len(items) - 1)
+        frame._canvas.yview_moveto(0.0)
+        frame._reconcile()
+    root.update()
+
+    assert key in frame._text_widgets
+    assert frame._text_widgets[key].get("1.0", "end-1c") == live_text
+    _assert_no_replay_self_heal_logged(caplog)

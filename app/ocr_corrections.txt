@@ -19,18 +19,6 @@ I
 # rather than something that needs to run over the whole output file at
 # Finalize time.
 
-\bI's\b
-It's
-# OCR often drops the "t", misreading "It's" as "I's".
-
-\bi's\b
-it's
-# Lowercase counterpart of the "I's" -> "It's" fix above.
-
-\bIm\b
-I'm
-# OCR drops the apostrophe in "I'm", reading it as the bare word "Im".
-
 \n\n‘(?!(?:(?!\n\n)[\s\S]){0,80}’)
 \n\n
 # Drops a stray opening curly quote right after a paragraph break, unless
@@ -40,32 +28,31 @@ I'm
 # Heuristic, not exact: raise/lower 80 if it's missing or over-matching
 # real quotes in practice.
 
-\b([A-Z]),
-(\1).
-# OCR sometimes adds a comma instead of a period on a
-# single-capital-letter abbreviation, e.g. misreading "(A)." as "A,".
-
 ,(\n+)
 .\1
 # A comma just before a paragraph break should usually be a period.
-
 
 ©
 C
 # Misread copyright symbol.
 
-\btum(s|ed|ing)?\b
-turn\1
-# OCR sometimes reads "rn" as "m", turning "turn"/"turns"/"turned"/
-# "turning" into "tum"/"tums"/"tumed"/"tuming".
+\b([A-Z]),
+\1.
 
 
+# try and keep the below alphabetical, for quick reference
 
+\bcomer\b
+corner
 
-\b([Ss])til
-\1till
+\bIm\b
+I'm
 
+\bI's\b
+It's
 
+\bi's\b
+it's
 
 \b([Ll])eam
 \1earn
@@ -75,9 +62,13 @@ turn\1
 \1ittle
 
 
-\b\(s\)tilll?\b
-still
+\b([Ss])til\b
+\1till
+
+\b([Ss])tilll\b
+\1till
 
 
-\bcomer\b
-corner
+\btum(s|ed|ing)?\b
+turn\1
+

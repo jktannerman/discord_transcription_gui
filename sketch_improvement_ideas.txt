@@ -255,7 +255,7 @@ Please add a standard right-click menu that displays upon right-clicking images.
 - Open Image Location
 - Copy Image
 
-As usual for these menus, it should exit upon clicking elsewhere, or pressing Esc. The user's interactions with this menu should be logged. 
+As usual for these menus, it should exit upon clicking elsewhere, or pressing Esc. As usual, scrolling should be disabled while the right-click menu is open. The user's interactions with this menu should be logged. 
 
 
 right click menu should link to the place in the chatlog
@@ -317,29 +317,40 @@ Please add Ctrl-F functionality for quick navigation. It should find matches in 
 
 
 
-I's -> It's - 7
+I's -> It's - 7 - done 
+singular quote marks, like ‘ - 4 - done 
+commas instead of dots, A/B/C, - 3 - done
+| -> I - 2 (but leave an escape option? currently automatic) - done
+© -> C - 3 - done 
+tum -> turn - 2 - done 
+Im -> I'm or similar  - 4 - done
+leam -> learn - 1 - done
+litle -> little - 1 - done
 I'l -> It'll - 1
-Im -> I'm or similar  - 4
-singular quote marks, like ‘ - 4
-commas instead of dots, A/B/C, - 3
 itis -> it is - 1
-tum -> turn - 2
 quiock -> quick - 1
 o -> or - 1
-| -> I - 2 (but leave an escape option? currently automatic)
-litle -> little - 1
 Itall -> It all 
-© -> C - 3
 ll -> I'll - 1
 pio -> pip - 1
 willbe -> will be - 1
-leam -> learn - 1
 priorties -> priorities - 1
 comer -> corner - 2
 fram -> from - 1
 lke -> like - 1
 swom -> sworn - 2
 Ifyou -> If you - 1
+fioor -> floor - 1
+desoribe -> describe - 1
+retum -> return - 1
+ike -> like - 1
+50 -> so - 1
+oliff -> cliff - 1
+hom -> horn - 2
+tom -> torn - 1
+biocyle -> bicycle - 1
+toa -> to a - 1
+ttle -> little - 1
 
 
 
