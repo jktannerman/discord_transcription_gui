@@ -114,6 +114,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from .. import logging_config
 from ..review_item import ReviewItem
 from . import theme
+from .image_context_menu import ImageContextMenuMixin
 from .image_loading import ImageLoader
 from .keyboard_nav import KeyboardNavMixin
 from .layout_constants import ROW_PACK_PADY_PX
@@ -145,7 +146,7 @@ SCROLL_BUFFER_VIEWPORTS = 1
 DEBOUNCE_MS = 80
 
 
-class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
+class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk.Frame):
     def __init__(
         self,
         master: tk.Widget,
@@ -288,6 +289,15 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         # millisecond - used to reconstruct the precise sequence of
         # scroll/page/focus events that leads into a pagination loop.
         self._event_seq = 0
+        # True while an image's right-click context menu (image_context_
+        # menu.py) is open - checked by _on_mousewheel/_on_scrollbar below
+        # and keyboard_nav.py's _on_page_up/_on_page_down, so scrolling
+        # can't move rows (and this menu's target image) out from under an
+        # open menu. Tk's own popup grab already keeps most scroll/keyboard
+        # input from reaching this frame while the menu is up; this flag is
+        # a belt-and-suspenders backstop against whatever platform-specific
+        # grab gap (e.g. mouse wheel routing) isn't covered by that grab.
+        self._scroll_frozen = False
 
         # Scrollbar + canvas fill the whole frame - the Finalize button used
         # to live in a row permanently packed below them, which cost every
@@ -298,6 +308,12 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         # so the canvas gets the full frame height the rest of the time.
         scrollbar = ttk.Scrollbar(self, orient="vertical")
         scrollbar.pack(side="right", fill="y")
+        # Stored on self (not just the local var above) so image_context_
+        # menu.py's _show_image_context_menu can disable it - matching the
+        # frozen wheel/Page Up/Down behavior below with a visible, actually-
+        # inert scrollbar rather than a thumb that still drags but does
+        # nothing - while a right-click menu is open.
+        self._scrollbar = scrollbar
 
         canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0, bg=theme.DARK_BG_ALT)
         canvas.pack(side="left", fill="both", expand=True)
@@ -325,6 +341,8 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         ]
 
         def _on_scrollbar(*args):
+            if self._scroll_frozen:
+                return
             self._log_event("input_scrollbar", args=args)
             canvas.yview(*args)
             self._schedule_reconcile()
@@ -351,6 +369,8 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ttk.Frame):
         canvas.bind("<Configure>", _on_canvas_configure)
 
         def _on_mousewheel(e):
+            if self._scroll_frozen:
+                return
             self._log_event("input_mousewheel", delta=e.delta, widget=str(e.widget))
             # e.widget is whichever widget the cursor is actually over when
             # the wheel event fires (bind_all dispatches using the real

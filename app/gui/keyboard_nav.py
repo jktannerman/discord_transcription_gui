@@ -215,12 +215,16 @@ class KeyboardNavMixin:
                 return
 
     def _on_page_up(self, event: Optional[tk.Event] = None) -> str:
+        if self._scroll_frozen:
+            return "break"
         self._log_event("input_page_up")
         self._canvas.yview_scroll(-1, "pages")
         self._schedule_reconcile()
         return "break"
 
     def _on_page_down(self, event: Optional[tk.Event] = None) -> str:
+        if self._scroll_frozen:
+            return "break"
         self._log_event("input_page_down")
         self._canvas.yview_scroll(1, "pages")
         self._schedule_reconcile()

@@ -355,7 +355,7 @@ gui_transcription/
       review_view.py       # the review screen's windowing core (reconcile/
                           # paging/scroll-correction) + Finalize button -
                           # delegates row construction, images, and
-                          # keyboard nav to the four modules below
+                          # keyboard nav to the five modules below
       row_building.py      # builds a single row's widgets (labels, image
                           # placeholders, editable text boxes/scrollbars)
       layout_constants.py  # row/text-box sizing constants shared by
@@ -364,6 +364,10 @@ gui_transcription/
                           # drift out of sync with each other
       virtualization.py    # pure row-height/visible-range math (no Tk)
       image_loading.py     # lazy image load/unload for review rows
+      image_context_menu.py  # right-click menu on a review row's image
+                          # (open in browser/location, copy to clipboard) -
+                          # freezes scrolling (mousewheel/Page Up-Down/
+                          # scrollbar) while open
       keyboard_nav.py      # Tab/Page Up-Down/undo keyboard shortcuts
       text_undo.py          # per-box undo/redo history that survives a
                           # row being paged out and rebuilt (in-memory only)
