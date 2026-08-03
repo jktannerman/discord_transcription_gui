@@ -92,11 +92,14 @@ What's in scope for v1:
    convert every message's timestamp to a true UTC epoch (matching how the
    start date and the next run's recorded start date are both handled in
    UTC too). A chatlog export missing that postamble line raises a clear
-   error rather than silently guessing a timezone. A message's attached
-   images are read from every `chatlog__attachment` block it has, not just
-   the first - Discord allows more than one image per message, and each
-   gets its own OCR pass and its own editable box on the review screen (see
-   "Review screen" below), in the same order they appear in the export.
+   error rather than silently guessing a timezone. A message's images are
+   read from every `chatlog__attachment` block it has (an uploaded file)
+   *and* every `chatlog__embed` block (a pasted image URL/link that Discord
+   unfurled, marked up as `chatlog__embed-generic-image` rather than
+   `chatlog__attachment-media`) - Discord allows more than one image per
+   message either way, and each gets its own OCR pass and its own editable
+   box on the review screen (see "Review screen" below), in the same order
+   they appear in the export.
    Each kept message also keeps Discord's own per-message ID (the export's
    `data-message-id`,
    read from its `chatlog__message-container` wrapper) - not used for

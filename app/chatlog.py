@@ -5,8 +5,9 @@ approved set of author IDs (entered on the setup screen, not hardcoded -
 see pipeline.parse_approved_user_ids), timestamped after ``start_time``, are
 kept. Each accepted message is reduced to its Discord message ID, plain
 text lines, and the filenames of any attached images (a message can have
-more than one, each in its own ``chatlog__attachment`` block) - OCR and
-the interactive correction step are handled separately in pipeline.py. The
+more than one, each either an uploaded ``chatlog__attachment`` or a
+Discord-unfurled ``chatlog__embed`` image link) - OCR and the interactive
+correction step are handled separately in pipeline.py. The
 message ID is Discord's own stable per-message identifier (read from the
 export's ``data-message-id`` attribute), kept so a resumed review session
 can match its saved edits back onto the right message even if a later
@@ -138,11 +139,16 @@ def _parse_message(message) -> MessageEntry:
     text = message.find(attrs={"class": "chatlog__markdown-preserve"})
     text_lines = text.get_text().split("\n") if text else []
 
-    # find_all, not find: a message can have more than one attachment, each
-    # in its own chatlog__attachment block with its own
-    # chatlog__attachment-media img - using find() here used to silently
-    # keep only the first and drop the rest.
-    images = message.find_all(attrs={"class": "chatlog__attachment-media"})
+    # find_all, not find: a message can have more than one image, each in
+    # its own chatlog__attachment (an uploaded file) or chatlog__embed (a
+    # pasted image URL/link that Discord unfurled - chatlog__embed-generic-image)
+    # block - using find() here used to silently keep only the first and
+    # drop the rest. Passing both class names to a single find_all keeps
+    # them in the document order they actually appear in, in case a message
+    # ever mixes the two.
+    images = message.find_all(
+        "img", class_=["chatlog__attachment-media", "chatlog__embed-generic-image"]
+    )
     image_names = []
     for image in images:
         file_name = image.attrs["src"]

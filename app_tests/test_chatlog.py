@@ -20,6 +20,7 @@ def _make_html(
     text: str | None = None,
     image_src: str | None = None,
     image_srcs: Optional[list[str]] = None,
+    embed_image_srcs: Optional[list[str]] = None,
     timezone: Optional[str] = "UTC+0",
     message_id: Optional[str] = DEFAULT_MESSAGE_ID,
 ) -> str:
@@ -36,6 +37,17 @@ def _make_html(
         f"</div>"
         for src in srcs
     )
+    # embed_image_srcs mirrors a pasted image URL/link Discord unfurled -
+    # markup DiscordChatExporter renders as chatlog__embed /
+    # chatlog__embed-generic-image rather than chatlog__attachment /
+    # chatlog__attachment-media.
+    embed_srcs = embed_image_srcs if embed_image_srcs is not None else []
+    embed_html = "".join(
+        f'<div class="chatlog__embed">'
+        f'<img class="chatlog__embed-generic-image" src="{src}">'
+        f"</div>"
+        for src in embed_srcs
+    )
     # Real exports always include this postamble (see
     # example_inputs/pq_wm_0001_p2.html) - timezone=None simulates a
     # malformed/unexpected export missing it, to test that failure path.
@@ -50,6 +62,7 @@ def _make_html(
       <div class="chatlog__message-primary">
         {text_html}
         {image_html}
+        {embed_html}
       </div>
     """
     message_html = (
@@ -135,6 +148,32 @@ def test_message_with_multiple_images_extracts_all_filenames_in_order():
     assert entries[0].image_names == ["red.png", "black.png"]
 
 
+def test_embedded_image_extracts_filename():
+    # A pasted image URL/link that Discord unfurled into an embed uses
+    # chatlog__embed / chatlog__embed-generic-image markup rather than
+    # chatlog__attachment / chatlog__attachment-media - must be picked up too.
+    html = _make_html(
+        "01/01/2025 00:00",
+        APPROVED_USER_ID,
+        embed_image_srcs=["https://cdn.example.com/path/embedded.png"],
+    )
+    entries = parse_message_groups(html, _start_time("2024-01-01"), {APPROVED_USER_ID})
+    assert len(entries) == 1
+    assert entries[0].image_names == ["embedded.png"]
+
+
+def test_attachment_and_embedded_image_both_extracted_in_order():
+    html = _make_html(
+        "01/01/2025 00:00",
+        APPROVED_USER_ID,
+        image_srcs=["https://cdn.example.com/path/attached.png"],
+        embed_image_srcs=["https://cdn.example.com/path/embedded.png"],
+    )
+    entries = parse_message_groups(html, _start_time("2024-01-01"), {APPROVED_USER_ID})
+    assert len(entries) == 1
+    assert entries[0].image_names == ["attached.png", "embedded.png"]
+
+
 def test_positive_export_timezone_offset_applied():
     # 02/01/2024 03:00 at UTC+5 is 2024-01-01 22:00 UTC - still before a
     # start_time of 2024-01-01 22:01 UTC, so it must be excluded. Reading
@@ -193,22 +232,30 @@ def test_parse_message_missing_container_raises():
 
 
 def test_real_export_with_multiple_attachments_per_message():
-    """short_test_input.html is a real DiscordChatExporter export with five
+    """short_test_input.html is a real DiscordChatExporter export with seven
     messages from one author in a single message group: an image-only
     message, a text-only continuation, an image with a caption, a message
-    with *two* image attachments and a caption, and a text-only message -
-    exercising find_all (not just find) actually picking up every
-    attachment rather than only the first."""
+    with *two* image attachments and a caption, a text-only message, an
+    embedded-image-only message (a pasted image URL/link Discord unfurled,
+    chatlog__embed/chatlog__embed-generic-image rather than
+    chatlog__attachment/chatlog__attachment-media), and a message mixing one
+    attachment and one embed with a caption - exercising find_all (not just
+    find) actually picking up every image rather than only the first, and
+    both attachment and embed markup together."""
     html = (_EXAMPLE_INPUTS / "short_test_input.html").read_text(encoding="utf8")
     entries = parse_message_groups(html, _start_time("2024-01-01"), {"209767680100663296"})
 
-    assert len(entries) == 5
+    assert len(entries) == 7
     assert [e.image_names for e in entries] == [
         ["red-132B5.png"],
         ["black-525D9.png"],
         ["red-8E623.png"],
         ["red-C0E63.png", "black-1E1D0.png"],
         [],
+        ["red-EMBED1.png"],
+        ["black-525D9.png", "black-EMBED2.png"],
     ]
     assert entries[3].text_lines == ["red and black"]
     assert entries[4].text_lines == ["text-only message"]
+    assert entries[5].text_lines == []
+    assert entries[6].text_lines == ["black attachment and black embed"]

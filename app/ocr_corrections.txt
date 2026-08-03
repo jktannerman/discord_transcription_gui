@@ -72,3 +72,40 @@ it's
 \btum(s|ed|ing)?\b
 turn\1
 
+
+
+
+# I's -> It's - 7 - done 
+# singular quote marks, like ‘ - 4 - done 
+# commas instead of dots, A/B/C, - 3 - done
+# | -> I - 2 (but leave an escape option? currently automatic) - done
+# © -> C - 3 - done 
+# tum -> turn - 2 - done 
+# Im -> I'm or similar  - 4 - done
+# leam -> learn - 1 - done
+# litle -> little - 1 - done
+# I'l -> It'll - 1
+# itis -> it is - 1
+# quiock -> quick - 1
+# o -> or - 1
+# Itall -> It all 
+# ll -> I'll - 1
+# pio -> pip - 1
+# willbe -> will be - 1
+# priorties -> priorities - 1
+# comer -> corner - 2
+# fram -> from - 1
+# lke -> like - 1
+# swom -> sworn - 2
+# Ifyou -> If you - 1
+# fioor -> floor - 1
+# desoribe -> describe - 1
+# retum -> return - 1
+# ike -> like - 1
+# 50 -> so - 1
+# oliff -> cliff - 1
+# hom -> horn - 2
+# tom -> torn - 1
+# biocyle -> bicycle - 1
+# toa -> to a - 1
+# ttle -> little - 1
