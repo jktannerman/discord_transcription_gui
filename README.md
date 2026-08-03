@@ -6,12 +6,13 @@ export + media folder into a corrected plain-text transcript, OCR'ing
 attached images with Tesseract and letting you fix mistakes with real GUI
 widgets instead of memorizing terminal text codes.
 
-See `original_transcription_notes.md` for the full analysis of the original
-script this was rebuilt from, including the design decisions and improvement
-scope agreed on for this rewrite. See `ARCHITECTURE.md` and the topic docs
-it links to for the review screen's internals (the most architecturally
-involved part of the app), spacer/geometry design, test coverage, and
-logging conventions - this README sticks to what it does and how to run it.
+See `docs/original_transcription_notes.md` for the full analysis of the
+original script this was rebuilt from, including the design decisions and
+improvement scope agreed on for this rewrite. See `docs/ARCHITECTURE.md` and
+the topic docs it links to for the review screen's internals (the most
+architecturally involved part of the app), spacer/geometry design, test
+coverage, and logging conventions - this README sticks to what it does and
+how to run it.
 
 ## Status
 
@@ -247,7 +248,7 @@ What's in scope for v1:
    or otherwise edit -
    anything else typed into one is ignored. This replaces the original
    script's fixed regex-based spacing, which couldn't express anything
-   finer than its own hardcoded rules. See `ARCHITECTURE_SPACER_SLOTS.md`
+   finer than its own hardcoded rules. See `docs/ARCHITECTURE_SPACER_SLOTS.md`
    for the full default-spacing table and exactly how a spacer's content is
    parsed at Finalize.
 
@@ -392,13 +393,14 @@ gui_transcription/
   app_tests/              # pytest unit tests for all the non-GUI logic
   requirements.txt
   original_transcription_program/   # the original CLI script, kept as reference
-  original_transcription_notes.md   # analysis + decisions behind this rewrite
-  ARCHITECTURE.md         # architecture doc index + general testing heuristic
-  ARCHITECTURE_REVIEW_SCREEN.md   # review screen internals (most involved part of the app)
-  ARCHITECTURE_ROW_GEOMETRY.md    # document-space row spacing/offset accounting
-  ARCHITECTURE_SPACER_SLOTS.md    # blank-line spacing model + finalize/session persistence
-  ARCHITECTURE_TESTING.md         # what's covered where, what isn't
-  ARCHITECTURE_LOGGING.md         # app.log/scroll_trace.log conventions
+  docs/
+    original_transcription_notes.md   # analysis + decisions behind this rewrite
+    ARCHITECTURE.md         # architecture doc index + general testing heuristic
+    ARCHITECTURE_REVIEW_SCREEN.md   # review screen internals (most involved part of the app)
+    ARCHITECTURE_ROW_GEOMETRY.md    # document-space row spacing/offset accounting
+    ARCHITECTURE_SPACER_SLOTS.md    # blank-line spacing model + finalize/session persistence
+    ARCHITECTURE_TESTING.md         # what's covered where, what isn't
+    ARCHITECTURE_LOGGING.md         # app.log/scroll_trace.log conventions
 ```
 
 ## Running it
@@ -450,8 +452,8 @@ py -3.13 -m pytest gui_transcription\app_tests -v -m ""
 
 ### What's covered where
 
-See `ARCHITECTURE_TESTING.md` for a breakdown of what each area of the app
-is tested for, and what's still only covered by manual smoke-testing. The
+See `docs/ARCHITECTURE_TESTING.md` for a breakdown of what each area of the
+app is tested for, and what's still only covered by manual smoke-testing. The
 review screen (`app/gui/review_view.py` and friends) is the most
 architecturally involved and historically bug-prone part of the app, so it
 gets the most detailed treatment there.
@@ -467,7 +469,7 @@ gets the most detailed treatment there.
 - Scrolling quickly shows occasional partial "ghost" image frames and brief
   flickering at text box/image boundaries while rows are being paged in -
   cosmetic only (confirmed not to affect edits, focus, or scroll position
-  accuracy, unlike the scroll-jump bugs `ARCHITECTURE_REVIEW_SCREEN.md`
+  accuracy, unlike the scroll-jump bugs `docs/ARCHITECTURE_REVIEW_SCREEN.md`
   documents fixes for), not yet root-caused, deferred as low priority.
 - Only one generation of backup is kept per state file (`*.bak`), not a
   full history - a crash can still lose up to one autosave interval's

@@ -4,18 +4,23 @@ Part of [ARCHITECTURE.md](ARCHITECTURE.md).
 
 Every module logs through `app/logging_config.py`, which writes single-line
 JSON records to both the console and a rotating log file at
-`~/.discord_transcription_gui/app.log` (2MB x 3 backups). Covers run
-start/exit, OCR batch progress, HTML parsing summaries (with skip-reason
-counts), review-screen build/finalize events, and caught exceptions. Every
-line also carries a `run_id` (generated once per process start), so one
-run's lines can be isolated without re-deriving line offsets from an
-`application starting` marker by hand.
+`~/.discord_transcription_gui/app.log` (2MB x 3 backups) - `~` is Python's
+`Path.home()`, so this is `C:\Users\<you>\.discord_transcription_gui\app.log`
+on Windows, not a literal path. The directory and filename are
+`config.APP_DATA_DIR`/`config.LOG_FILE`; change them there, not in
+`logging_config.py`, if this ever needs to move. Covers run start/exit, OCR
+batch progress, HTML parsing summaries (with skip-reason counts),
+review-screen build/finalize events, and caught exceptions. Every line also
+carries a `run_id` (generated once per process start), so one run's lines
+can be isolated without re-deriving line offsets from an `application
+starting` marker by hand.
 
 The review screen's much higher-frequency per-scroll-tick tracing
 (reconcile/debounce/remeasure/image-load/box-resize events, all emitted via
 `ReviewFrame._log_event`) is routed to a separate logger/file instead of
 `app.log` - `~/.discord_transcription_gui/scroll_trace.log`
-(`logging_config.get_trace_logger()`, 40MB x 6 backups - sized generously,
+(`config.SCROLL_TRACE_LOG_FILE`, read via `logging_config.get_trace_logger()`,
+40MB x 6 backups - sized generously,
 see the comment at its `RotatingFileHandler` call, so debugging a rare bug
 isn't also a race against this file rotating the relevant session away) - so
 it doesn't compete with, or evict, `app.log`'s much lower-volume lifecycle
