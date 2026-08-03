@@ -71,8 +71,8 @@ deepest coverage:
 - The right-click image context menu (`app/gui/image_context_menu.py`,
   `test_image_context_menu.py`): each action's success/failure logging;
   `_open_image`/`_open_image_in_browser`/`_open_image_location`/
-  `_copy_image_to_clipboard` themselves (mocking `os`/`subprocess`/
-  `win32clipboard` rather than really opening a viewer/browser, a real
+  `_open_chatlog_at_message`/`_copy_image_to_clipboard` themselves (mocking
+  `os`/`subprocess`/`win32clipboard` rather than really opening a viewer/browser, a real
   Explorer window, or touching the real clipboard);
   `_default_browser_command`'s two-step registry lookup (mocked
   `winreg.OpenKey`/`QueryValueEx`) succeeding, and returning `None` when

@@ -247,11 +247,12 @@ check in general for words that are not words but would be words with m replaced
 The OCR text usually contains many misspellings. I would like a basic spellcheck feature that underlines potentially misspelt words in red. It should not apply to spacer input boxes. Consider how this would be done and assess its feasibility and the likelihood that it would lead to critical bugs. Is this a common thing to do with Tkinter? Make a plan.
 
 
-
+- done
 need to make the transcription detect images that have been edited in as embeds!
 
 
 
+- done
 make it possible to open a given image in browser?
 
 Please add a standard right-click menu that displays upon right-clicking images. There should be three options:
@@ -263,9 +264,19 @@ Please add a standard right-click menu that displays upon right-clicking images.
 As usual for these menus, it should exit upon clicking elsewhere, or pressing Esc. As usual, scrolling should be disabled while the right-click menu is open. The user's interactions with this menu should be logged. 
 
 
+- done
+Currently, Open Image in Browser seems to use the Windows Photos app. I would like this option to actually use my default browser, eg. Firefox or Chrome. However, a regular option called Open Image that opens an image with the default image viewer program would also be useful; please add this as the first option in the list.
+
+
+make it easier for the bot to find the logs?
+
+
 right click menu should link to the place in the chatlog
 
 It would often be useful to able to see the context surrounding a given image in the original chatlog. Please add an option to the right click menu for images which opens the chatlog in browser at the specific location of that image. Investigate the HTML examples for `id`-type tags which can be used for this purpose.
+
+
+The GUI tests have gotten to the point where they are so numerous that they are intimidating to run. Often the full suite will take more than a minute, during which the screen will be visibly flickering with the test windows and sometimes unusable.
 
 
 doesn't transcribe everything

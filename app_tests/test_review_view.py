@@ -9,6 +9,7 @@ account of the oscillation bug its current design replaced), so it's the
 highest-value gap to close.
 """
 import random
+import time
 import tkinter as tk
 from pathlib import Path
 
@@ -30,8 +31,15 @@ from gui_transcription.app.review_item import ReviewItem, build_review_items
 pytestmark = pytest.mark.gui
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def root():
+    # Module-scoped rather than one Tk() per test: with ~130 test cases in
+    # this file, a fresh real (see below) window per test made the suite
+    # both slow (each Tk()/destroy() pays a real window-manager handshake)
+    # and visibly flicker the whole time it ran. One window is created for
+    # the whole module and reused - see _destroy_test_widgets below for how
+    # each test's state still gets torn down just as thoroughly as
+    # root.destroy() used to do it.
     try:
         r = tk.Tk()
     except tk.TclError as exc:
@@ -44,6 +52,24 @@ def root():
     r.geometry("900x700")
     yield r
     r.destroy()
+
+
+@pytest.fixture(autouse=True)
+def _destroy_test_widgets(root):
+    """Every test builds its ReviewFrame straight onto the shared `root`
+    and never tears it down itself - before this fixture existed, that was
+    fine because root.destroy() ran at the end of every single test and
+    cascaded a <Destroy> event down to the frame, which is what actually
+    unbinds its canvas.bind_all("<MouseWheel>"/"<Prior>"/"<Next>") handlers
+    and cancels its pending after() jobs (review_view.py's _on_destroy).
+    Now that root outlives the test, this explicitly destroys every widget
+    the test created instead, so that same <Destroy>-triggered cleanup still
+    fires once per test - otherwise a leftover global binding or a stale
+    after() callback from one test could fire during the next one."""
+    yield
+    for child in list(root.children.values()):
+        child.destroy()
+    root.update_idletasks()
 
 
 @pytest.fixture
@@ -89,11 +115,19 @@ def _build_frame(root, items, **kwargs):
     # _apply_initial_position is scheduled via after_idle, and polls itself
     # via self.after(20, ...) until the canvas reports a real height - drive
     # the event loop (not just update_idletasks, which skips timer events)
-    # until that settles, the same way a real mainloop tick would.
-    for _ in range(20):
+    # until that settles, the same way a real mainloop tick would. On a
+    # brand-new toplevel this settles within a handful of tight-loop
+    # root.update() calls, but once `root` is shared across tests (see the
+    # root fixture) it's already mapped by the time later tests run, so a
+    # newly-packed canvas's real size comes from the OS's own WM_SIZE
+    # message rather than the toplevel's initial synchronous creation -
+    # that needs actual wall-clock idle time to arrive, not just repeated
+    # immediate update() calls, hence the small sleep and higher retry cap.
+    for _ in range(100):
         root.update()
         if frame._materialized_range is not None:
             break
+        time.sleep(0.01)
     return frame, finalized
 
 
@@ -564,10 +598,13 @@ def test_resuming_session_restores_saved_edit_and_focus(root, sample_image):
         return original_focus_text_box(index, role)
     frame._focus_text_box = _spy_focus_text_box
 
-    for _ in range(20):
+    # See _build_frame's matching loop for why this needs more than a
+    # handful of tight-loop update() calls once root is shared across tests.
+    for _ in range(100):
         root.update()
         if frame._materialized_range is not None:
             break
+        time.sleep(0.01)
 
     widget = frame._text_widgets[(text_item, "message")]
     assert widget.get("1.0", "end-1c") == "a resumed edit"
@@ -877,13 +914,22 @@ def test_destroying_an_unfocused_rows_box_then_rebuilding_does_not_steal_focus(r
     # Deliberately not focused - _destroy_row should leave self._refocus_slot
     # untouched (None) for a row whose box never had focus.
 
+    # Baseline instead of asserting focus_get() is None outright: on the
+    # shared `root` (see the root fixture) an earlier test may have left
+    # some other widget focused, which Tk's focus model can fall back to
+    # even after that widget's destroyed - None isn't guaranteed here the
+    # way it was when every test got its own never-before-focused Tk root.
+    # What actually matters is that rebuilding this never-focused row
+    # doesn't *change* who has focus, whatever it started as.
+    baseline_focus = frame.focus_get()
+
     frame._destroy_row(text_item)
     assert frame._refocus_slot is None
 
     frame._build_row(text_item)
     root.update()
 
-    assert frame.focus_get() is None
+    assert frame.focus_get() == baseline_focus
 
 
 def test_typing_in_a_focused_box_scrolled_offscreen_scrolls_its_row_back_into_view(root, sample_image):

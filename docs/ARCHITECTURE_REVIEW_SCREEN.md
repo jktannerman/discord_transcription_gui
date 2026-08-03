@@ -391,8 +391,10 @@ plus the scroll/debounce/Finalize-button machinery:
   else here that reaches back into an about-to-be-destroyed widget. That
   per-row cancellation isn't enough on its own, though: rows still
   materialized when the *whole* `ReviewFrame` goes away (screen switch, app
-  close, or a test's `root.destroy()`) never go through `_destroy_row` at
-  all, so their pending timers would otherwise leak. This surfaced
+  close, or - in `test_review_view.py` - the per-test teardown fixture
+  explicitly destroying that test's frame, since its `root` is now shared
+  across the whole module rather than recreated per test) never go through
+  `_destroy_row` at all, so their pending timers would otherwise leak. This surfaced
   immediately as a real, reproduced test failure once spellcheck shipped:
   `test_review_view.py`'s GUI tests build and tear down many `ReviewFrame`s
   (and their many text boxes) back to back in the same process, and Tcl's
@@ -601,7 +603,8 @@ plus the scroll/debounce/Finalize-button machinery:
 - **A popup `tk.Menu`'s close can't be detected via `<Unmap>` on Windows.**
   (`image_context_menu.py`'s `_show_image_context_menu`.) The right-click
   context menu on a review row's image (Open Image/Open Image in
-  Browser/Open Image Location/Copy Image) freezes review-window scrolling
+  Browser/Open Image Location/Open Chatlog at Message/Copy Image) freezes
+  review-window scrolling
   (mousewheel/Page Up-Down/scrollbar - `ReviewFrame._scroll_frozen`, checked
   in `review_view.py`'s mousewheel/scrollbar handlers and
   `keyboard_nav.py`'s `_on_page_up`/`_on_page_down`) for as long as it's

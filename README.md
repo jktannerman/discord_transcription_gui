@@ -452,6 +452,16 @@ can briefly flash on screen, most noticeably on the very first `Tk()` call
 in a process (which also runs Tcl/Tk's one-time subsystem init), so these
 are marked `gui` in `pyproject.toml` and excluded by default:
 
+`test_review_view.py` can't withdraw its window at all (see the module
+docstring on its `root` fixture) - its ~70 tests need real pixel geometry
+to verify actual row layout, and a withdrawn/never-mapped window never
+gets that. That file's `root` fixture is module-scoped and reused across
+all of its tests rather than opened and closed per test, which is what
+keeps running it from being a rapid-fire flash of ~70 separate windows;
+each test still tears its own widgets down afterward (an autouse fixture)
+so state can't leak between tests the way it would if the shared root were
+never cleaned up.
+
 ```powershell
 # Just the GUI tests
 py -3.13 -m pytest gui_transcription\app_tests -v -m gui
