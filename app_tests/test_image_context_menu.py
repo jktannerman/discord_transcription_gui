@@ -207,21 +207,23 @@ def test_right_click_opens_menu_and_freezes_scrolling(root, sample_image):
 
 @pytest.mark.gui
 def test_menu_closing_unfreezes_scrolling(root, sample_image):
-    """_on_image_context_menu_closed is a real bound method specifically so
-    a test can call it directly (see image_context_menu.py) - a synthetic
-    <Unmap> event doesn't reliably reach its binding for a menu that was
-    never actually mapped, which is exactly what every non-interactive test
-    has, since tk_popup itself is never really invoked here either (see the
-    previous test's docstring for why: on Windows it's backed by the native
-    TrackPopupMenu API, which blocks until a real person dismisses the
-    menu - confirmed by hand, not just inferred, since it left the test
-    window open with the real popup menu visible until force-closed)."""
+    """Unfreezing happens in _show_image_context_menu's own `finally`, right
+    after tk_popup returns - not via a menu.bind("<Unmap>", ...) callback,
+    which an earlier version of this feature relied on and which turned out
+    to never fire for a real popup menu on Windows (native TrackPopupMenu
+    popups aren't Tk-managed windows, so Tk never sees them unmap) - a real,
+    reported bug: right-clicking an image, then dismissing the menu with
+    Escape or a click elsewhere (anything other than clicking one of its
+    three commands), left scrolling frozen forever. tk_popup is mocked out
+    here the same way the previous test does (see its docstring for why the
+    real, blocking call can't be used in an unattended test), but the
+    `finally` this test is actually checking runs for real, right after the
+    mocked call returns - same as it would after a real one."""
     frame = _frame_with_one_image_row(root, sample_image)
+    fake_event = SimpleNamespace(x_root=root.winfo_rootx() + 50, y_root=root.winfo_rooty() + 50)
 
-    frame._scroll_frozen = True
-    frame._scrollbar.state(["disabled"])
-
-    frame._on_image_context_menu_closed(sample_image)
+    with patch.object(tk.Menu, "tk_popup", lambda menu_self, x, y, entry="": None):
+        frame._show_image_context_menu(fake_event, sample_image)
 
     assert frame._scroll_frozen is False
     assert "disabled" not in frame._scrollbar.state()

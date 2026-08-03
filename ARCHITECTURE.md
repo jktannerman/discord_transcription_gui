@@ -746,6 +746,42 @@ debounce/Finalize-button machinery:
   scrollbar now has to insert it before the checkbox column, not just
   before `text_widget`, to land at the true right edge with the checkbox
   column directly to its left.
+- **A popup `tk.Menu`'s close can't be detected via `<Unmap>` on Windows.**
+  (`image_context_menu.py`'s `_show_image_context_menu`.) The right-click
+  context menu on a review row's image (Open Image in Browser/Open Image
+  Location/Copy Image) freezes review-window scrolling (mousewheel/Page
+  Up-Down/scrollbar - `ReviewFrame._scroll_frozen`, checked in
+  `review_view.py`'s mousewheel/scrollbar handlers and `keyboard_nav.py`'s
+  `_on_page_up`/`_on_page_down`) for as long as it's open, so scrolling
+  can't move rows - and this menu's target image - out from under it. The
+  first version unfroze via `menu.bind("<Unmap>", ...)`, on the assumption
+  that Tk would fire its ordinary widget-unmap event when the popup closed,
+  the same way it does for a normal window being withdrawn/destroyed. A
+  real, reported bug: that binding never fired for a real close on Windows,
+  however it closed - clicking one of the three commands *did* unfreeze
+  (each command's own callback ran, and the menu happening to close right
+  after was incidental), but dismissing the menu with Escape or a click
+  elsewhere left scrolling frozen forever, since nothing else ever reset
+  `_scroll_frozen`. Root cause: on Windows, `tk.Menu`'s popup is implemented
+  via the native `TrackPopupMenu` API rather than as an ordinary
+  Tk-managed toplevel - so it never generates the `Unmap` event Tk's own
+  binding machinery depends on, regardless of how it's dismissed.
+
+  Fixed by not depending on any event at all: `TrackPopupMenu` blocks the
+  call that posts it - `menu.tk_popup(...)` doesn't return until a person
+  has actually dismissed the menu, one way or another - confirmed by hand,
+  not just inferred, since this exact blocking is also what made an
+  earlier, unattended version of this feature's own test suite hang with
+  the real popup menu visible on screen until force-closed (see
+  `test_image_context_menu.py`, which mocks `tk.Menu.tk_popup` for exactly
+  this reason rather than ever calling the real thing). That blocking
+  makes unfreezing in `_show_image_context_menu`'s own `finally` - right
+  after `tk_popup(...)` returns - deterministic: by the time control gets
+  there, the menu is already gone, whichever of the three ways it closed.
+  `_on_image_context_menu_closed` (the unfreeze itself, plus its own log
+  line) is a real bound method rather than a nested closure specifically so
+  a test can call it directly without needing a real popup close to trigger
+  it.
 
 ## Row geometry: the document-space spacing model
 
@@ -945,7 +981,7 @@ eligible for storage and pre-population.
 
 ## Test coverage
 
-301 tests total: 205 run by default, plus 96 marked `gui` (build a real,
+312 tests total: 213 run by default, plus 99 marked `gui` (build a real,
 withdrawn Tk window - see the README's "Testing" section) that are skipped
 unless run with `-m gui` or `-m ""`.
 
@@ -1008,6 +1044,19 @@ the deepest coverage:
 - Image preview sizing/visibility (`app/gui/image_loading.py`'s
   aspect-fit math and its load/unload viewport-boundary decision, plus
   real load/failure/unload behavior against actual Tk widgets).
+- The right-click image context menu (`app/gui/image_context_menu.py`,
+  `test_image_context_menu.py`): each action's success/failure logging;
+  `_open_image_in_browser`/`_open_image_location`/`_copy_image_to_clipboard`
+  themselves (mocking `webbrowser`/`subprocess`/`win32clipboard` rather than
+  really opening a browser, a real Explorer window, or touching the real
+  clipboard); scrolling (mousewheel, Page Up/Down, the scrollbar) freezing
+  while the menu is open and unfreezing once it closes. The real
+  `tk.Menu.tk_popup()` call is never made in any of these - see "A popup
+  `tk.Menu`'s close can't be detected via `<Unmap>` on Windows" above for
+  why it blocks until a person dismisses it, which hangs an unattended
+  test - `tk_popup` is mocked out instead, so these test what
+  `_show_image_context_menu` itself controls (state before/after the
+  call) rather than the real OS-level popup/dismissal.
 
 ### Session resume
 

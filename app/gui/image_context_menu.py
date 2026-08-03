@@ -14,8 +14,10 @@ disagreeing with where Tk actually drew and hit-tested it - the classic
 version of this mistake is popping up at event.x/event.y, which are
 relative to the clicked widget, not the screen tk_popup expects). Native
 tk_popup also means clicking elsewhere or pressing Escape already dismiss
-the menu for free (Tk's own grab/keybindings), with nothing further to wire
-up here.
+the menu for free (Tk's own grab/keybindings) - unlike *noticing* that
+dismissal to unfreeze scrolling again, which does need explicit handling;
+see _show_image_context_menu's docstring comment for why that can't lean on
+Tk's usual widget-unmap event the way it first tried to.
 """
 
 import subprocess
@@ -83,24 +85,33 @@ class ImageContextMenuMixin:
             ),
         )
 
-        # A bound method, not a nested closure, so a test can call it
-        # directly to exercise the freeze/unfreeze pairing without needing
-        # tk_popup's real close (see test_image_context_menu.py - simulating
-        # a close via a synthetic <Unmap> event turns out not to fire
-        # reliably for a menu that was never actually mapped in the first
-        # place, which every non-interactive test's menu never is).
-        menu.bind("<Unmap>", lambda event, p=image_path: self._on_image_context_menu_closed(p))
         try:
+            # On Windows, tk.Menu's popup is backed by the native
+            # TrackPopupMenu API, which blocks this call - running its own
+            # message loop - until a person actually dismisses the menu
+            # (a command clicked, a click outside it, or Escape); confirmed
+            # by hand, not just inferred, since it's also what made an
+            # earlier, unattended version of this feature's own test suite
+            # hang until force-closed (see test_image_context_menu.py).
+            # That blocking is what makes unfreezing in `finally` below
+            # deterministic: by the time tk_popup returns, the menu is
+            # already gone, however it closed.
+            #
+            # This was originally done via a menu.bind("<Unmap>", ...)
+            # instead, on the assumption that Tk would fire its usual
+            # widget-unmap event when a popup closes the way it does for
+            # an ordinary window - it doesn't, for this same native-menu
+            # reason: TrackPopupMenu's popup isn't a regular Tk-managed
+            # window, so Tk never sees (and can't report) it unmapping.
+            # That silently left this app frozen after every real close
+            # (Escape or an outside click, not just selecting a command),
+            # since nothing else ever called _on_image_context_menu_closed.
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+            self._on_image_context_menu_closed(image_path)
 
     def _on_image_context_menu_closed(self, image_path: Path) -> None:
-        # <Unmap> fires whenever this popup menu closes, however it
-        # closed (a command clicked, a click outside it, or Escape) - Tk's
-        # own tk_popup grab handles dismissal in all three cases, this just
-        # reacts to it being gone rather than needing its own per-case
-        # close handling.
         self._scroll_frozen = False
         self._scrollbar.state(["!disabled"])
         logger.info(

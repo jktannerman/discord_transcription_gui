@@ -178,6 +178,18 @@ What's in scope for v1:
    in the same direction falls through to scrolling the whole review
    window, same as if the box weren't there.
 
+   Right-clicking an image (loaded or not yet scrolled into view) pops up a
+   standard context menu with three actions: **Open Image in Browser**
+   (opens the image file in the system's default browser), **Open Image
+   Location** (opens its containing folder in Explorer with the file
+   pre-selected), and **Copy Image** (copies the actual picture - not a
+   file path - to the clipboard, so it can be pasted into another app).
+   Like any right-click menu, it closes on Escape or a click anywhere else;
+   review-window scrolling (mouse wheel, Page Up/Down, dragging the
+   scrollbar) is frozen for as long as it's open. Every open, close, and
+   action click is logged, along with whether the action itself succeeded
+   or failed.
+
    Each "ocr" box additionally has a checkbox in an otherwise-invisible
    column at its own top-right corner - inside the box, compressing its text
    leftward, and to the left of that box's own scrollbar if/when one
