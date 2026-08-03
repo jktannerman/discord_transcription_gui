@@ -8,8 +8,9 @@ widgets instead of memorizing terminal text codes.
 
 See `original_transcription_notes.md` for the full analysis of the original
 script this was rebuilt from, including the design decisions and improvement
-scope agreed on for this rewrite. See `ARCHITECTURE.md` for the review
-screen's internals (the most architecturally involved part of the app) and
+scope agreed on for this rewrite. See `ARCHITECTURE.md` and the topic docs
+it links to for the review screen's internals (the most architecturally
+involved part of the app), spacer/geometry design, test coverage, and
 logging conventions - this README sticks to what it does and how to run it.
 
 ## Status
@@ -179,16 +180,20 @@ What's in scope for v1:
    window, same as if the box weren't there.
 
    Right-clicking an image (loaded or not yet scrolled into view) pops up a
-   standard context menu with three actions: **Open Image in Browser**
-   (opens the image file in the system's default browser), **Open Image
-   Location** (opens its containing folder in Explorer with the file
-   pre-selected), and **Copy Image** (copies the actual picture - not a
-   file path - to the clipboard, so it can be pasted into another app).
-   Like any right-click menu, it closes on Escape or a click anywhere else;
-   review-window scrolling (mouse wheel, Page Up/Down, dragging the
-   scrollbar) is frozen for as long as it's open. Every open, close, and
-   action click is logged, along with whether the action itself succeeded
-   or failed.
+   standard context menu with four actions: **Open Image** (opens the image
+   file with the system's default *image viewer*, the same program a
+   double-click in Explorer would use), **Open Image in Browser** (opens it
+   with the system's default *browser* specifically - Firefox/Chrome/Edge/
+   etc., looked up from the same place Windows itself resolves "open with
+   default browser", independently of whatever program is the default image
+   viewer), **Open Image Location** (opens its containing folder in
+   Explorer with the file pre-selected), and **Copy Image** (copies the
+   actual picture - not a file path - to the clipboard, so it can be pasted
+   into another app). Like any right-click menu, it closes on Escape or a
+   click anywhere else; review-window scrolling (mouse wheel, Page Up/Down,
+   dragging the scrollbar) is frozen for as long as it's open. Every open,
+   close, and action click is logged, along with whether the action itself
+   succeeded or failed.
 
    Each "ocr" box additionally has a checkbox in an otherwise-invisible
    column at its own top-right corner - inside the box, compressing its text
@@ -242,9 +247,9 @@ What's in scope for v1:
    or otherwise edit -
    anything else typed into one is ignored. This replaces the original
    script's fixed regex-based spacing, which couldn't express anything
-   finer than its own hardcoded rules. See ARCHITECTURE.md's "Spacer
-   slots" section for the full default-spacing table and exactly how a
-   spacer's content is parsed at Finalize.
+   finer than its own hardcoded rules. See `ARCHITECTURE_SPACER_SLOTS.md`
+   for the full default-spacing table and exactly how a spacer's content is
+   parsed at Finalize.
 
    Keyboard shortcuts on the review screen: **Ctrl+Backspace** deletes the
    previous word; **Tab**/**Shift+Tab** move between text boxes in
@@ -388,7 +393,12 @@ gui_transcription/
   requirements.txt
   original_transcription_program/   # the original CLI script, kept as reference
   original_transcription_notes.md   # analysis + decisions behind this rewrite
-  ARCHITECTURE.md         # review-screen internals + logging conventions
+  ARCHITECTURE.md         # architecture doc index + general testing heuristic
+  ARCHITECTURE_REVIEW_SCREEN.md   # review screen internals (most involved part of the app)
+  ARCHITECTURE_ROW_GEOMETRY.md    # document-space row spacing/offset accounting
+  ARCHITECTURE_SPACER_SLOTS.md    # blank-line spacing model + finalize/session persistence
+  ARCHITECTURE_TESTING.md         # what's covered where, what isn't
+  ARCHITECTURE_LOGGING.md         # app.log/scroll_trace.log conventions
 ```
 
 ## Running it
@@ -440,11 +450,11 @@ py -3.13 -m pytest gui_transcription\app_tests -v -m ""
 
 ### What's covered where
 
-See ARCHITECTURE.md's "Test coverage" section for a breakdown of what each
-area of the app is tested for, and what's still only covered by manual
-smoke-testing. The review screen (`app/gui/review_view.py` and friends) is
-the most architecturally involved and historically bug-prone part of the
-app, so it gets the most detailed treatment there.
+See `ARCHITECTURE_TESTING.md` for a breakdown of what each area of the app
+is tested for, and what's still only covered by manual smoke-testing. The
+review screen (`app/gui/review_view.py` and friends) is the most
+architecturally involved and historically bug-prone part of the app, so it
+gets the most detailed treatment there.
 
 ## Known gaps / next steps
 
@@ -457,8 +467,8 @@ app, so it gets the most detailed treatment there.
 - Scrolling quickly shows occasional partial "ghost" image frames and brief
   flickering at text box/image boundaries while rows are being paged in -
   cosmetic only (confirmed not to affect edits, focus, or scroll position
-  accuracy, unlike the scroll-jump bugs `ARCHITECTURE.md` documents fixes
-  for), not yet root-caused, deferred as low priority.
+  accuracy, unlike the scroll-jump bugs `ARCHITECTURE_REVIEW_SCREEN.md`
+  documents fixes for), not yet root-caused, deferred as low priority.
 - Only one generation of backup is kept per state file (`*.bak`), not a
   full history - a crash can still lose up to one autosave interval's
   worth of review edits (5 seconds, `AUTOSAVE_INTERVAL_MS`) if it happens

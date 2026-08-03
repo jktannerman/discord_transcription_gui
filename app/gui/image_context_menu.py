@@ -1,6 +1,6 @@
-"""Right-click context menu on a review row's image: Open Image in Browser,
-Open Image Location, and Copy Image (see the README's "Review screen"
-section for the exact three actions and their expected behavior).
+"""Right-click context menu on a review row's image: Open Image, Open Image
+in Browser, Open Image Location, and Copy Image (see the README's "Review
+screen" section for the exact four actions and their expected behavior).
 
 Built with a plain tk.Menu popped up via tk_popup(event.x_root, event.y_root)
 - screen-absolute coordinates, not widget-relative event.x/event.y - rather
@@ -20,11 +20,13 @@ see _show_image_context_menu's docstring comment for why that can't lean on
 Tk's usual widget-unmap event the way it first tried to.
 """
 
+import os
+import shlex
 import subprocess
-import webbrowser
+import winreg
 from io import BytesIO
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 import tkinter as tk
 
@@ -58,6 +60,11 @@ class ImageContextMenuMixin:
         self._scroll_frozen = True
         self._scrollbar.state(["disabled"])
 
+        # Sized/hit-tested entirely by tk_popup itself (see the module
+        # docstring) - a fourth entry here needs no manual layout/hitbox
+        # bookkeeping the way it would have with a hand-rolled popup, which
+        # is exactly the class of bug ("clicks land on nothing") that
+        # docstring explains this design avoids.
         menu = tk.Menu(
             self,
             tearoff=0,
@@ -65,6 +72,12 @@ class ImageContextMenuMixin:
             fg=theme.DARK_FG,
             activebackground=theme.DARK_ACCENT,
             activeforeground="white",
+        )
+        menu.add_command(
+            label="Open Image",
+            command=lambda: self._run_image_menu_action(
+                "open_image", image_path, self._open_image
+            ),
         )
         menu.add_command(
             label="Open Image in Browser",
@@ -138,8 +151,35 @@ class ImageContextMenuMixin:
                 extra=logging_config.extra(action=action, image_path=str(image_path)),
             )
 
+    def _open_image(self, image_path: Path) -> None:
+        # The registered default *file* handler for this extension (e.g.
+        # Photos), same as double-clicking the file in Explorer - unlike
+        # _open_image_in_browser below, this is exactly what os.startfile
+        # already does, no registry lookup needed.
+        os.startfile(str(Path(image_path).resolve()))
+
     def _open_image_in_browser(self, image_path: Path) -> None:
-        webbrowser.open(Path(image_path).resolve().as_uri())
+        # Neither webbrowser.open() nor a plain os.startfile() on a
+        # file:// URI actually opens the *browser* here - both resolve a
+        # local file through its file-type association (Photos, same as
+        # _open_image above), since that association - not "what's the
+        # default browser" - is what Windows consults for a local path/
+        # file:// URI regardless of which API asks. Confirmed by hand:
+        # this action opened Photos, not Firefox/Chrome/Edge, until fixed
+        # to look up and launch the default *browser* directly instead.
+        #
+        # The default browser is a separate piece of registry state
+        # entirely (the "UserChoice" registered for the http protocol,
+        # not for this file's extension) - _default_browser_command below
+        # reads that and returns its command line, which this substitutes
+        # the image's file:// URI into and launches directly, bypassing
+        # file-type association altogether.
+        command_template = _default_browser_command()
+        if command_template is None:
+            raise RuntimeError("could not determine the default browser from the registry")
+        uri = Path(image_path).resolve().as_uri()
+        command = [uri if part == "%1" else part for part in shlex.split(command_template)]
+        subprocess.run(command)
 
     def _open_image_location(self, image_path: Path) -> None:
         # explorer.exe routinely exits non-zero even on a fully successful
@@ -167,3 +207,33 @@ class ImageContextMenuMixin:
             win32clipboard.SetClipboardData(win32clipboard.CF_DIB, dib)
         finally:
             win32clipboard.CloseClipboard()
+
+
+def _default_browser_command() -> Optional[str]:
+    """The current user's default browser's raw command line, e.g.
+    '"C:\\Program Files\\Mozilla Firefox\\firefox.exe" -osint -url "%1"' -
+    read from the same two-step registry lookup Windows Explorer itself
+    uses to resolve "open with default browser": the http protocol's
+    UserChoice ProgId, then that ProgId's own shell\\open\\command. This is
+    deliberately unrelated to a file's *extension* association (what
+    os.startfile/webbrowser.open actually follow for a local path or
+    file:// URI - see _open_image_in_browser above) - the two can name
+    different programs entirely (e.g. Photos as the .png handler, Firefox
+    as the http handler), and it's the second one this action needs.
+
+    None if any step of the lookup fails (no UserChoice set, an installed-
+    but-since-uninstalled browser's stale ProgId, ...) - the caller raises
+    on that, which _run_image_menu_action logs as a failure rather than
+    silently falling back to a file-association open that wouldn't
+    actually satisfy "open in browser"."""
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice",
+        ) as key:
+            prog_id, _ = winreg.QueryValueEx(key, "ProgId")
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"{prog_id}\shell\open\command") as key:
+            command, _ = winreg.QueryValueEx(key, None)
+    except OSError:
+        return None
+    return command
