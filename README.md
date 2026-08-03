@@ -181,16 +181,26 @@ What's in scope for v1:
    window, same as if the box weren't there.
 
    Right-clicking an image (loaded or not yet scrolled into view) pops up a
-   standard context menu with four actions: **Open Image** (opens the image
+   standard context menu with five actions: **Open Image** (opens the image
    file with the system's default *image viewer*, the same program a
    double-click in Explorer would use), **Open Image in Browser** (opens it
    with the system's default *browser* specifically - Firefox/Chrome/Edge/
    etc., looked up from the same place Windows itself resolves "open with
    default browser", independently of whatever program is the default image
    viewer), **Open Image Location** (opens its containing folder in
-   Explorer with the file pre-selected), and **Copy Image** (copies the
-   actual picture - not a file path - to the clipboard, so it can be pasted
-   into another app). Like any right-click menu, it closes on Escape or a
+   Explorer with the file pre-selected), **Open Chatlog at Message** (opens
+   the original chatlog HTML export, in the same default browser as "Open
+   Image in Browser", scrolled straight to that image's message - handy for
+   checking the surrounding conversation for context an OCR'd image alone
+   doesn't give), and **Copy Image** (copies the actual picture - not a
+   file path - to the clipboard, so it can be pasted into another app).
+   "Open Chatlog at Message" targets the message's own
+   `chatlog__message-container-<id>` element id, which DiscordChatExporter
+   writes onto the same container element as its `data-message-id`
+   attribute (see "HTML parsing" below) - a plain HTML fragment
+   (`#chatlog__message-container-<id>`) anchor on the file's own `file://`
+   URI, so the browser jumps straight there the same way it would for any
+   in-page anchor link. Like any right-click menu, it closes on Escape or a
    click anywhere else; review-window scrolling (mouse wheel, Page Up/Down,
    dragging the scrollbar) is frozen for as long as it's open. Every open,
    close, and action click is logged, along with whether the action itself
@@ -383,9 +393,9 @@ gui_transcription/
       virtualization.py    # pure row-height/visible-range math (no Tk)
       image_loading.py     # lazy image load/unload for review rows
       image_context_menu.py  # right-click menu on a review row's image
-                          # (open in browser/location, copy to clipboard) -
-                          # freezes scrolling (mousewheel/Page Up-Down/
-                          # scrollbar) while open
+                          # (open in browser/location, open chatlog at
+                          # message, copy to clipboard) - freezes scrolling
+                          # (mousewheel/Page Up-Down/scrollbar) while open
       keyboard_nav.py      # Tab/Page Up-Down/undo keyboard shortcuts
       text_undo.py          # per-box undo/redo history that survives a
                           # row being paged out and rebuilt (in-memory only)

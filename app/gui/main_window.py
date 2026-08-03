@@ -573,6 +573,7 @@ class App:
             self.container,
             self._review_items,
             self._on_finalize_clicked,
+            html_path=self._run.html_path,
             initial_saved_texts=initial_saved_texts,
             initial_focus_slot=initial_focus_slot,
             initial_scroll_fraction=initial_scroll_fraction,

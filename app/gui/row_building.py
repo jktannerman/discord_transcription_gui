@@ -214,7 +214,7 @@ class RowBuildingMixin:
         image_label = ttk.Label(container, text="(scroll to load image)", anchor="center")
         image_label.pack(fill="both", expand=True)
         self._images.register(index, image_index, image_path, image_label)
-        self._bind_image_context_menu(image_label, image_path)
+        self._bind_image_context_menu(image_label, image_path, self._items[index].message_id)
         return image_h
 
     def _reclaim_widget_if_present(self, key: Tuple[int, str]) -> None:

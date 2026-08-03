@@ -1,6 +1,7 @@
 """Right-click context menu on a review row's image: Open Image, Open Image
-in Browser, Open Image Location, and Copy Image (see the README's "Review
-screen" section for the exact four actions and their expected behavior).
+in Browser, Open Image Location, Open Chatlog at Message, and Copy Image
+(see the README's "Review screen" section for the exact five actions and
+their expected behavior).
 
 Built with a plain tk.Menu popped up via tk_popup(event.x_root, event.y_root)
 - screen-absolute coordinates, not widget-relative event.x/event.y - rather
@@ -50,18 +51,22 @@ class ImageContextMenuMixin:
     and keyboard_nav.py's Page Up/Down) so scrolling can't move rows - and
     therefore this menu's target image - out from under an open menu."""
 
-    def _bind_image_context_menu(self, label: tk.Widget, image_path: Path) -> None:
-        label.bind("<Button-3>", lambda event, p=image_path: self._show_image_context_menu(event, p))
+    def _bind_image_context_menu(self, label: tk.Widget, image_path: Path, message_id: str) -> None:
+        label.bind(
+            "<Button-3>",
+            lambda event, p=image_path, m=message_id: self._show_image_context_menu(event, p, m),
+        )
 
-    def _show_image_context_menu(self, event: tk.Event, image_path: Path) -> None:
+    def _show_image_context_menu(self, event: tk.Event, image_path: Path, message_id: str) -> None:
         logger.info(
-            "image context menu opened", extra=logging_config.extra(image_path=str(image_path))
+            "image context menu opened",
+            extra=logging_config.extra(image_path=str(image_path), message_id=message_id),
         )
         self._scroll_frozen = True
         self._scrollbar.state(["disabled"])
 
         # Sized/hit-tested entirely by tk_popup itself (see the module
-        # docstring) - a fourth entry here needs no manual layout/hitbox
+        # docstring) - a fifth entry here needs no manual layout/hitbox
         # bookkeeping the way it would have with a hand-rolled popup, which
         # is exactly the class of bug ("clicks land on nothing") that
         # docstring explains this design avoids.
@@ -89,6 +94,14 @@ class ImageContextMenuMixin:
             label="Open Image Location",
             command=lambda: self._run_image_menu_action(
                 "open_location", image_path, self._open_image_location
+            ),
+        )
+        menu.add_command(
+            label="Open Chatlog at Message",
+            command=lambda: self._run_image_menu_action(
+                "open_chatlog_at_message",
+                image_path,
+                lambda p: self._open_chatlog_at_message(message_id),
             ),
         )
         menu.add_command(
@@ -174,12 +187,27 @@ class ImageContextMenuMixin:
         # reads that and returns its command line, which this substitutes
         # the image's file:// URI into and launches directly, bypassing
         # file-type association altogether.
-        command_template = _default_browser_command()
-        if command_template is None:
-            raise RuntimeError("could not determine the default browser from the registry")
-        uri = Path(image_path).resolve().as_uri()
-        command = [uri if part == "%1" else part for part in shlex.split(command_template)]
-        subprocess.run(command)
+        _launch_url_in_default_browser(Path(image_path).resolve().as_uri())
+
+    def _open_chatlog_at_message(self, message_id: str) -> None:
+        # The export's own DiscordChatExporter markup gives every message's
+        # chatlog__message-container div both a data-message-id attribute
+        # (what chatlog.py already reads to key edits/sessions by) *and* an
+        # id="chatlog__message-container-<that same id>" attribute on the
+        # very same element - confirmed by hand against a real export (see
+        # example_inputs/short_test_input.html). That id is exactly what an
+        # HTML fragment (#...) anchor needs, so this needs no HTML parsing
+        # of its own at open time - just string-formatting the id chatlog.py
+        # already guarantees every kept message has.
+        #
+        # Routed through the same default-browser lookup as
+        # _open_image_in_browser (not os.startfile/webbrowser.open) for
+        # consistency - an .html file's own default-open association isn't
+        # guaranteed to be a browser either, the same gap that action's
+        # docstring explains for images.
+        uri = self._html_path.resolve().as_uri()
+        anchor = f"chatlog__message-container-{message_id}"
+        _launch_url_in_default_browser(f"{uri}#{anchor}")
 
     def _open_image_location(self, image_path: Path) -> None:
         # explorer.exe routinely exits non-zero even on a fully successful
@@ -207,6 +235,18 @@ class ImageContextMenuMixin:
             win32clipboard.SetClipboardData(win32clipboard.CF_DIB, dib)
         finally:
             win32clipboard.CloseClipboard()
+
+
+def _launch_url_in_default_browser(url: str) -> None:
+    """Launch `url` (a file:// URI, with or without a #fragment) in the
+    user's actual default *browser*, looked up via _default_browser_command
+    - shared by _open_image_in_browser and _open_chatlog_at_message, which
+    otherwise differ only in what URI they build."""
+    command_template = _default_browser_command()
+    if command_template is None:
+        raise RuntimeError("could not determine the default browser from the registry")
+    command = [url if part == "%1" else part for part in shlex.split(command_template)]
+    subprocess.run(command)
 
 
 def _default_browser_command() -> Optional[str]:

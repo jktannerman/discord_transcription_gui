@@ -1,5 +1,6 @@
 """Right-click image context menu (Open Image / Open Image in Browser /
-Open Image Location / Copy Image) - image_context_menu.py.
+Open Image Location / Open Chatlog at Message / Copy Image) -
+image_context_menu.py.
 
 Split into two groups the same way test_image_loading.py is:
 
@@ -15,6 +16,7 @@ Split into two groups the same way test_image_loading.py is:
   default (see pyproject.toml's addopts).
 """
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -120,7 +122,7 @@ def test_default_browser_command_returns_none_for_a_stale_progid():
         assert _default_browser_command() is None
 
 
-# -- the four actions themselves ---------------------------------------------
+# -- the five actions themselves ----------------------------------------------
 
 
 def test_open_image_uses_os_startfile(tmp_path):
@@ -182,6 +184,41 @@ def test_open_image_location_selects_the_file_in_explorer(tmp_path):
     assert command[0] == "explorer"
     assert command[1] == "/select,"
     assert str(image_path.resolve()) in command[2]
+
+
+def test_open_chatlog_at_message_launches_default_browser_with_message_anchor(tmp_path):
+    stub = _MenuActionStub()
+    html_path = tmp_path / "chatlog.html"
+    html_path.write_text("<html></html>", encoding="utf8")
+    stub._html_path = html_path
+    firefox_command = r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url "%1"'
+    with (
+        patch(
+            "gui_transcription.app.gui.image_context_menu._default_browser_command",
+            return_value=firefox_command,
+        ),
+        patch("gui_transcription.app.gui.image_context_menu.subprocess") as mock_subprocess,
+    ):
+        stub._open_chatlog_at_message("1519374940359360783")
+    (command,), _ = mock_subprocess.run.call_args
+    assert command[0] == r"C:\Program Files\Mozilla Firefox\firefox.exe"
+    url = command[-1]
+    assert url.startswith("file:")
+    assert html_path.name in url
+    assert url.endswith("#chatlog__message-container-1519374940359360783")
+
+
+def test_open_chatlog_at_message_raises_when_default_browser_cannot_be_determined(tmp_path):
+    stub = _MenuActionStub()
+    html_path = tmp_path / "chatlog.html"
+    html_path.write_text("<html></html>", encoding="utf8")
+    stub._html_path = html_path
+    with patch(
+        "gui_transcription.app.gui.image_context_menu._default_browser_command",
+        return_value=None,
+    ):
+        with pytest.raises(RuntimeError):
+            stub._open_chatlog_at_message("1519374940359360783")
 
 
 def test_copy_image_to_clipboard_writes_cf_dib_via_win32clipboard(tmp_path):
@@ -262,7 +299,7 @@ def _frame_with_one_image_row(root, sample_image):
     file_info = {"sample.png": ["ocr text"]}
     items = build_review_items(entries, file_info, image_folder=sample_image.parent)
     finalized = []
-    frame = ReviewFrame(root, items, finalized.append)
+    frame = ReviewFrame(root, items, finalized.append, html_path=Path("dummy_chatlog.html"))
     frame.pack(fill="both", expand=True)
     for _ in range(20):
         root.update()
@@ -295,7 +332,7 @@ def test_right_click_opens_menu_and_freezes_scrolling(root, sample_image):
 
     assert frame._scroll_frozen is False
     with patch.object(tk.Menu, "tk_popup", _fake_tk_popup):
-        frame._show_image_context_menu(fake_event, sample_image)
+        frame._show_image_context_menu(fake_event, sample_image, "1")
 
     assert frozen_when_popup_would_run == [True, True]
 
@@ -318,7 +355,7 @@ def test_menu_closing_unfreezes_scrolling(root, sample_image):
     fake_event = SimpleNamespace(x_root=root.winfo_rootx() + 50, y_root=root.winfo_rooty() + 50)
 
     with patch.object(tk.Menu, "tk_popup", lambda menu_self, x, y, entry="": None):
-        frame._show_image_context_menu(fake_event, sample_image)
+        frame._show_image_context_menu(fake_event, sample_image, "1")
 
     assert frame._scroll_frozen is False
     assert "disabled" not in frame._scrollbar.state()

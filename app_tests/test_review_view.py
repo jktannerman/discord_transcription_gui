@@ -10,6 +10,7 @@ highest-value gap to close.
 """
 import random
 import tkinter as tk
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -82,6 +83,7 @@ def _items(sample_image, count=40):
 
 def _build_frame(root, items, **kwargs):
     finalized = []
+    kwargs.setdefault("html_path", Path("dummy_chatlog.html"))
     frame = ReviewFrame(root, items, finalized.append, **kwargs)
     frame.pack(fill="both", expand=True)
     # _apply_initial_position is scheduled via after_idle, and polls itself
@@ -549,6 +551,7 @@ def test_resuming_session_restores_saved_edit_and_focus(root, sample_image):
     finalized = []
     frame = ReviewFrame(
         root, items, finalized.append,
+        html_path=Path("dummy_chatlog.html"),
         initial_saved_texts=saved_texts,
         initial_focus_slot=(text_item, "message"),
     )

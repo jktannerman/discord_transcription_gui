@@ -108,6 +108,7 @@ pass changes only timing, never the result.
 """
 
 import tkinter as tk
+from pathlib import Path
 from tkinter import ttk
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -152,6 +153,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         master: tk.Widget,
         items: List[ReviewItem],
         on_finalize: Callable[[List[Dict[str, Optional[str]]]], None],
+        html_path: Path,
         initial_saved_texts: Optional[List[Dict[str, Optional[str]]]] = None,
         initial_focus_slot: Optional[Tuple[int, str]] = None,
         initial_scroll_fraction: Optional[float] = None,
@@ -168,6 +170,12 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         )
         self._items = items
         self._on_finalize = on_finalize
+        # This run's source chatlog export - used by image_context_menu.py's
+        # "Open Chatlog at Message" action to build a file:// URI pointing
+        # at this exact message's #chatlog__message-container-<id> anchor
+        # (see that module for why that specific id, not some other one, is
+        # the right anchor to use).
+        self._html_path = html_path
         self._initial_focus_slot = initial_focus_slot
         self._initial_scroll_fraction = initial_scroll_fraction
         # Flat, transcript-ordered list of every editable box this item
