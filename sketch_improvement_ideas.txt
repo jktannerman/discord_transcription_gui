@@ -271,12 +271,14 @@ Currently, Open Image in Browser seems to use the Windows Photos app. I would li
 make it easier for the bot to find the logs?
 
 
+- done
 right click menu should link to the place in the chatlog
 
 It would often be useful to able to see the context surrounding a given image in the original chatlog. Please add an option to the right click menu for images which opens the chatlog in browser at the specific location of that image. Investigate the HTML examples for `id`-type tags which can be used for this purpose.
 
 
-The GUI tests have gotten to the point where they are so numerous that they are intimidating to run. Often the full suite will take more than a minute, during which the screen will be visibly flickering with the test windows and sometimes unusable.
+- done
+The GUI tests have gotten to the point where they are so numerous that they are intimidating to run. Often the full suite will take more than a minute, during which the screen will be visibly flickering with the test windows and sometimes unusable. Please consider different ways to handle this.
 
 
 doesn't transcribe everything
@@ -289,6 +291,7 @@ more comprehensive tests?
 more comprehensive logging?
 
 
+Currently, many areas of the code assume Windows by default, but it would be good if the program could be used on Linux as well. Testing on a Linux system cannot currently be done, but please read through the files, identify any sections that are Windows-specific, and modularise them in preparation for future development. Also, give overall commentary on any aspects of this project that may be more inherently tied to Windows in a way that could be difficult to replicate on Linux, if they exist.
 
 
 
@@ -328,6 +331,8 @@ personalised clipboard?
 ctrl-f?? with regex?
 
 Please add Ctrl-F functionality for quick navigation. It should find matches in both the immutable text elements in the left column and all contents of input boxes in the right column. Draw strong inspiration from `./multi_file_search/multi_file_search.py`. 
+
+
 
 
 

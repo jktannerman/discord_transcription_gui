@@ -80,10 +80,6 @@ def estimate_row_height(item: ReviewItem, max_text_box_height_px: Optional[int] 
     Walks item.slot_roles - the same ordering _build_row uses - estimating
     both of the row's columns (the immutable left column: label and/or
     images; the editable right column: one box per slot, content or
-
-    Walks item.slot_roles - the same ordering _build_row uses - estimating
-    both of the row's columns (the immutable left column: label and/or
-    images; the editable right column: one box per slot, content or
     spacer) independently and takes the taller of the two, then adds
     ROW_FRAME_OVERHEAD_PX for the row's own padding/border, plus
     2*ROW_PACK_PADY_PX for the vertical pack() gap *outside* the row's own

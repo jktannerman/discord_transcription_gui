@@ -245,6 +245,31 @@ class KeyboardNavMixin:
                 return key
         return None
 
+    def _box_document_top(
+        self, index: int, container: tk.Widget, row: tk.Widget
+    ) -> float:
+        """Document-space (canvas-absolute) pixel offset of `container`'s
+        own top edge - shared by _scroll_box_into_view and
+        _keep_cursor_in_viewport, which both need a box's real position
+        rather than just its row's. self._offset_of(index) is where row
+        `index`'s full pack-allocated slot starts, not where its Frame's
+        own visible top edge (row.winfo_rooty(), what the winfo_rooty()
+        delta below is anchored to) sits - that's ROW_PACK_PADY_PX further
+        down, past the row's own leading pack pady (see that constant's
+        docstring in layout_constants.py). container.winfo_rooty() -
+        row.winfo_rooty() is then the box's offset *within* the row, which
+        isn't affected by _scroll_frame being repositioned on every
+        reconcile, since that repositioning doesn't change a box's
+        position relative to its own row.
+
+        Raises tk.TclError if a widget along the way was destroyed mid-
+        check - callers catch that and bail out, same as before this was
+        factored out."""
+        return (
+            self._offset_of(index) + ROW_PACK_PADY_PX
+            + (container.winfo_rooty() - row.winfo_rooty())
+        )
+
     def _scroll_box_into_view(self, key: Tuple[int, str]) -> None:
         """Adjust the canvas's scroll position only as much as needed to
         bring `key`'s own box - not just its row - fully into the
@@ -261,20 +286,9 @@ class KeyboardNavMixin:
         was still only partially onscreen, or even entirely covered: e.g.
         the row's bottom-most box sitting just past the viewport edge while
         the row's top-most box (also within the same row, so sharing the
-        same row-level bounds) was fully visible. Box bounds are computed
-        the same way _keep_cursor_in_viewport's are forced to: row.winfo_y()
-        is relative to the repositioned _scroll_frame block (see
-        _reconcile), not the canvas's absolute coordinate space, so
-        self._offset_of(index) (the row's own document-space offset) is
-        combined with a winfo_rooty() delta for the box's offset *within*
-        that row, which isn't affected by that repositioning. Plus
-        ROW_PACK_PADY_PX: self._offset_of(index) is where row `index`'s
-        full pack-allocated slot starts, not where its Frame's own visible
-        top edge (row.winfo_rooty(), what the winfo_rooty() delta above is
-        actually anchored to) sits - that's ROW_PACK_PADY_PX further down,
-        past the row's own leading pack pady (see that constant's
-        docstring in layout_constants.py). Omitting it left every box's
-        computed position short by that fixed amount, on every row."""
+        same row-level bounds) was fully visible. Box top is computed by
+        _box_document_top, shared with _keep_cursor_in_viewport - see its
+        docstring for why the formula is what it is."""
         index, role = key
         container = self._text_containers.get(key)
         row = self._row_frames.get(index)
@@ -287,10 +301,7 @@ class KeyboardNavMixin:
             return
 
         try:
-            box_top = (
-                self._offset_of(index) + ROW_PACK_PADY_PX
-                + (container.winfo_rooty() - row.winfo_rooty())
-            )
+            box_top = self._box_document_top(index, container, row)
         except tk.TclError:
             return  # a widget along the way was destroyed mid-check
         box_bottom = box_top + container.winfo_height()
@@ -359,16 +370,9 @@ class KeyboardNavMixin:
         Up past the top), so which edge is violated already says which way
         to scroll - no separate direction argument needed.
 
-        Box position is computed the same way the rest of this module is
-        forced to (see _scroll_box_into_view's docstring): self._offset_of
-        (index) for the row's own document-space offset, plus
-        ROW_PACK_PADY_PX for the row's own leading pack pady (real screen
-        space row.winfo_rooty() sits past, but that offset_of(index) alone
-        doesn't know about), plus a winfo_rooty() delta for the box's
-        offset *within* that row, which - unlike the row's own
-        winfo_y() - isn't affected by _scroll_frame being repositioned on
-        every reconcile, since that repositioning doesn't change a box's
-        position relative to its own row."""
+        Box top is computed by _box_document_top, shared with
+        _scroll_box_into_view - see its docstring for why the formula is
+        what it is."""
         index, _ = key
         if widget is not self._text_widgets.get(key):
             return  # row was torn down/rebuilt before this idle tick ran
@@ -380,10 +384,7 @@ class KeyboardNavMixin:
             bbox = widget.bbox("insert")
             if bbox is None:
                 return
-            container_top = (
-                self._offset_of(index) + ROW_PACK_PADY_PX
-                + (container.winfo_rooty() - row.winfo_rooty())
-            )
+            container_top = self._box_document_top(index, container, row)
             cursor_top = container_top + (widget.winfo_rooty() - container.winfo_rooty()) + bbox[1]
         except tk.TclError:
             return  # a widget along the way was destroyed mid-check
