@@ -6,11 +6,19 @@ Tesseract is the only active backend, but the call is routed through
 added as a second entry without changing any calling code.
 """
 
+import re
+
 import pytesseract
 
 from . import config, logging_config
 
 logger = logging_config.get_logger(__name__)
+
+# Same blank-line-separated-block convention as ocr_corrections.py's
+# _BLOCK_SEPARATOR_RE - a run of whitespace containing at least one blank
+# line marks a paragraph break.
+_PARAGRAPH_SEPARATOR_RE = re.compile(r"\n\s*\n")
+_INTERNAL_WHITESPACE_RE = re.compile(r"\s+")
 
 pytesseract.pytesseract.tesseract_cmd = config.TESSERACT_CMD
 
@@ -45,14 +53,13 @@ def transcribe_image(file_path: str, backend: str = DEFAULT_BACKEND) -> str:
 def split_into_paragraphs(raw_text: str) -> list[str]:
     """Split raw OCR output into paragraphs.
 
-    Blank lines (``\\n\\n``) separate paragraphs; single newlines within a
-    paragraph are treated as wrapped text and collapsed to spaces.
+    Blank lines separate paragraphs; any other run of whitespace within a
+    paragraph (a wrapped single newline, a run of spaces, ...) is collapsed
+    to a single space.
     """
-    paragraphs = (
-        raw_text.replace("\n\n", " %10 %10")
-        .replace("\n", " ")
-        .replace("  ", " ")
-        .split("%10 %10")
-    )
+    paragraphs = [
+        _INTERNAL_WHITESPACE_RE.sub(" ", para)
+        for para in _PARAGRAPH_SEPARATOR_RE.split(raw_text)
+    ]
     logger.debug("split OCR text into paragraphs", extra=logging_config.extra(count=len(paragraphs)))
     return paragraphs

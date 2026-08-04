@@ -52,43 +52,42 @@ def _get_checker():
     return _checker
 
 
-def _get_whitelist(path: Path = config.SPELLCHECK_WHITELIST_FILE) -> Set[str]:
-    """Load (and cache) the user-editable whitelist file - a missing file
-    just means no whitelist, same convention as ocr_corrections.py's
+def _parse_wordlist_file(path: Path) -> Set[str]:
+    """Parse a whitelist/blacklist sidecar file: one lowercased word per
+    line, blank lines and lines starting with "#" ignored. A missing file
+    just means an empty list, same convention as ocr_corrections.py's
     load_corrections."""
-    global _whitelist, _whitelist_loaded
-    if _whitelist_loaded:
-        return _whitelist
     words: Set[str] = set()
     if path.exists():
         for line in path.read_text(encoding="utf8").splitlines():
             line = line.strip()
             if line and not line.startswith("#"):
                 words.add(line.lower())
-    _whitelist = words
+    return words
+
+
+def _get_whitelist(path: Path = config.SPELLCHECK_WHITELIST_FILE) -> Set[str]:
+    """Load (and cache) the user-editable whitelist file."""
+    global _whitelist, _whitelist_loaded
+    if _whitelist_loaded:
+        return _whitelist
+    _whitelist = _parse_wordlist_file(path)
     _whitelist_loaded = True
     logger.info(
-        "loaded spellcheck whitelist", extra=logging_config.extra(path=str(path), count=len(words))
+        "loaded spellcheck whitelist", extra=logging_config.extra(path=str(path), count=len(_whitelist))
     )
     return _whitelist
 
 
 def _get_blacklist(path: Path = config.SPELLCHECK_BLACKLIST_FILE) -> Set[str]:
-    """Load (and cache) the user-editable blacklist file - a missing file
-    just means no blacklist, same convention as `_get_whitelist`."""
+    """Load (and cache) the user-editable blacklist file."""
     global _blacklist, _blacklist_loaded
     if _blacklist_loaded:
         return _blacklist
-    words: Set[str] = set()
-    if path.exists():
-        for line in path.read_text(encoding="utf8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                words.add(line.lower())
-    _blacklist = words
+    _blacklist = _parse_wordlist_file(path)
     _blacklist_loaded = True
     logger.info(
-        "loaded spellcheck blacklist", extra=logging_config.extra(path=str(path), count=len(words))
+        "loaded spellcheck blacklist", extra=logging_config.extra(path=str(path), count=len(_blacklist))
     )
     return _blacklist
 

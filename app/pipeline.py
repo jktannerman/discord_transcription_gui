@@ -210,10 +210,10 @@ def finalize_run(output_path: Path, html_file_path: Path) -> str:
     end_date = datetime.datetime.fromtimestamp(end_time, tz=datetime.timezone.utc)
     state.append_run_date(end_date.strftime("%Y-%m-%d-%H-%M-%S"))
 
-    with open(output_path, "r", encoding="utf8") as f:
-        raw = f.read()
-
-    just_added = raw.split(config.BREAK_MARKER)[-1]
+    # cleaned is already exactly what output_path now holds on disk (nothing
+    # else writes to it between the write above and here) - re-reading it
+    # back would just reproduce the same string from a second disk read.
+    just_added = cleaned.split(config.BREAK_MARKER)[-1]
     pyperclip.copy(just_added)
 
     with open(output_path, "a", encoding="utf8") as f:
