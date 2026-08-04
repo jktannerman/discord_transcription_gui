@@ -299,11 +299,7 @@ class RowBuildingMixin:
         scrollbar = ttk.Scrollbar(text_container, orient="vertical")
         text_widget = tk.Text(
             text_container, wrap="word", relief="flat", undo=True,
-            font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE),
-            bg=theme.DARK_TEXT_BG, fg=theme.DARK_FG, insertbackground=theme.DARK_INSERT,
-            selectbackground=theme.DARK_ACCENT, selectforeground="white",
-            highlightthickness=1, highlightbackground=theme.DARK_BG_ALT,
-            highlightcolor=theme.DARK_FOCUS_HIGHLIGHT,
+            **theme.dark_text_kwargs(),
             padx=TEXT_BOX_INNER_PADX, pady=4,
         )
         self._configure_spellcheck_tag(text_widget)
@@ -387,11 +383,7 @@ class RowBuildingMixin:
 
         text_widget = tk.Text(
             text_container, height=1, wrap="none", relief="flat", undo=True,
-            font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE),
-            bg=theme.DARK_TEXT_BG, fg=theme.DARK_FG, insertbackground=theme.DARK_INSERT,
-            selectbackground=theme.DARK_ACCENT, selectforeground="white",
-            highlightthickness=1, highlightbackground=theme.DARK_BG_ALT,
-            highlightcolor=theme.DARK_FOCUS_HIGHLIGHT,
+            **theme.dark_text_kwargs(),
             padx=TEXT_BOX_INNER_PADX, pady=4,
         )
         text_widget.pack(side="left", fill="both", expand=True)

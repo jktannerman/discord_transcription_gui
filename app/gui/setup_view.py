@@ -88,11 +88,7 @@ class SetupFrame(ttk.Frame):
         text_container.pack(anchor="w")
         self._approved_users_text = tk.Text(
             text_container, width=60, height=5, wrap="none", undo=True,
-            font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE - 2),
-            bg=theme.DARK_TEXT_BG, fg=theme.DARK_FG, insertbackground=theme.DARK_INSERT,
-            selectbackground=theme.DARK_ACCENT, selectforeground="white",
-            highlightthickness=1, highlightbackground=theme.DARK_BG_ALT,
-            highlightcolor=theme.DARK_FOCUS_HIGHLIGHT,
+            **theme.dark_text_kwargs(font_size=theme.TEXT_FONT_SIZE - 2),
         )
         self._approved_users_text.insert("1.0", initial_approved_users_text)
         self._approved_users_text.pack(side="left")

@@ -26,6 +26,25 @@ TEXT_FONT_FAMILY = "Consolas"
 TEXT_FONT_SIZE = 14
 
 
+def dark_text_kwargs(font_size: int = TEXT_FONT_SIZE) -> dict:
+    """Shared tk.Text constructor kwargs (font/colors/focus-highlight) for
+    every editable box in the app - the review screen's "message"/"ocr"/
+    spacer boxes (row_building.py) and the setup screen's approved-users
+    box (setup_view.py) - so the dark palette only has to be tuned in one
+    place instead of three near-identical copies drifting apart."""
+    return dict(
+        font=(TEXT_FONT_FAMILY, font_size),
+        bg=DARK_TEXT_BG,
+        fg=DARK_FG,
+        insertbackground=DARK_INSERT,
+        selectbackground=DARK_ACCENT,
+        selectforeground="white",
+        highlightthickness=1,
+        highlightbackground=DARK_BG_ALT,
+        highlightcolor=DARK_FOCUS_HIGHLIGHT,
+    )
+
+
 def enable_dark_title_bar(window: tk.Tk) -> None:
     """Enable the dark window title bar on Windows 10/11. No-op elsewhere.
 

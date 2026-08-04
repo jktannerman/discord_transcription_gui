@@ -39,23 +39,38 @@ from .setup_view import SetupFrame
 logger = logging_config.get_logger(__name__)
 
 
-def _match_saved_edits(
-    review_items: list["review_item.ReviewItem"], saved_texts: dict
+def _match_edits_by_message_id(
+    review_items: list["review_item.ReviewItem"],
+    edits: dict,
+    *,
+    summary_event: str,
+    summary_level: str,
+    log_per_box_detail: bool,
 ) -> list[dict[str, Optional[str]]]:
-    """Translate a session's message_id-keyed saved edits onto the
-    freshly-parsed review_items' current positions. Saved entries whose
-    message_id no longer appears (the message was filtered out, or removed
-    from a later re-export) are simply dropped - silently, since this is
-    the expected outcome of normal chatlog growth, not an error.
+    """Translate a {message_id: {role: text}} dict (a resumed session's saved
+    edits, or a prior run's finalized edits) onto the freshly-parsed
+    review_items' current positions, producing one role->text dict per item.
+    Entries whose message_id no longer appears (the message was filtered
+    out, or removed from a later re-export) are simply dropped - silently,
+    since this is the expected outcome of normal chatlog growth, not an
+    error. Each matched entry's roles are filtered down to the matched
+    item's *current* slot_roles - covers a re-export changing how many
+    images (and so how many "ocrN"/"spacer_imgN" slots) that exact message
+    has, which would otherwise misalign an edit onto the wrong slot.
 
-    A saved edit's roles are filtered down to the matched item's *current*
-    slot_roles - covers a re-export changing how many images (and so how
-    many "ocrN"/"spacer_imgN" slots) that exact message has, which would
-    otherwise misalign a saved edit onto the wrong slot."""
+    `summary_event`/`summary_level` distinguish _match_saved_edits' and
+    _match_finalized_edits' otherwise-identical matched/dropped-count log
+    line. `log_per_box_detail`, only used by the saved-session path, logs
+    each matched box at DEBUG - matched/dropped counts alone can't show
+    *which* box's saved text now equals this run's freshly-computed default
+    (which would mean either it was never really edited, or an edit was
+    lost upstream of this point) vs. one that genuinely differs - logged
+    once per resume, not per autosave tick, so the volume is bounded by
+    transcript size rather than time."""
     by_id = {item.message_id: idx for idx, item in enumerate(review_items)}
     built: list[dict[str, Optional[str]]] = [{} for _ in review_items]
     matched = dropped = 0
-    for message_id, edit in saved_texts.items():
+    for message_id, edit in edits.items():
         idx = by_id.get(message_id)
         if idx is None:
             dropped += 1
@@ -64,63 +79,50 @@ def _match_saved_edits(
         item = review_items[idx]
         valid_roles = set(item.slot_roles)
         built[idx] = {role: text for role, text in edit.items() if role in valid_roles}
-        # Per-box detail at DEBUG (matched/dropped counts alone can't show
-        # *which* box's saved text now equals this run's freshly-computed
-        # default - which would mean either it was never really edited, or
-        # an edit was lost upstream of this point - vs. one that genuinely
-        # differs) - logged once per resume, not per autosave tick, so the
-        # volume is bounded by transcript size rather than time.
-        for role, text in built[idx].items():
-            if text is None or role.startswith("spacer"):
-                continue
-            default_text = item.initial_text_for_role(role)
-            logger.debug(
-                "resumed box matched",
-                extra=logging_config.extra(
-                    message_id=message_id,
-                    role=role,
-                    saved=logging_config.text_fingerprint(text),
-                    current_default=logging_config.text_fingerprint(default_text),
-                    equals_current_default=(text == default_text),
-                ),
-            )
-    logger.info(
-        "resumed session edits matched by message_id",
+        if log_per_box_detail:
+            for role, text in built[idx].items():
+                if text is None or role.startswith("spacer"):
+                    continue
+                default_text = item.initial_text_for_role(role)
+                logger.debug(
+                    "resumed box matched",
+                    extra=logging_config.extra(
+                        message_id=message_id,
+                        role=role,
+                        saved=logging_config.text_fingerprint(text),
+                        current_default=logging_config.text_fingerprint(default_text),
+                        equals_current_default=(text == default_text),
+                    ),
+                )
+    getattr(logger, summary_level)(
+        summary_event,
         extra=logging_config.extra(
             matched_count=matched, dropped_count=dropped, current_item_count=len(review_items)
         ),
     )
     return built
+
+
+def _match_saved_edits(
+    review_items: list["review_item.ReviewItem"], saved_texts: dict
+) -> list[dict[str, Optional[str]]]:
+    return _match_edits_by_message_id(
+        review_items, saved_texts,
+        summary_event="resumed session edits matched by message_id",
+        summary_level="info",
+        log_per_box_detail=True,
+    )
 
 
 def _match_finalized_edits(
     review_items: list["review_item.ReviewItem"], finalized: dict
 ) -> list[dict[str, Optional[str]]]:
-    """Translate a {message_id: {role: text}} finalized-edits dict onto the
-    freshly-parsed review_items' current positions, producing one role->text
-    dict per item (same shape as _match_saved_edits). Entries whose
-    message_id no longer appears in the current item list are dropped
-    silently. Each matched entry's roles are filtered to the item's current
-    slot_roles, so a re-export that changed an item's image count can't
-    misalign a stored edit onto the wrong slot."""
-    by_id = {item.message_id: idx for idx, item in enumerate(review_items)}
-    built: list[dict[str, Optional[str]]] = [{} for _ in review_items]
-    matched = dropped = 0
-    for message_id, role_texts in finalized.items():
-        idx = by_id.get(message_id)
-        if idx is None:
-            dropped += 1
-            continue
-        matched += 1
-        valid_roles = set(review_items[idx].slot_roles)
-        built[idx] = {role: text for role, text in role_texts.items() if role in valid_roles}
-    logger.debug(
-        "finalized edits matched by message_id",
-        extra=logging_config.extra(
-            matched_count=matched, dropped_count=dropped, current_item_count=len(review_items)
-        ),
+    return _match_edits_by_message_id(
+        review_items, finalized,
+        summary_event="finalized edits matched by message_id",
+        summary_level="debug",
+        log_per_box_detail=False,
     )
-    return built
 
 
 def _match_focus_slot(

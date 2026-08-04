@@ -196,23 +196,24 @@ class KeyboardNavMixin:
         never through attach_undo_recording's proxy, so nothing logged the
         fact that a Ctrl+Z/Ctrl+Shift+Z happened until this box's *next*
         rebuild replayed it."""
-        for key, candidate in self._text_widgets.items():
-            if candidate is widget:
-                log = self._undo_logs.get(key)
-                if log is not None:
-                    after_text = widget.get("1.0", "end-1c")
-                    log.ops.append(("replace", (after_text,)))
-                    self._log_event(
-                        "box_op_recorded",
-                        key=key,
-                        op="replace",
-                        source=source,
-                        args=repr((after_text,))[:200],
-                        args_full_len=len(repr((after_text,))),
-                        total_ops=len(log.ops),
-                        **logging_config.text_fingerprint(after_text),
-                    )
-                return
+        key = self._key_for_widget(widget)
+        if key is None:
+            return
+        log = self._undo_logs.get(key)
+        if log is None:
+            return
+        after_text = widget.get("1.0", "end-1c")
+        log.ops.append(("replace", (after_text,)))
+        self._log_event(
+            "box_op_recorded",
+            key=key,
+            op="replace",
+            source=source,
+            args=repr((after_text,))[:200],
+            args_full_len=len(repr((after_text,))),
+            total_ops=len(log.ops),
+            **logging_config.text_fingerprint(after_text),
+        )
 
     def _on_page_up(self, event: Optional[tk.Event] = None) -> str:
         if self._scroll_frozen:
@@ -240,9 +241,7 @@ class KeyboardNavMixin:
         focused = self.focus_get()
         if focused is None:
             return None
-        for key, widget in self._text_widgets.items():
-            if widget is focused:
-                return key
+        return self._key_for_widget(focused)
         return None
 
     def _box_document_top(
