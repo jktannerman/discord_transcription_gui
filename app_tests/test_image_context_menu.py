@@ -90,8 +90,8 @@ def test_default_browser_command_reads_userchoice_then_progid_command():
         "FirefoxURL-308046B0AF4A39CB", r'"C:\Firefox\firefox.exe" -osint -url "%1"'
     )
     with (
-        patch("gui_transcription.app.gui.image_context_menu.winreg.OpenKey", mock_open_key),
-        patch("gui_transcription.app.gui.image_context_menu.winreg.QueryValueEx", query_value_ex),
+        patch("winreg.OpenKey", mock_open_key),
+        patch("winreg.QueryValueEx", query_value_ex),
     ):
         command = _default_browser_command()
     assert command == r'"C:\Firefox\firefox.exe" -osint -url "%1"'
@@ -105,8 +105,8 @@ def test_default_browser_command_reads_userchoice_then_progid_command():
 def test_default_browser_command_returns_none_when_userchoice_is_unset():
     mock_open_key, query_value_ex = _mock_winreg_returning(FileNotFoundError(), "unused")
     with (
-        patch("gui_transcription.app.gui.image_context_menu.winreg.OpenKey", mock_open_key),
-        patch("gui_transcription.app.gui.image_context_menu.winreg.QueryValueEx", query_value_ex),
+        patch("winreg.OpenKey", mock_open_key),
+        patch("winreg.QueryValueEx", query_value_ex),
     ):
         assert _default_browser_command() is None
 
@@ -116,8 +116,8 @@ def test_default_browser_command_returns_none_for_a_stale_progid():
     # names it, but its own ProgId key no longer exists.
     mock_open_key, query_value_ex = _mock_winreg_returning("SomeUninstalledBrowser", FileNotFoundError())
     with (
-        patch("gui_transcription.app.gui.image_context_menu.winreg.OpenKey", mock_open_key),
-        patch("gui_transcription.app.gui.image_context_menu.winreg.QueryValueEx", query_value_ex),
+        patch("winreg.OpenKey", mock_open_key),
+        patch("winreg.QueryValueEx", query_value_ex),
     ):
         assert _default_browser_command() is None
 

@@ -24,7 +24,7 @@ Tk's usual widget-unmap event the way it first tried to.
 import os
 import shlex
 import subprocess
-import winreg
+import sys
 from io import BytesIO
 from pathlib import Path
 from typing import Callable, Optional
@@ -210,6 +210,18 @@ class ImageContextMenuMixin:
         _launch_url_in_default_browser(f"{uri}#{anchor}")
 
     def _open_image_location(self, image_path: Path) -> None:
+        # Not yet implemented outside Windows: Explorer's /select flag (open
+        # a folder with one file pre-selected) has no single equivalent
+        # across Linux file managers (Nautilus/Dolphin/Thunar each need a
+        # different flag, and there's no reliable way to detect which one is
+        # in use) - deferred rather than guessed at. Raising here, instead
+        # of just letting the explorer.exe call below fail with a raw
+        # FileNotFoundError, gives _run_image_menu_action's failure log a
+        # clear, intentional reason instead of a confusing one.
+        if sys.platform != "win32":
+            raise NotImplementedError(
+                "Open Image Location is not yet implemented outside Windows"
+            )
         # explorer.exe routinely exits non-zero even on a fully successful
         # /select - its return code isn't a reliable success signal, so this
         # doesn't check=True; a genuinely broken invocation (missing
@@ -218,6 +230,15 @@ class ImageContextMenuMixin:
         subprocess.run(["explorer", "/select,", str(Path(image_path).resolve())])
 
     def _copy_image_to_clipboard(self, image_path: Path) -> None:
+        # Not yet implemented outside Windows: Linux clipboard access is
+        # split across X11 (xclip/xsel) and Wayland (wl-copy), neither
+        # bundled with Python, with no single tool covering both - deferred
+        # rather than guessed at. Raising here, instead of just letting the
+        # win32clipboard import below fail with a raw ModuleNotFoundError,
+        # gives _run_image_menu_action's failure log a clear, intentional
+        # reason instead of a confusing one.
+        if sys.platform != "win32":
+            raise NotImplementedError("Copy Image is not yet implemented outside Windows")
         # Local import: win32clipboard is Windows-only (see requirements.txt)
         # and this is the only place in the app that needs it.
         import win32clipboard
@@ -266,6 +287,12 @@ def _default_browser_command() -> Optional[str]:
     on that, which _run_image_menu_action logs as a failure rather than
     silently falling back to a file-association open that wouldn't
     actually satisfy "open in browser"."""
+    # Local import: winreg is Windows-only, like win32clipboard below - a
+    # top-level import here used to make this whole module (and therefore
+    # every action in this menu, not just this lookup) fail to import on
+    # any other platform.
+    import winreg
+
     try:
         with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,

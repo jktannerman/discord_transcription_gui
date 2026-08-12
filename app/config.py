@@ -16,9 +16,18 @@ approved-users box pre-filled on a fresh install.
 """
 
 import re
+import sys
 from pathlib import Path
 
-TESSERACT_CMD = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+# On Windows, Tesseract isn't normally on PATH, so pytesseract is pointed at
+# the default install location explicitly. On other platforms (e.g. Linux,
+# where it's installed via the system package manager) it's expected to
+# already be on PATH, so pytesseract is left to resolve "tesseract" itself.
+TESSERACT_CMD = (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    if sys.platform == "win32"
+    else "tesseract"
+)
 
 # File extensions DiscordChatExporter downloads alongside media that are
 # never image attachments worth OCR'ing.
