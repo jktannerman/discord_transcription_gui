@@ -281,6 +281,12 @@ It would often be useful to able to see the context surrounding a given image in
 The GUI tests have gotten to the point where they are so numerous that they are intimidating to run. Often the full suite will take more than a minute, during which the screen will be visibly flickering with the test windows and sometimes unusable. Please consider different ways to handle this.
 
 
+to-do: refactor state.py, duplicated code and maybe split it?
+
+
+to-do: remove test numbers jesus 
+
+
 doesn't transcribe everything
 
 The `pytesseract` often does not seem to detect all of the text in a given image. An example would be the very first image in the HTML file in `./example_inputs`, `Screen_Shot_2026-05-21_at_9.27.10_pm-03B97.png`; while the main text is black on light blue and is mostly transcribed correctly, the header is yellow text on a black background, and is ignored. How can this category of problem best be addressed? Consider several approaches and describe the pros and cons of each, unless there is a clear winning option.
