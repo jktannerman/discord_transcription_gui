@@ -12,6 +12,7 @@ import tkinter as tk
 from PIL import Image
 
 from discord_transcription.gui.image_loading import (
+    MAX_IMAGE_ENLARGEMENT,
     MAX_IMAGE_HEIGHT_PX,
     THUMBNAIL_SIZE,
     ImageLoader,
@@ -56,8 +57,29 @@ def rotated_phone_photo(tmp_path):
 # -- fitted_image_size ------------------------------------------------------
 
 
-def test_fitted_image_size_smaller_than_box_is_not_upscaled(small_image):
-    assert fitted_image_size(small_image, bounding_box=THUMBNAIL_SIZE) == (50, 30)
+def test_fitted_image_size_enlarges_an_image_smaller_than_the_box(tmp_path):
+    path = tmp_path / "medium.png"
+    Image.new("RGB", (400, 200), color="green").save(path)
+    # 400x200 fills the 760px width: 1.9x.
+    assert fitted_image_size(path, bounding_box=THUMBNAIL_SIZE) == (760, 380)
+
+
+def test_fitted_image_size_enlargement_is_capped_at_max_enlargement(small_image):
+    # 50x30 would need 15.2x to fill 760px; it stops at 4x.
+    assert MAX_IMAGE_ENLARGEMENT == 4.0
+    assert fitted_image_size(small_image, bounding_box=THUMBNAIL_SIZE) == (200, 120)
+
+
+def test_fitted_image_size_enlargement_is_capped_by_box_height(tmp_path):
+    path = tmp_path / "tall.png"
+    Image.new("RGB", (300, 400), color="green").save(path)
+    # The width allows 6.7x and the cap 4x, but the 950px height allows only 2.375x.
+    assert fitted_image_size(path, bounding_box=(2000, 950)) == (712, 950)
+
+
+def test_load_display_image_enlarges_to_the_fitted_size(small_image):
+    image = load_display_image(small_image, bounding_box=THUMBNAIL_SIZE)
+    assert image.size == fitted_image_size(small_image, bounding_box=THUMBNAIL_SIZE) == (200, 120)
 
 
 def test_fitted_image_size_landscape_is_width_constrained(landscape_image):

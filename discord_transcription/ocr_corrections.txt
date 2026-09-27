@@ -100,7 +100,7 @@ turn\1
 # Ifyou -> If you - 1
 # fioor -> floor - 1
 # desoribe -> describe - 1
-# retum -> return - 1
+# retum -> return - 2
 # ike -> like - 1
 # 50 -> so - 1
 # oliff -> cliff - 1
@@ -116,3 +116,5 @@ turn\1
 # titted -> tilted - 1
 # cil -> oil - 1
 # olose -> close - 1
+# sioppily -> sloppily - 1
+# litte -> little - 1

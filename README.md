@@ -173,8 +173,10 @@ What's in scope for v1:
 
    A thin vertical divider between the two columns sets that width: drag
    it left or right and, when you let go, every image is refitted to the
-   new width (never enlarged past its own size, and never taller than
-   950px) and the original-text labels rewrap, with the text boxes beside
+   new width (enlarged if it's smaller than that, so small images fill the
+   column too - but at most to 4x their own size, so tiny images like
+   emoji don't take over the screen - and never shown taller than 950px)
+   and the original-text labels rewrap, with the text boxes beside
    them resizing to match. What you were looking at stays put on screen:
    the focused text box if it's in view, otherwise the row at the top. The
    width is kept as a proportion of the window, so it scales when the

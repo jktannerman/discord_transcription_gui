@@ -208,11 +208,12 @@ def test_estimate_row_height_grows_with_image_column_width_for_a_wide_image(tmp_
     )
 
 
-def test_estimate_row_height_does_not_upscale_a_small_image(tmp_path):
+def test_estimate_row_height_grows_with_column_width_for_a_small_image_too(tmp_path):
+    # Small images are enlarged to fill the column, so they grow with it too.
     path = tmp_path / "small.png"
     Image.new("RGB", (300, 100), color="blue").save(path)
     item = _wide_image_item(path)
-    assert estimate_row_height(item, image_column_width_px=1200) == estimate_row_height(
+    assert estimate_row_height(item, image_column_width_px=1200) > estimate_row_height(
         item, image_column_width_px=600
     )
 

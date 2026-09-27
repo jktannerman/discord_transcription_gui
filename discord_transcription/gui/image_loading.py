@@ -23,6 +23,9 @@ logger = logging_config.get_logger(__name__)
 DEFAULT_IMAGE_COLUMN_WIDTH_PX = 760
 # Tallest an image preview is ever shown, whatever the column width.
 MAX_IMAGE_HEIGHT_PX = 950
+# Most an image preview is ever enlarged beyond its own size, so a tiny image
+# (an emoji, a small icon) doesn't blow up to fill the whole column.
+MAX_IMAGE_ENLARGEMENT = 4.0
 # Bounding box for an image preview at the default column width.
 THUMBNAIL_SIZE = (DEFAULT_IMAGE_COLUMN_WIDTH_PX, MAX_IMAGE_HEIGHT_PX)
 
@@ -66,6 +69,27 @@ def _displayed_size(img: Image.Image) -> Tuple[int, int]:
     return width, height
 
 
+def fit_to_box(size: Tuple[int, int], bounding_box: Tuple[int, int]) -> Tuple[int, int]:
+    """Scale `size` to fill `bounding_box` as far as it can, keeping its
+    aspect ratio - shrinking a large image and enlarging a small one alike,
+    so small images are as easy to read as the column allows, but never
+    enlarging past MAX_IMAGE_ENLARGEMENT times the original size.
+
+    Args:
+        size: The image's (width, height).
+        bounding_box: The (width, height) to fit within.
+
+    Returns:
+        The fitted (width, height); `bounding_box` itself for an empty size.
+    """
+    ow, oh = size
+    bw, bh = bounding_box
+    if ow <= 0 or oh <= 0:
+        return bounding_box
+    ratio = min(bw / ow, bh / oh, MAX_IMAGE_ENLARGEMENT)
+    return max(1, round(ow * ratio)), max(1, round(oh * ratio))
+
+
 def load_display_image(
     image_path: ImagePath, bounding_box: Tuple[int, int] = THUMBNAIL_SIZE
 ) -> Image.Image:
@@ -73,14 +97,20 @@ def load_display_image(
 
     Args:
         image_path: The image file.
-        bounding_box: The (width, height) to fit within. Never upscaled.
+        bounding_box: The (width, height) to fit within, enlarging the
+            image if it's smaller.
 
     Returns:
         The decoded image, the size fitted_image_size predicts.
     """
     with Image.open(image_path) as opened:
         image = ImageOps.exif_transpose(opened)
-        image.thumbnail(bounding_box)
+        target = fit_to_box(image.size, bounding_box)
+        if target != image.size:
+            # reducing_gap speeds up large reductions; it has no effect when enlarging.
+            image = image.resize(target, Image.Resampling.LANCZOS, reducing_gap=3.0)
+        else:
+            image.load()
     return image
 
 
@@ -108,8 +138,7 @@ def _natural_size(image_path: str) -> Optional[Tuple[int, int]]:
 
 def fitted_image_size(image_path: ImagePath, bounding_box: Tuple[int, int] = THUMBNAIL_SIZE) -> Tuple[int, int]:
     """The on-screen size review rows actually display image_path at -
-    same fit-within-bounding_box-preserving-aspect-ratio logic as
-    Image.thumbnail() (used for the real photo in _load_image below), but
+    the same fit_to_box rule load_display_image decodes it with, but
     reading only the file's header (Image.open() doesn't decode pixel
     data) so it's cheap enough to call for every row up front, not just
     once an image is scrolled near.
@@ -123,14 +152,7 @@ def fitted_image_size(image_path: ImagePath, bounding_box: Tuple[int, int] = THU
     if original_size is None:
         return bounding_box
 
-    ow, oh = original_size
-    bw, bh = bounding_box
-    if ow <= 0 or oh <= 0:
-        return bounding_box
-    if ow <= bw and oh <= bh:
-        return ow, oh  # thumbnail() doesn't upscale past the original size
-    ratio = min(bw / ow, bh / oh)
-    return max(1, round(ow * ratio)), max(1, round(oh * ratio))
+    return fit_to_box(original_size, bounding_box)
 
 
 class ImageSlot:
