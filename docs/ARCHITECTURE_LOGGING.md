@@ -22,7 +22,7 @@ starting` marker by hand.
 
 The review screen's much higher-frequency per-scroll-tick tracing
 (reconcile/debounce/remeasure/image-load/box-resize events, all emitted via
-`ReviewFrame._log_event`) is routed to a separate logger/file instead of
+`VirtualRows.log_event`) is routed to a separate logger/file instead of
 `app.log` - `~/.discord_transcription_gui/scroll_trace.log`
 (`config.SCROLL_TRACE_LOG_FILE`, read via `logging_config.get_trace_logger()`,
 10MB x 3 backups by default (`config.SCROLL_TRACE_MAX_BYTES`/

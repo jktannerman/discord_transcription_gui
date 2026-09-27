@@ -6,10 +6,13 @@ then shows the full review screen (every approved message, images paired
 with editable OCR text) and writes everything out once Finalize is clicked,
 finishing with a summary screen.
 
-Also owns session persistence: while the review screen is up, the current
-edits/focus/scroll position are autosaved every
-config.AUTOSAVE_INTERVAL_MS (see _start_autosave/_run_autosave) so closing
-the app mid-review doesn't lose progress. Sessions are saved per HTML
+Also decides when sessions are saved and resumed (what a session holds,
+and how it maps back onto a re-parsed chatlog, is session.py's job): while
+the review screen is up, the current edits/focus/scroll position are
+autosaved every config.AUTOSAVE_INTERVAL_MS (see _start_autosave/
+_run_autosave) so closing the app mid-review doesn't lose progress. The
+parsing/OCR itself is pipeline.prepare_run, run on a worker thread.
+Sessions are saved per HTML
 chatlog file (see state.save_session/load_session/clear_session), not as
 one global slot, so two different chatlogs can each be partially
 transcribed and resumed independently - one isn't evicted by starting the
@@ -22,16 +25,25 @@ re-applying the saved edits/position once OCR/parsing finish
 actually finalized, or if the user declines to resume it.
 """
 
+import dataclasses
 import queue
 import threading
 import tkinter as tk
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Callable, Optional
 
 from .. import chatlog, config, logging_config, pipeline, review_item, state
+from ..pipeline import RunContext
+from ..session import (
+    EditsByMessage,
+    MalformedSessionError,
+    SavedSession,
+    build_finalized_updates,
+    log_edit_changes,
+    match_finalized_edits,
+)
 from . import keyboard_nav, theme
 from .progress_view import ProgressFrame
 from .review_view import ReviewFrame
@@ -40,234 +52,8 @@ from .setup_view import SetupFrame
 logger = logging_config.get_logger(__name__)
 
 
-def _match_edits_by_message_id(
-    review_items: list["review_item.ReviewItem"],
-    edits: dict,
-    *,
-    summary_event: str,
-    summary_level: str,
-    log_per_box_detail: bool,
-) -> list[dict[str, Optional[str]]]:
-    """Translate a {message_id: {role: text}} dict (a resumed session's saved
-    edits, or a prior run's finalized edits) onto the freshly-parsed
-    review_items' current positions, producing one role->text dict per item.
-    Entries whose message_id no longer appears (the message was filtered
-    out, or removed from a later re-export) are simply dropped - silently,
-    since this is the expected outcome of normal chatlog growth, not an
-    error. Each matched entry's roles are filtered down to the matched
-    item's *current* slot_roles - covers a re-export changing how many
-    images (and so how many "ocrN"/"spacer_imgN" slots) that exact message
-    has, which would otherwise misalign an edit onto the wrong slot.
-
-    `summary_event`/`summary_level` distinguish _match_saved_edits' and
-    _match_finalized_edits' otherwise-identical matched/dropped-count log
-    line. `log_per_box_detail`, only used by the saved-session path, logs
-    each matched box at DEBUG - matched/dropped counts alone can't show
-    *which* box's saved text now equals this run's freshly-computed default
-    (which would mean either it was never really edited, or an edit was
-    lost upstream of this point) vs. one that genuinely differs - logged
-    once per resume, not per autosave tick, so the volume is bounded by
-    transcript size rather than time."""
-    by_id = {item.message_id: idx for idx, item in enumerate(review_items)}
-    built: list[dict[str, Optional[str]]] = [{} for _ in review_items]
-    matched = dropped = 0
-    for message_id, edit in edits.items():
-        idx = by_id.get(message_id)
-        if idx is None:
-            dropped += 1
-            continue
-        matched += 1
-        item = review_items[idx]
-        valid_roles = set(item.slot_roles)
-        built[idx] = {role: text for role, text in edit.items() if role in valid_roles}
-        if log_per_box_detail:
-            for role, text in built[idx].items():
-                if text is None or role.startswith("spacer"):
-                    continue
-                default_text = item.initial_text_for_role(role)
-                logger.debug(
-                    "resumed box matched",
-                    extra=logging_config.extra(
-                        message_id=message_id,
-                        role=role,
-                        saved=logging_config.text_fingerprint(text),
-                        current_default=logging_config.text_fingerprint(default_text),
-                        equals_current_default=(text == default_text),
-                    ),
-                )
-    getattr(logger, summary_level)(
-        summary_event,
-        extra=logging_config.extra(
-            matched_count=matched, dropped_count=dropped, current_item_count=len(review_items)
-        ),
-    )
-    return built
-
-
-def _match_saved_edits(
-    review_items: list["review_item.ReviewItem"], saved_texts: dict
-) -> list[dict[str, Optional[str]]]:
-    return _match_edits_by_message_id(
-        review_items, saved_texts,
-        summary_event="resumed session edits matched by message_id",
-        summary_level="info",
-        log_per_box_detail=True,
-    )
-
-
-def _match_finalized_edits(
-    review_items: list["review_item.ReviewItem"], finalized: dict
-) -> list[dict[str, Optional[str]]]:
-    return _match_edits_by_message_id(
-        review_items, finalized,
-        summary_event="finalized edits matched by message_id",
-        summary_level="debug",
-        log_per_box_detail=False,
-    )
-
-
-def _match_focus_slot(
-    review_items: list["review_item.ReviewItem"], focus_slot: Optional[list]
-) -> Optional[tuple[int, str]]:
-    """Translate a saved (message_id, role) focus slot onto its current
-    index, or None if that message no longer appears (falls back to the
-    saved scroll fraction / document top, same as any other unresolvable
-    focus slot)."""
-    if focus_slot is None:
-        return None
-    message_id, role = focus_slot
-    by_id = {item.message_id: idx for idx, item in enumerate(review_items)}
-    idx = by_id.get(message_id)
-    return (idx, role) if idx is not None else None
-
-
-def _match_touched_slots(
-    review_items: list["review_item.ReviewItem"], raw_slots: Optional[list]
-) -> set[tuple[int, str]]:
-    """Translate a saved session's [[message_id, role], ...] touched slots
-    onto current (index, role) slots, dropping any whose message or role no
-    longer exists (same rules as _match_edits_by_message_id)."""
-    if not isinstance(raw_slots, list):
-        return set()
-    by_id = {item.message_id: idx for idx, item in enumerate(review_items)}
-    matched = set()
-    for entry in raw_slots:
-        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
-            continue
-        message_id, role = entry
-        idx = by_id.get(message_id)
-        if idx is not None and role in review_items[idx].slot_roles:
-            matched.add((idx, role))
-    return matched
-
-
-def _build_finalized_updates(
-    review_items: list["review_item.ReviewItem"],
-    edited_texts: list[dict[str, Optional[str]]],
-    touched_slots: set[tuple[int, str]],
-) -> dict[str, dict[str, Optional[str]]]:
-    """Work out what Finalize should change in the stored finalized edits.
-
-    Args:
-        review_items: This run's items, in transcript order.
-        edited_texts: One role->text dict per item (None = default/unchecked).
-        touched_slots: (index, role) slots the user deliberately acted on.
-
-    Returns:
-        {message_id: {role: text_or_None}} for state.save_finalized_edits:
-        an edited box stores its text; a box at its default (or unchecked)
-        maps to None - remove the stored edit - *only* if the user touched
-        it this session. Any other box is left out, keeping whatever is
-        stored for it.
-    """
-    updates: dict[str, dict[str, Optional[str]]] = {}
-    for idx, (item, edited) in enumerate(zip(review_items, edited_texts)):
-        per_msg: dict[str, Optional[str]] = {}
-        for role, text in edited.items():
-            if text is not None:
-                per_msg[role] = text
-            elif (idx, role) in touched_slots:
-                per_msg[role] = None
-        if per_msg:
-            updates[item.message_id] = per_msg
-    return updates
-
-
-@dataclass
-class RunContext:
-    """The inputs a single run (OCR -> review -> finalize) was started with.
-
-    Replaces what used to be six separate ``self._*_for_run`` attributes set
-    piecemeal across _begin_run/_on_ocr_done - autosave's session dict
-    (_run_autosave) needs exactly this same group of fields together, so
-    keeping them as one object removes that duplication and the "is this
-    attr set yet" ambiguity of attributes that don't exist until partway
-    through the App's life.
-    """
-
-    html_path: Path
-    image_folder: Path
-    output_path: Path
-    start_time: int
-    approved_author_ids: Optional[set[str]]
-    use_cache: bool
-
-
 # How often the Tk thread checks the OCR worker's event queue.
 _WORKER_POLL_MS = 50
-
-
-class _RunError(Exception):
-    """A run failure whose message is ready to show the user as-is."""
-
-
-def _prepare_run(
-    run: RunContext,
-    progress_callback: Callable[[float], None],
-    status_callback: Callable[[str], None],
-) -> tuple[list[chatlog.MessageEntry], pipeline.OcrBatchResult]:
-    """Parse the chatlog, then OCR the images its kept messages reference.
-
-    Runs on the worker thread, so it must not touch Tk directly; both
-    callbacks are expected to marshal onto the Tk thread themselves.
-
-    Args:
-        run: The run's inputs.
-        progress_callback: Receives the fraction of OCR work done.
-        status_callback: Receives a short description of the current stage.
-
-    Returns:
-        The kept messages and the OCR results for their images.
-
-    Raises:
-        _RunError: The chatlog couldn't be read or parsed.
-    """
-    try:
-        html_text = run.html_path.read_text(encoding="utf8")
-    except OSError as exc:
-        raise _RunError(f"Could not read HTML file: {exc}") from exc
-    try:
-        entries = chatlog.parse_message_groups(
-            html_text, run.start_time, run.approved_author_ids
-        )
-    except ValueError as exc:
-        # parse_message_groups raises a clear ValueError for a malformed
-        # export (a missing or non-snowflake per-message
-        # data-message-id).
-        logger.exception("chatlog parsing failed")
-        raise _RunError(str(exc)) from exc
-    except Exception as exc:
-        logger.exception("unexpected error while parsing chatlog")
-        raise _RunError(f"Unexpected error while reading the chatlog: {exc!r}") from exc
-
-    status_callback("Running OCR on images...")
-    ocr_result = pipeline.run_ocr_batch(
-        str(run.image_folder),
-        pipeline.referenced_image_names(entries),
-        run.use_cache,
-        progress_callback=progress_callback,
-    )
-    return entries, ocr_result
 
 
 # How many missing image names _warn_missing_images lists before summarizing
@@ -320,19 +106,15 @@ class App:
         self._review_items: list[review_item.ReviewItem] | None = None
         self._run: Optional[RunContext] = None
         self._autosave_job: Optional[str] = None
-        self._resume_payload: Optional[dict] = None
+        self._resume_payload: Optional[SavedSession] = None
         # Set just before a resumed session's OCR/parse begins, so a failed
         # resume that falls back to show_setup() displays the session's
         # actual image folder rather than whatever's otherwise most-recent
         # on disk - consumed (reset to None) the next time show_setup() runs.
         self._resume_image_folder_override: Optional[str] = None
-        # {message_id: {role: text}} as of the most recent autosave tick -
-        # diagnostic only (see _diff_autosave), not used for anything the
-        # app actually relies on. Lets each autosave log exactly which
-        # boxes' persisted edit changed since the previous tick, rather
-        # than just a running item_count that can't show *which* edit
-        # appeared, changed, or vanished.
-        self._last_autosave_snapshot: dict[str, dict[str, Optional[str]]] = {}
+        # The edits as of the most recent save - diagnostic only, so each
+        # save can log exactly which edits changed (session.log_edit_changes).
+        self._last_autosave_snapshot: EditsByMessage = {}
         # True from an autosave failure until the next successful save, so
         # the user is warned once per run of failures (see _run_autosave).
         self._autosave_failing = False
@@ -479,34 +261,27 @@ class App:
             ),
         )
         self._begin_run(
-            Path(html_path), Path(image_folder), Path(output_path), start_time, approved_author_ids,
-            use_cache=use_cache,
+            RunContext(
+                html_path=Path(html_path),
+                image_folder=Path(image_folder),
+                output_path=Path(output_path),
+                start_time=start_time,
+                approved_author_ids=approved_author_ids,
+                use_cache=use_cache,
+            )
         )
 
     # -- run orchestration --------------------------------------------------
 
-    def _begin_run(
-        self,
-        html_path: Path,
-        image_folder: Path,
-        output_path: Path,
-        start_time: int,
-        approved_author_ids: Optional[set[str]],
-        use_cache: bool,
-    ) -> None:
+    def _begin_run(self, run: RunContext) -> None:
+        """Show the progress screen and parse/OCR on a worker thread.
+
+        Args:
+            run: The run's inputs.
+        """
         progress = ProgressFrame(self.container, status_text="Reading chatlog...")
         self._set_frame(progress)
-
-        self._run = RunContext(
-            html_path=html_path,
-            image_folder=image_folder,
-            output_path=output_path,
-            start_time=start_time,
-            approved_author_ids=approved_author_ids,
-            use_cache=use_cache,
-        )
-
-        run = self._run
+        self._run = run
         # Tk isn't guaranteed to be safe to call from another thread, so the
         # worker only ever puts (callback, args, is_final) onto this queue,
         # and _poll_worker_events runs the callbacks on the Tk thread.
@@ -514,12 +289,12 @@ class App:
 
         def worker() -> None:
             try:
-                entries, ocr_result = _prepare_run(
+                entries, ocr_result = pipeline.prepare_run(
                     run,
                     progress_callback=lambda frac: events.put((progress.set_progress, (frac,), False)),
                     status_callback=lambda text: events.put((progress.set_status, (text,), False)),
                 )
-            except _RunError as exc:
+            except pipeline.RunError as exc:
                 events.put((self._on_run_error, (str(exc),), True))
                 return
             except Exception as exc:  # surfaced to the user, not a crash
@@ -561,30 +336,24 @@ class App:
     # -- session resume ------------------------------------------------------
 
     def _resume_session(self, html_path_key: str, session: dict) -> None:
-        """Re-run the saved session's inputs through the normal OCR/parse
-        pipeline - _show_review then re-applies the saved edits/focus/scroll
-        position once that finishes, the same way a fresh run's review items
-        are built either way. html_path_key is the exact key this session
-        was loaded under (the chatlog's HTML path), used to clear the right
-        chatlog's saved session if it turns out to be malformed.
+        """Re-run a saved session's inputs through the normal parse/OCR
+        pipeline; _show_review then re-applies its edits, focus and scroll
+        position.
 
-        use_cache is always forced to True here, regardless of the setup
-        screen's checkbox or what the session originally recorded: resuming
-        continues a review whose images were already OCR'd, so re-OCR'ing
-        them all is wasted work. Images that aren't cached yet, or whose
-        file changed, are still OCR'd, since the cache is per image. Without
-        this override, a session whose *first* run happened to force a full
-        re-OCR would repeat it on every resume (session["use_cache"] is only
-        ever the value the session was originally started with - see
-        _snapshot_and_save)."""
+        use_cache is always forced on, whatever the session was started
+        with: resuming continues a review whose images were already OCR'd
+        (new or changed images are still OCR'd, since the cache is per
+        image). Otherwise a session whose first run forced a full re-OCR
+        would repeat it on every resume.
+
+        Args:
+            html_path_key: The path the session was loaded under, used to
+                clear it if it turns out to be malformed.
+            session: What state.load_session returned.
+        """
         try:
-            html_path = Path(session["html_path"])
-            image_folder = Path(session["image_folder"])
-            output_path = Path(session["output_path"])
-            start_time = session["start_time"]
-            raw_ids = session["approved_author_ids"]
-            approved_author_ids = set(raw_ids) if raw_ids is not None else None
-        except KeyError as exc:
+            saved = SavedSession.from_json(session)
+        except MalformedSessionError as exc:
             logger.warning(
                 "malformed saved session, discarding",
                 extra=logging_config.extra(error=str(exc)),
@@ -592,12 +361,9 @@ class App:
             state.clear_session(html_path_key)
             return
 
-        self._resume_image_folder_override = str(image_folder)
-        self._resume_payload = session
-        self._begin_run(
-            html_path, image_folder, output_path, start_time, approved_author_ids,
-            use_cache=True,
-        )
+        self._resume_image_folder_override = str(saved.run.image_folder)
+        self._resume_payload = saved
+        self._begin_run(dataclasses.replace(saved.run, use_cache=True))
 
     # -- autosave -------------------------------------------------------------
 
@@ -642,91 +408,21 @@ class App:
             self._autosave_job = self.root.after(config.AUTOSAVE_INTERVAL_MS, self._run_autosave)
 
     def _snapshot_and_save(self, frame: ReviewFrame, tag: str) -> None:
-        """Snapshot `frame`'s current edits/focus/scroll position and write
-        it to disk - the actual save logic shared by the periodic
-        _run_autosave tick and _on_close's one-off final flush, with neither
-        caller's own scheduling concerns (rescheduling the next tick vs.
-        tearing the window down right after) folded in here. `tag`
-        distinguishes a periodic tick's _diff_autosave log from _on_close's,
-        since both call this."""
-        run = self._run
-        focused_slot = frame.get_focused_slot()
-        focus_message_id = None
-        if focused_slot is not None:
-            idx, role = focused_slot
-            focus_message_id = [self._review_items[idx].message_id, role]
-
-        edited_texts_by_id = {}
-        for idx, edited in enumerate(frame.collect_edited_texts()):
-            if any(text is not None for text in edited.values()):
-                edited_texts_by_id[self._review_items[idx].message_id] = edited
-
-        self._diff_autosave(self._last_autosave_snapshot, edited_texts_by_id, tag=tag)
-        self._last_autosave_snapshot = edited_texts_by_id
-
-        session = {
-            "html_path": str(run.html_path),
-            "image_folder": str(run.image_folder),
-            "output_path": str(run.output_path),
-            "start_time": run.start_time,
-            "approved_author_ids": (
-                sorted(run.approved_author_ids)
-                if run.approved_author_ids is not None
-                else None
-            ),
-            "use_cache": run.use_cache,
-            "edited_texts": edited_texts_by_id,
-            "touched_slots": sorted(
-                [self._review_items[idx].message_id, role]
-                for idx, role in frame.get_touched_slots()
-            ),
-            "focus_slot": focus_message_id,
-            "scroll_fraction": frame.get_scroll_top_fraction(),
-        }
-        state.save_session(str(run.html_path), session)
-
-    def _diff_autosave(
-        self, previous: dict[str, dict[str, Optional[str]]], current: dict[str, dict[str, Optional[str]]], tag: str
-    ) -> None:
-        """Log exactly which (message_id, role) edits appeared, disappeared,
-        or changed value between the previous autosave snapshot and this
-        one - a plain item_count (the only thing logged here before) can't
-        show *which* box changed or distinguish "a new edit was made" from
-        "an existing edit silently reverted". Diagnostic only - never
-        changes what gets saved, just narrates it. `tag` distinguishes a
-        periodic tick from the one-off snapshot taken in _on_close, since
-        both call this."""
-        for message_id in current.keys() - previous.keys():
-            for role, text in current[message_id].items():
-                logger.info(
-                    "autosave diff: new edit",
-                    extra=logging_config.extra(
-                        tag=tag, message_id=message_id, role=role,
-                        **logging_config.text_fingerprint(text),
-                    ),
-                )
-        for message_id in previous.keys() - current.keys():
-            logger.info(
-                "autosave diff: edit entry removed entirely",
-                extra=logging_config.extra(
-                    tag=tag, message_id=message_id, roles=sorted(previous[message_id].keys()),
-                ),
-            )
-        for message_id in current.keys() & previous.keys():
-            old_edit = previous[message_id]
-            new_edit = current[message_id]
-            for role in old_edit.keys() | new_edit.keys():
-                old_text = old_edit.get(role)
-                new_text = new_edit.get(role)
-                if old_text != new_text:
-                    logger.info(
-                        "autosave diff: edit changed",
-                        extra=logging_config.extra(
-                            tag=tag, message_id=message_id, role=role,
-                            old=logging_config.text_fingerprint(old_text),
-                            new=logging_config.text_fingerprint(new_text),
-                        ),
-                    )
+        """Save `frame`'s current edits/focus/scroll position as this run's
+        session - shared by the autosave tick, the final save on window
+        close, and the save just before Finalize (`tag` says which, in the
+        log of what changed since the previous save)."""
+        saved = SavedSession.capture(
+            self._run,
+            self._review_items,
+            frame.collect_edited_texts(),
+            frame.get_touched_slots(),
+            frame.get_focused_slot(),
+            frame.get_scroll_top_fraction(),
+        )
+        log_edit_changes(self._last_autosave_snapshot, saved.edited_texts, tag=tag)
+        self._last_autosave_snapshot = saved.edited_texts
+        state.save_session(str(self._run.html_path), saved.to_json())
 
     def _on_ocr_done(
         self, entries: list[chatlog.MessageEntry], ocr_result: pipeline.OcrBatchResult
@@ -753,30 +449,12 @@ class App:
     def _show_review(self) -> None:
         resume = self._resume_payload
         self._resume_payload = None
-
-        initial_saved_texts = None
-        initial_focus_slot = None
-        initial_scroll_fraction = None
-        initial_touched_slots = None
-        if resume is not None:
-            initial_touched_slots = _match_touched_slots(
-                self._review_items, resume.get("touched_slots")
-            )
-            saved_texts = resume.get("edited_texts")
-            if not isinstance(saved_texts, dict):
-                logger.warning(
-                    "saved session edited_texts has unexpected shape, discarding",
-                    extra=logging_config.extra(saved_texts_type=type(saved_texts).__name__),
-                )
-            else:
-                initial_saved_texts = _match_saved_edits(self._review_items, saved_texts)
-                initial_focus_slot = _match_focus_slot(self._review_items, resume.get("focus_slot"))
-                initial_scroll_fraction = resume.get("scroll_fraction")
+        restored = resume.restore_onto(self._review_items) if resume is not None else None
 
         finalized_raw = state.load_finalized_edits(str(self._run.html_path))
         initial_finalized_texts = None
         if finalized_raw:
-            initial_finalized_texts = _match_finalized_edits(self._review_items, finalized_raw)
+            initial_finalized_texts = match_finalized_edits(self._review_items, finalized_raw)
 
         html_path = str(self._run.html_path)
         frame = ReviewFrame(
@@ -784,11 +462,11 @@ class App:
             self._review_items,
             self._on_finalize_clicked,
             html_path=self._run.html_path,
-            initial_saved_texts=initial_saved_texts,
-            initial_focus_slot=initial_focus_slot,
-            initial_scroll_fraction=initial_scroll_fraction,
+            initial_saved_texts=restored.saved_texts if restored else None,
+            initial_focus_slot=restored.focus_slot if restored else None,
+            initial_scroll_fraction=restored.scroll_fraction if restored else None,
             initial_finalized_texts=initial_finalized_texts,
-            initial_touched_slots=initial_touched_slots,
+            initial_touched_slots=restored.touched_slots if restored else None,
             initial_image_column_fraction=state.load_image_column_fraction(html_path),
             on_image_column_fraction_changed=self._save_image_column_fraction,
         )
@@ -864,7 +542,7 @@ class App:
         touched_slots = (
             frame.get_touched_slots() if frame is not None and frame.winfo_exists() else set()
         )
-        updates = _build_finalized_updates(self._review_items, edited_texts, touched_slots)
+        updates = build_finalized_updates(self._review_items, edited_texts, touched_slots)
         if updates:
             try:
                 state.save_finalized_edits(str(run.html_path), updates)

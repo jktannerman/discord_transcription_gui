@@ -56,7 +56,7 @@ State at the time of the review: the default test suite passed (335 passed,
   *Fix:* skip such messages in `build_review_items`, or give them no
   spacer.
 
-- [ ] **A5. Spellcheck false positives** [confirmed]
+- [ ] **A5. Spellcheck false positives** [confirmed] - deferred for now
   - Words in straight quotes are flagged with the quotes (`'hello'`),
     because `_WORD_RE` is `[A-Za-z']+`.
   - Accented words are split: `cafés` is flagged as `caf`.
@@ -108,7 +108,7 @@ State at the time of the review: the default test suite passed (335 passed,
 
 ## B. Structure
 
-- [ ] **B1. `ReviewFrame` is one ~3,000-line class across five files**
+- [x] **B1. `ReviewFrame` is one ~3,000-line class across five files** - fixed: `ReviewFrame` now composes `VirtualRows` (new `virtual_rows.py`), `RowBuilder`, `SlotBoxes` (new `slot_boxes.py`), `FocusNavigator`, `ColumnDivider` and `ImageContextMenu`, each given its collaborators explicitly; no mixins left. Tests and docs updated; all default and `gui` tests pass
   `ReviewFrame` plus `KeyboardNavMixin`, `RowBuildingMixin`,
   `ImageContextMenuMixin` and `ColumnDividerMixin` share ~45 attributes with
   no declared interface; type checkers can't follow it. Natural split:
@@ -116,7 +116,7 @@ State at the time of the review: the default test suite passed (335 passed,
   (states, views, undo, spellcheck), and the image context menu as a
   standalone object. Not urgent; the main structural debt.
 
-- [ ] **B2. Session logic lives in the GUI module**
+- [x] **B2. Session logic lives in the GUI module** - fixed: new `session.py` (`SavedSession` with `capture`/`to_json`/`from_json`/`restore_onto`, the `match_*` helpers, `build_finalized_updates`, `log_edit_changes`); `RunContext`/`prepare_run`/`RunError` moved to `pipeline.py`; the on-disk format is unchanged. Tests in `test_session.py` (was `test_main_window_resume.py`) and `test_pipeline_run.py`
   ~275 lines of pure persistence logic in `gui/main_window.py`
   (`_match_*`, `_build_finalized_updates`, `_prepare_run`). The session
   format is an implicit dict built in `_snapshot_and_save` and taken apart
@@ -167,7 +167,7 @@ State at the time of the review: the default test suite passed (335 passed,
   `test_image_context_menu.py`.
 - [ ] **D2.** `ARCHITECTURE_TESTING.md`: "317 tests (218 default, 99 gui)";
   actually 489 / 346 / 143.
-- [ ] **D3.** `ARCHITECTURE_REVIEW_SCREEN.md` (spellcheck section) names
+- [x] **D3.** (fixed with B1) `ARCHITECTURE_REVIEW_SCREEN.md` (spellcheck section) names
   `_whitelist_loaded`/`_blacklist_loaded`, which no longer exist (now the
   mtime-keyed `_wordlists` cache).
 - [ ] **D4.** `ARCHITECTURE_LOGGING.md`, `config.py` and
@@ -214,6 +214,6 @@ State at the time of the review: the default test suite passed (335 passed,
 1. ~~A1 + A2~~ (done).
 2. ~~A3 and A6~~ (done).
 3. ~~A7~~ (done); A4 deferred.
-4. A5 (spellcheck word matching) and section D.
-5. Longer jobs: C5 (trim history from comments), B2 (session module), E1
-   (CI, ruff, a type checker).
+4. Section D (A5 deferred).
+5. Longer jobs: C5 (trim history from comments), E1 (CI, ruff, a type
+   checker). ~~B1~~ and ~~B2~~ done.

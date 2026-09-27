@@ -17,7 +17,7 @@ relative to the clicked widget, not the screen tk_popup expects). Native
 tk_popup also means clicking elsewhere or pressing Escape already dismiss
 the menu for free (Tk's own grab/keybindings) - unlike *noticing* that
 dismissal to unfreeze scrolling again, which does need explicit handling;
-see _show_image_context_menu's docstring comment for why that can't lean on
+see the comment in show() for why that can't lean on
 Tk's usual widget-unmap event the way it first tried to.
 """
 
@@ -39,39 +39,42 @@ from . import desktop_linux, theme
 logger = logging_config.get_logger(__name__)
 
 
-class ImageContextMenuMixin:
-    """Mixed into ReviewFrame the same way row_building.py's
-    RowBuildingMixin and keyboard_nav.py's KeyboardNavMixin already are -
-    see review_view.py's module docstring for why this codebase splits
-    self-contained per-feature behavior out of ReviewFrame this way rather
-    than growing that class directly.
+class ImageContextMenu:
+    """The right-click menu on review rows' images."""
 
-    Reaches into ReviewFrame's self._scroll_frozen/self._scrollbar (set in
-    review_view.py's __init__, checked by its mousewheel/scrollbar handlers
-    and keyboard_nav.py's Page Up/Down) so scrolling can't move rows - and
-    therefore this menu's target image - out from under an open menu."""
+    def __init__(
+        self, parent: Optional[tk.Widget], html_path: Path, set_scroll_frozen: Callable[[bool], None]
+    ) -> None:
+        """
+        Args:
+            parent: The widget menus are created in.
+            html_path: The run's chatlog export, for "Open Chatlog at Message".
+            set_scroll_frozen: Freezes (True) or unfreezes (False) the review
+                screen's scrolling, so rows - and the menu's target image -
+                can't move out from under an open menu.
+        """
+        self._parent = parent
+        self._html_path = html_path
+        self._set_scroll_frozen = set_scroll_frozen
 
-    def _bind_image_context_menu(self, label: tk.Widget, image_path: Path, message_id: str) -> None:
+    def bind(self, label: tk.Widget, image_path: Path, message_id: str) -> None:
+        """Open the menu when `label` (an image placeholder) is right-clicked."""
         label.bind(
             "<Button-3>",
-            lambda event, p=image_path, m=message_id: self._show_image_context_menu(event, p, m),
+            lambda event, p=image_path, m=message_id: self.show(event, p, m),
         )
 
-    def _show_image_context_menu(self, event: tk.Event, image_path: Path, message_id: str) -> None:
+    def show(self, event: tk.Event, image_path: Path, message_id: str) -> None:
         logger.info(
             "image context menu opened",
             extra=logging_config.extra(image_path=str(image_path), message_id=message_id),
         )
-        self._scroll_frozen = True
-        self._scrollbar.state(["disabled"])
+        self._set_scroll_frozen(True)
 
-        # Sized/hit-tested entirely by tk_popup itself (see the module
-        # docstring) - a fifth entry here needs no manual layout/hitbox
-        # bookkeeping the way it would have with a hand-rolled popup, which
-        # is exactly the class of bug ("clicks land on nothing") that
-        # docstring explains this design avoids.
+        # Sized and hit-tested entirely by tk_popup itself (see the module
+        # docstring).
         menu = tk.Menu(
-            self,
+            self._parent,
             tearoff=0,
             bg=theme.DARK_BG_WIDGET,
             fg=theme.DARK_FG,
@@ -138,8 +141,7 @@ class ImageContextMenuMixin:
             self._on_image_context_menu_closed(image_path)
 
     def _on_image_context_menu_closed(self, image_path: Path) -> None:
-        self._scroll_frozen = False
-        self._scrollbar.state(["!disabled"])
+        self._set_scroll_frozen(False)
         logger.info(
             "image context menu closed", extra=logging_config.extra(image_path=str(image_path))
         )

@@ -14,7 +14,7 @@ correctness oracle for informal chat text.
 
 Never applied to spacer boxes - callers control that by simply never
 calling into this module for them (see
-row_building.RowBuildingMixin._build_spacer_text_box, which has no call
+SlotBoxes.build_spacer_box, which has no call
 into this module at all).
 """
 

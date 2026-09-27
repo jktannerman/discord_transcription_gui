@@ -13,7 +13,7 @@ app (see [ARCHITECTURE_REVIEW_SCREEN.md](ARCHITECTURE_REVIEW_SCREEN.md) and
 [ARCHITECTURE_ROW_GEOMETRY.md](ARCHITECTURE_ROW_GEOMETRY.md)), so it has the
 deepest coverage:
 
-- `ReviewFrame._reconcile`'s windowing core - idempotency, paging to the end
+- `VirtualRows.reconcile`'s windowing core - idempotency, paging to the end
   of a long transcript, a far-away Tab/resume target materializing
   correctly, edits surviving a row being paged out and back in, and the
   Finalize button's visibility toggle.
@@ -21,7 +21,7 @@ deepest coverage:
   part of the windowing logic pure enough to unit-test without a
   display) - including a row with multiple images estimating taller than
   one with a single image.
-- Slot-based keyboard navigation (`_move_focus` stepping through
+- Slot-based keyboard navigation (`FocusNavigator.move_focus` stepping through
   `(item_index, role)` slots in transcript order, message before one
   `"ocrN"` slot per attached image).
 - Undo-step grouping and the undo/redo stacks (`discord_transcription/gui/edit_history.py`,
@@ -55,7 +55,7 @@ deepest coverage:
   cached, both the checkbox state and both text versions surviving a row
   being paged out and back in, and Ctrl+Z re-deriving the right checked
   state after undoing a toggle.
-- The editable text box height rule (`_fixed_text_box_height`'s capping
+- The editable text box height rule (`RowBuilder.fixed_text_box_height`'s capping
   logic).
 - Spellcheck tagging (`test_spellcheck.py`, pure logic - flagged/not-flagged
   words, short-word and ALL-CAPS skipping, whitelist loading/caching - plus
@@ -96,7 +96,7 @@ deepest coverage:
   `tk.Menu`'s close can't be detected via `<Unmap>` on Windows" for why it
   blocks until a person dismisses it, which hangs an unattended
   test - `tk_popup` is mocked out instead, so these test what
-  `_show_image_context_menu` itself controls (state before/after the call)
+  `ImageContextMenu.show` itself controls (state before/after the call)
   rather than the real OS-level popup/dismissal. The tests of Windows-only
   code (the real `winreg` lookup, Explorer's `/select`, the Win32
   clipboard) are marked `windows_only` and skipped on other platforms.
@@ -115,8 +115,13 @@ deepest coverage:
 
 ## Session resume
 
-- Message-id-based edit/focus matching (`_match_saved_edits`/
-  `_match_focus_slot`) - edits surviving messages appended or inserted
+- The saved session format (`session.SavedSession`, `test_session.py`, no
+  display needed): capturing the review screen's state by message ID, the
+  exact JSON written, a JSON round trip, rejecting a session whose run
+  inputs are missing or unusable, and dropping only the malformed parts of
+  the rest.
+- Message-id-based edit/focus matching (`session.match_saved_edits`/
+  `match_focus_slot`, and `SavedSession.restore_onto`) - edits surviving messages appended or inserted
   mid-transcript in a re-export, orphaned edits for now-filtered-out
   messages being dropped, a saved message's per-image OCR edits being
   aligned back onto its current images by position, and a stale focus slot
@@ -126,9 +131,10 @@ deepest coverage:
   prompt, including `_resume_session` always forcing `use_cache=True`
   regardless of what the saved session originally recorded, so resuming
   never redoes OCR.
-- The chatlog read/parse error paths (`_prepare_run` turning an unreadable
-  file, a malformed export or an unexpected exception into a `_RunError`
-  with a user-facing message), `App._on_ocr_done` reporting a
+- The chatlog read/parse error paths (`pipeline.prepare_run` turning an
+  unreadable file, a malformed export or an unexpected exception into a
+  `RunError` with a user-facing message, in `test_pipeline_run.py`),
+  `App._on_ocr_done` reporting a
   review-building failure instead of letting it escape uncaught from a Tk
   callback, and its missing-images warning.
 

@@ -1,8 +1,8 @@
 """The live widgets for one editable box on the review screen.
 
 A SlotView exists only while its box's row is materialized (see
-review_view.py's virtualization); the box's lasting state is its SlotState
-(slot_state.py). Keyed by (item_index, role) in ReviewFrame._slot_views.
+virtual_rows.py); the box's lasting state is its SlotState
+(slot_state.py). Keyed by (item_index, role) in SlotBoxes.views.
 """
 
 import tkinter as tk

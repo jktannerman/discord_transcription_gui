@@ -1,7 +1,7 @@
 """App._on_start's validation branches (missing fields, invalid start
 date, an empty approved-users list) and its pending-session resume prompt
-had no test coverage before - only the standalone _match_saved_edits/
-_match_focus_slot helpers (test_main_window_resume.py) were tested, not
+had no test coverage before - only the standalone match_saved_edits/
+match_focus_slot helpers (test_session.py) were tested, not
 the orchestration that calls into them. A fake setup frame stands in for
 the real SetupFrame (pure Tk widget wiring, not under test here) so these
 tests exercise just _on_start's own decision logic."""
@@ -13,7 +13,8 @@ import tkinter as tk
 from discord_transcription import config
 from discord_transcription.chatlog import MessageEntry
 from discord_transcription.gui import main_window
-from discord_transcription.gui.main_window import App, RunContext
+from discord_transcription.gui.main_window import App
+from discord_transcription.pipeline import RunContext
 from discord_transcription.review_item import ReviewItem
 
 # Every test here builds a real App (and so a real Tk root) - excluded from
@@ -138,7 +139,7 @@ def test_all_users_checked_starts_with_no_author_filter(app):
 
     assert len(begin_run_calls) == 1
     args, kwargs = begin_run_calls[0]
-    approved_author_ids = args[4]
+    approved_author_ids = args[0].approved_author_ids
     assert approved_author_ids is None
 
 
@@ -152,7 +153,7 @@ def test_valid_approved_users_text_starts_with_parsed_author_ids(app):
 
     assert len(begin_run_calls) == 1
     args, kwargs = begin_run_calls[0]
-    approved_author_ids = args[4]
+    approved_author_ids = args[0].approved_author_ids
     assert approved_author_ids == {"123456789012345678", "987654321098765432"}
 
 
@@ -228,7 +229,7 @@ def _resume_session_directly(app, session):
 def test_resume_session_forces_use_cache_true_even_when_session_saved_false(app, tmp_path):
     """Resuming must never redo OCR - newly added images are handled by a
     later fresh run, not a resume. A session's saved use_cache reflects
-    whatever the *original* run was started with (see _snapshot_and_save),
+    whatever the *original* run was started with (see SavedSession.capture),
     which could be False (e.g. that first run deliberately forced fresh OCR)
     - that stale value must not leak into every future resume of the same
     session and keep re-running OCR forever."""
@@ -244,8 +245,8 @@ def test_resume_session_forces_use_cache_true_even_when_session_saved_false(app,
     begin_run_calls = _resume_session_directly(app, session)
 
     assert len(begin_run_calls) == 1
-    _, kwargs = begin_run_calls[0]
-    assert kwargs["use_cache"] is True
+    args, _ = begin_run_calls[0]
+    assert args[0].use_cache is True
 
 
 def test_resume_session_forces_use_cache_true_when_saved_use_cache_missing(app, tmp_path):
@@ -263,8 +264,8 @@ def test_resume_session_forces_use_cache_true_when_saved_use_cache_missing(app, 
     begin_run_calls = _resume_session_directly(app, session)
 
     assert len(begin_run_calls) == 1
-    _, kwargs = begin_run_calls[0]
-    assert kwargs["use_cache"] is True
+    args, _ = begin_run_calls[0]
+    assert args[0].use_cache is True
 
 
 def test_resume_session_discards_session_missing_other_required_fields(app, tmp_path):

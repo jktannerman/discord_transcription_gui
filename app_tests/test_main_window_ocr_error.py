@@ -1,8 +1,9 @@
 """Error and warning paths between starting a run and showing the review
 screen.
 
-_prepare_run runs on the worker thread and turns chatlog read/parse
-failures into a _RunError carrying a user-facing message. _on_ocr_done runs
+(pipeline.prepare_run, which runs on the worker thread and turns chatlog
+read/parse failures into a RunError, is tested in test_pipeline_run.py.)
+_on_ocr_done runs
 inside a root.after() callback, so anything it doesn't catch itself would
 only reach Tk's report_callback_exception, leaving the user stuck on the
 progress screen - these cover that it reports errors through
@@ -16,73 +17,18 @@ import tkinter as tk
 
 from discord_transcription import pipeline
 from discord_transcription.gui import main_window
-from discord_transcription.gui.main_window import App, RunContext
+from discord_transcription.gui.main_window import App
 
 
-def _run_context(tmp_path) -> RunContext:
-    html_path = tmp_path / "chat.html"
-    html_path.write_text("<html></html>", encoding="utf8")
-    return RunContext(
-        html_path=html_path,
+def _run_context(tmp_path) -> pipeline.RunContext:
+    return pipeline.RunContext(
+        html_path=tmp_path / "chat.html",
         image_folder=tmp_path,
         output_path=tmp_path / "out.txt",
         start_time=0,
         approved_author_ids=None,
         use_cache=True,
     )
-
-
-def _prepare(run: RunContext):
-    return main_window._prepare_run(
-        run, progress_callback=lambda frac: None, status_callback=lambda text: None
-    )
-
-
-def test_malformed_chatlog_raises_run_error_with_its_message(tmp_path):
-    with patch.object(
-        main_window.chatlog, "parse_message_groups",
-        side_effect=ValueError("Message ID 'bogus' isn't a Discord snowflake ID."),
-    ):
-        with pytest.raises(main_window._RunError) as exc_info:
-            _prepare(_run_context(tmp_path))
-
-    assert str(exc_info.value) == "Message ID 'bogus' isn't a Discord snowflake ID."
-
-
-def test_unreadable_html_file_raises_run_error(tmp_path):
-    run = _run_context(tmp_path)
-    run.html_path.unlink()
-
-    with pytest.raises(main_window._RunError, match="Could not read HTML file"):
-        _prepare(run)
-
-
-def test_unexpected_parse_exception_raises_run_error(tmp_path):
-    with patch.object(
-        main_window.chatlog, "parse_message_groups", side_effect=KeyError("src"),
-    ):
-        with pytest.raises(main_window._RunError, match="KeyError"):
-            _prepare(_run_context(tmp_path))
-
-
-def test_prepare_run_ocrs_the_images_the_kept_messages_reference(tmp_path):
-    entries = [
-        main_window.chatlog.MessageEntry(message_id="1", text_lines=[], image_names=["a.png"]),
-    ]
-    calls = []
-
-    def fake_batch(image_folder, image_names, use_cache, progress_callback=None):
-        calls.append((image_folder, image_names, use_cache))
-        return pipeline.OcrBatchResult(file_info={})
-
-    with (
-        patch.object(main_window.chatlog, "parse_message_groups", return_value=entries),
-        patch.object(main_window.pipeline, "run_ocr_batch", side_effect=fake_batch),
-    ):
-        result_entries, _ = _prepare(_run_context(tmp_path))
-
-    assert result_entries == entries
-    assert calls == [(str(tmp_path), ["a.png"], True)]
 
 
 def test_poll_worker_events_runs_queued_callbacks_until_the_final_one():

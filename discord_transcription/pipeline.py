@@ -2,10 +2,11 @@
 
 Split into pieces the GUI can drive explicitly:
 
-- ``parse_start_date`` / ``run_ocr_batch`` run before any user interaction
-  (the latter on a background thread, reporting progress via callback). The
-  images to OCR come from the parsed chatlog (``referenced_image_names``),
-  not from scanning the image folder.
+- ``parse_start_date`` / ``prepare_run`` run before any user interaction
+  (the latter on a background thread, reporting progress via callback):
+  ``prepare_run`` parses the chatlog, then ``run_ocr_batch`` OCRs the images
+  its kept messages reference (``referenced_image_names``), not everything
+  in the image folder. ``RunContext`` holds a run's inputs.
 - ``review_item.build_review_items`` turns the approved messages + OCR'd
   paragraphs into the flat list the review screen displays all at once -
   see that module for the ``ReviewItem``/spacer-slot domain model this glue
@@ -231,6 +232,80 @@ def run_ocr_batch(
         ),
     )
     return OcrBatchResult(file_info=file_info, missing_images=missing)
+
+
+@dataclass
+class RunContext:
+    """The inputs a single run (OCR -> review -> finalize) was started with.
+
+    Attributes:
+        html_path: The chatlog export.
+        image_folder: The folder its images were exported to.
+        output_path: The transcript file Finalize appends to.
+        start_time: Unix time (seconds, UTC); earlier messages are skipped.
+        approved_author_ids: The Discord user IDs to keep messages from, or
+            None for every author.
+        use_cache: False to re-OCR every image, ignoring the cache.
+    """
+
+    html_path: Path
+    image_folder: Path
+    output_path: Path
+    start_time: int
+    approved_author_ids: Optional[set[str]]
+    use_cache: bool
+
+
+class RunError(Exception):
+    """A run failure whose message is ready to show the user as-is."""
+
+
+def prepare_run(
+    run: RunContext,
+    progress_callback: Callable[[float], None],
+    status_callback: Callable[[str], None],
+) -> tuple[list[chatlog.MessageEntry], OcrBatchResult]:
+    """Parse the chatlog, then OCR the images its kept messages reference.
+
+    Runs on the GUI's worker thread, so the callbacks must not touch Tk
+    directly; they're expected to marshal onto the Tk thread themselves.
+
+    Args:
+        run: The run's inputs.
+        progress_callback: Receives the fraction of OCR work done.
+        status_callback: Receives a short description of the current stage.
+
+    Returns:
+        The kept messages and the OCR results for their images.
+
+    Raises:
+        RunError: The chatlog couldn't be read or parsed.
+    """
+    try:
+        html_text = run.html_path.read_text(encoding="utf8")
+    except OSError as exc:
+        raise RunError(f"Could not read HTML file: {exc}") from exc
+    try:
+        entries = chatlog.parse_message_groups(
+            html_text, run.start_time, run.approved_author_ids
+        )
+    except ValueError as exc:
+        # parse_message_groups raises a clear ValueError for a malformed
+        # export (a missing or non-snowflake per-message data-message-id).
+        logger.exception("chatlog parsing failed")
+        raise RunError(str(exc)) from exc
+    except Exception as exc:
+        logger.exception("unexpected error while parsing chatlog")
+        raise RunError(f"Unexpected error while reading the chatlog: {exc!r}") from exc
+
+    status_callback("Running OCR on images...")
+    ocr_result = run_ocr_batch(
+        str(run.image_folder),
+        referenced_image_names(entries),
+        run.use_cache,
+        progress_callback=progress_callback,
+    )
+    return entries, ocr_result
 
 
 def render_items(items: list[ReviewItem], edited_texts: list[dict[str, Optional[str]]]) -> str:

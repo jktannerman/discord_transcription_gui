@@ -14,7 +14,7 @@ doc for the rest.
   involved part of the app, and the one most bugs have shipped in - read
   before changing anything under `discord_transcription/gui/`.
 - **[ARCHITECTURE_ROW_GEOMETRY.md](ARCHITECTURE_ROW_GEOMETRY.md)** - the
-  document-space spacing model `_offset_of` and every scroll-into-view
+  document-space spacing model `VirtualRows.offset_of` and every scroll-into-view
   calculation depend on, and the one constant (`ROW_PACK_PADY_PX`) that's
   easy to leave out of it. Read before touching row height/offset
   accounting specifically.

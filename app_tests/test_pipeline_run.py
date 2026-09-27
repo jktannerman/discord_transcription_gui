@@ -1,4 +1,5 @@
 import os
+from unittest.mock import patch
 
 import pytest
 
@@ -158,3 +159,72 @@ def test_progress_reaches_one_when_everything_is_cached(image_folder, ocr_calls)
     )
 
     assert progress == [1.0]
+
+
+# -- prepare_run: parse the chatlog, then OCR what it references ---------------
+
+
+def _run_context(tmp_path) -> pipeline.RunContext:
+    html_path = tmp_path / "chat.html"
+    html_path.write_text("<html></html>", encoding="utf8")
+    return pipeline.RunContext(
+        html_path=html_path,
+        image_folder=tmp_path,
+        output_path=tmp_path / "out.txt",
+        start_time=0,
+        approved_author_ids=None,
+        use_cache=True,
+    )
+
+
+def _prepare(run: pipeline.RunContext):
+    return pipeline.prepare_run(
+        run, progress_callback=lambda frac: None, status_callback=lambda text: None
+    )
+
+
+def test_malformed_chatlog_raises_run_error_with_its_message(tmp_path):
+    with patch.object(
+        pipeline.chatlog, "parse_message_groups",
+        side_effect=ValueError("Message ID 'bogus' isn't a Discord snowflake ID."),
+    ):
+        with pytest.raises(pipeline.RunError) as exc_info:
+            _prepare(_run_context(tmp_path))
+
+    assert str(exc_info.value) == "Message ID 'bogus' isn't a Discord snowflake ID."
+
+
+def test_unreadable_html_file_raises_run_error(tmp_path):
+    run = _run_context(tmp_path)
+    run.html_path.unlink()
+
+    with pytest.raises(pipeline.RunError, match="Could not read HTML file"):
+        _prepare(run)
+
+
+def test_unexpected_parse_exception_raises_run_error(tmp_path):
+    with patch.object(
+        pipeline.chatlog, "parse_message_groups", side_effect=KeyError("src"),
+    ):
+        with pytest.raises(pipeline.RunError, match="KeyError"):
+            _prepare(_run_context(tmp_path))
+
+
+def test_prepare_run_ocrs_the_images_the_kept_messages_reference(tmp_path):
+    entries = [
+        MessageEntry(message_id="1", text_lines=[], image_names=["a.png"]),
+    ]
+    calls = []
+
+    def fake_batch(image_folder, image_names, use_cache, progress_callback=None):
+        calls.append((image_folder, image_names, use_cache))
+        return pipeline.OcrBatchResult(file_info={})
+
+    with (
+        patch.object(pipeline.chatlog, "parse_message_groups", return_value=entries),
+        patch.object(pipeline, "run_ocr_batch", side_effect=fake_batch),
+    ):
+        result_entries, _ = _prepare(_run_context(tmp_path))
+
+    assert result_entries == entries
+    assert calls == [(str(tmp_path), ["a.png"], True)]

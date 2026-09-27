@@ -20,9 +20,9 @@ ocr0, ocr1, ..." from `item.initial_message_text`/`item.image_paths` - row
 building, height estimation, the keyboard-navigable slot list, and output
 writing. Adding spacer slots meant inserting new roles into that sequence,
 so `ReviewItem.slot_roles` now computes the full ordered list once and every
-one of those four places (`row_building.RowBuildingMixin._build_row`,
-`virtualization.estimate_row_height`, `review_view.ReviewFrame.__init__`'s
-`self._slots`, `review_item.lines_for_item`) just walks it, rather than each
+one of those four places (`RowBuilder.fill_row`,
+`virtualization.estimate_row_height`, `FocusNavigator.slots` (built in
+`ReviewFrame.__init__`), `review_item.lines_for_item`) just walks it, rather than each
 re-deriving its own copy that could drift out of sync with the others.
 
 For an item with a message and N images, `slot_roles` is: `["message",
@@ -36,12 +36,12 @@ the left column for it, and it's sized to exactly one Tk text line
 (the height a `height=1` Text widget requests on this display, measured
 once as `TextMetrics.spacer_box_height_px` - see
 `row_building.measure_text_metrics` and
-`row_building.RowBuildingMixin._build_spacer_text_box`) rather than via
-`_fixed_text_box_height`'s paired-height rule.
+`SlotBoxes.build_spacer_box`) rather than via
+`RowBuilder.fixed_text_box_height`'s paired-height rule.
 
 Tab/Shift-Tab visit spacer slots the same as any content slot (per the
 project owner's decision) - `self._slots` already generalizes to any role
-string, so `keyboard_nav.py`'s `_move_focus` needed no changes at all.
+string, so `keyboard_nav.py`'s `FocusNavigator.move_focus` needed no changes at all.
 
 ## Default newline counts
 
@@ -111,24 +111,24 @@ pre-spacer-slot session is expected to still be on disk.
 
 When the user clicks Finalize and the output file has been written,
 `_on_finalize_clicked` saves the changes worked out by
-`main_window._build_finalized_updates` to `finalized_edits.json` (via
+`session.build_finalized_updates` to `finalized_edits.json` (via
 `state.save_finalized_edits`), keyed by the HTML path and each message's
 Discord `message_id`. On a subsequent fresh run of the same chatlog,
 `_show_review` loads these via `state.load_finalized_edits` and passes them
 to `ReviewFrame` as `initial_finalized_texts`.
 
-**Priority order** in `ReviewFrame._initial_slot_states`: each box's
+**Priority order** in `slot_boxes.initial_slot_states`: each box's
 starting text is the in-progress session's edit (`initial_saved_texts`) if
 there is one, else the finalized edit, else the default. An "ocr" box
 starts checked exactly when that text differs from its OCR default, so a
 finalized edit that differs from the OCR default starts its checkbox checked
 automatically with no special-case code.
 
-**What counts as an edit**: `ReviewFrame._get_box_text` reports `None`
+**What counts as an edit**: `SlotBoxes.reported_text` reports `None`
 for any box whose text equals its default (and for any unchecked OCR box),
 so a box whose row was merely built - scrolled past - is never an edit.
 
-**Update semantics** (`_build_finalized_updates` + `state.save_finalized_edits`):
+**Update semantics** (`session.build_finalized_updates` + `state.save_finalized_edits`):
 a non-`None` value stores that text. A `None` value removes the stored edit
 for that slot, but only if the slot is in `ReviewFrame.get_touched_slots()`
 - the user deliberately acted on it this session (typed/pasted/undid in it
@@ -142,9 +142,9 @@ is replaced by different text or removed, the old version is appended to
 `finalized_edits_history.json` (`state.load_finalized_edits_history`),
 which is written first and never trimmed.
 
-**Matching** (`_match_finalized_edits`): stored `{message_id: {role: text}}`
+**Matching** (`session.match_finalized_edits`): stored `{message_id: {role: text}}`
 data is aligned to the current item list by Discord `message_id` (not by
-position) using the same approach as `_match_saved_edits` for session
+position) using the same approach as `session.match_saved_edits` for session
 resume - orphaned message IDs are dropped silently, and roles that no
 longer appear in an item's `slot_roles` (e.g. because the chatlog was
 re-exported with fewer images) are also dropped. All `slot_roles` including

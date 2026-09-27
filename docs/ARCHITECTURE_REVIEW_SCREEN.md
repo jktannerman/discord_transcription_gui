@@ -4,26 +4,39 @@ Part of [ARCHITECTURE.md](ARCHITECTURE.md) - see there for the general
 testing heuristic this codebase follows, and for links to the other topic
 docs (row geometry, spacer slots, testing, logging).
 
-The review screen (`discord_transcription/gui/review_view.py`) is the most architecturally
-involved part of this app. Its module docstring is the canonical explanation
-and worth reading in full before changing it; this is just enough to orient
-a new contributor.
+The review screen is the most architecturally involved part of this app.
+`ReviewFrame` (`discord_transcription/gui/review_view.py`) doesn't do the
+work itself: it creates one object per concern and wires them together,
+each getting what it needs through its constructor. Each module's
+docstring is the canonical explanation of that part; this is just enough to
+orient a new contributor.
 
-Building a single row's widgets (`_build_row` and the label/image-placeholder/
-editable-text-box helpers it calls) lives in `discord_transcription/gui/row_building.py`'s
-`RowBuildingMixin`, mixed into `ReviewFrame` the same way `keyboard_nav.py`'s
-`KeyboardNavMixin` already is - it doesn't carry the same "disagreed with
-itself across files" risk the windowing core below does, since each row's
-widgets are self-contained once built. `review_view.py` itself keeps only
-that windowing core (`_reconcile`/`_sync_materialized_rows`/
-`_remeasure_built_rows`/`_offset_of`/`_ensure_materialized`/`_destroy_row`)
-plus the scroll/debounce/Finalize-button machinery:
+| Object | Module | Owns |
+|---|---|---|
+| `VirtualRows` | `virtual_rows.py` | The canvas and scrollbar, every row's height (`heights`), which rows are built (`reconcile`/`_sync_materialized_rows`/`_remeasure_built_rows`/`offset_of`/`ensure_materialized`/`destroy_row`), debouncing, the scroll freeze, and the scroll trace (`log_event`). Knows nothing about what a row contains. |
+| `RowBuilder` | `row_building.py` | Building one row's widgets (`fill_row`), each content box's fixed height, the image column width, and the pre-build height estimates (`estimate_heights`). |
+| `SlotBoxes` | `slot_boxes.py` | Every editable box's `SlotState` (`states`) and, while its row is built, its `SlotView` (`views`): building boxes, syncing edits, the OCR checkbox, spellcheck, undo/redo, and reporting edits for autosave/Finalize. |
+| `FocusNavigator` | `keyboard_nav.py` | The slot order (`slots`), Tab/Shift-Tab, keeping the focused box on screen, and restoring focus across a row rebuild. |
+| `ColumnDivider` | `column_divider.py` | The image/text divider, its drag, and re-laying out the rows at a new width. |
+| `ImageContextMenu` | `image_context_menu.py` | The right-click image menu and its actions. |
+| `ImageLoader` | `image_loading.py` | Lazily loading/unloading the built rows' images. |
+
+`ReviewFrame` itself keeps the scroll input handlers (wheel, Page Up/Down),
+the floating Finalize button, the first layout (`_apply_initial_position`),
+and the methods `App` calls (`collect_edited_texts`, `get_focused_slot`,
+...). Callbacks connect the pieces: `VirtualRows` asks `ReviewFrame` to fill
+or release a row (`_fill_row`/`_on_row_destroying`), and `SlotBoxes` asks
+it to bind navigation keys on a new box and to keep a focused box in view.
+
+The windowing core stays together in one object: it's the state that once
+disagreed with itself (see "Row virtualization" below), and splitting it
+further would relocate that risk, not remove it.
 
 - **Row virtualization.** Only a small window of rows (around the visible
-  viewport) is ever built as real Tk widgets - `ReviewFrame._reconcile`
+  viewport) is ever built as real Tk widgets - `VirtualRows.reconcile`
   recomputes that window from scratch on every scroll tick as a pure
   function of scroll position and each row's recorded height
-  (`self._row_heights`), and reconciling is idempotent (calling it twice
+  (`VirtualRows.heights`), and reconciling is idempotent (calling it twice
   with no scroll movement is a no-op). That idempotency is deliberate - an
   earlier, stateful "step the window forward/backward" design could fall
   into a self-sustaining oscillation loop; see the module docstring for the
@@ -36,8 +49,8 @@ plus the scroll/debounce/Finalize-button machinery:
   `canvas.coords` has to move the frame to match *before* anything flushes
   Tk's idle queue - `update_idletasks()` repaints the screen. It's moved
   right after the teardown in `_sync_materialized_rows` and again right
-  after the builds in `_reconcile`. Row building itself must not flush
-  the idle queue either: `_build_immutable_message_label` used to call
+  after the builds in `VirtualRows.reconcile`. Row building itself must not flush
+  the idle queue either: `RowBuilder._build_message_label` used to call
   `update_idletasks()` to measure its label, which repainted the
   half-rebuilt screen once per message row and was the cause of the
   visible jumping/flicker when scrolling down.
@@ -47,7 +60,7 @@ plus the scroll/debounce/Finalize-button machinery:
   images here are landscape (width-, not height-, constrained), so the real
   fitted height is usually far less, and the guess overestimated most rows
   by 500+px. That got corrected once a row was actually built
-  (`ReviewFrame._remeasure_built_rows` shifts the scroll offset to keep
+  (`VirtualRows._remeasure_built_rows` shifts the scroll offset to keep
   on-screen content stable when a row's real height differs from its
   estimate) - but the correction itself showed up as a scroll jump
   disconnected from the user's actual scroll input, worse the bigger the
@@ -56,7 +69,7 @@ plus the scroll/debounce/Finalize-button machinery:
   placeholder, instead of a flat constant.
 - **The pre-build estimate also has to mirror the real layout's cap, not
   just its content-driven size.** A content box's real height
-  (`RowBuildingMixin._fixed_text_box_height`) is capped at
+  (`RowBuilder.fixed_text_box_height`) is capped at
   `TEXT_BOX_MAX_HEIGHT_FRACTION` of the canvas - a long message/OCR text
   gets an internal scrollbar past that point rather than growing the row
   further - but `estimate_row_height` had no matching cap, so a long row's
@@ -67,15 +80,15 @@ plus the scroll/debounce/Finalize-button machinery:
   session's saved focus, or a scrollbar drag far down the document), while
   continuously walking there via Tab/Page Down from the top always looked
   fine. The difference: walking through remeasures every row along the way
-  before `_offset_of` ever needs their height again - a jump skips that
+  before `VirtualRows.offset_of` ever needs their height again - a jump skips that
   remeasurement for whatever it jumps over, so any long row in the skipped
   range keeps contributing its uncapped overestimate to every later row's
   document-space offset indefinitely (until something eventually builds it).
   `estimate_row_height` now takes an optional `max_text_box_height_px` and
   caps each content role's right-column contribution the same way
-  `_fixed_text_box_height` does; `ReviewFrame.__init__` passes
-  `self._max_text_box_height_px()` - which is also why the row-heights list
-  is now built *after* `self._canvas` exists, not before, so that call's own
+  `RowBuilder.fixed_text_box_height` does; `RowBuilder.estimate_heights`
+  passes its own `max_text_box_height_px()` - which is also why the row-heights list
+  is built only *after* `VirtualRows.canvas` exists, not before, so that call's own
   not-yet-laid-out/`winfo_screenheight()` fallback applies the same way it
   would for any other premature call to it.
 - **Text sizes are measured, not hardcoded.** How big the text font really
@@ -85,7 +98,7 @@ plus the scroll/debounce/Finalize-button machinery:
   `row_building.measure_text_metrics` once, which reads the font's
   character width and line height and the requested heights of a
   throwaway original-text label and spacer box, built by the same helpers
-  (`_make_original_text_label`, `_make_spacer_text_widget`) the real rows
+  (`_make_original_text_label`, `slot_boxes.make_spacer_text_widget`) the real rows
   use. The resulting `TextMetrics` feeds `estimate_row_height` and sets
   every spacer box's fixed height, so a spacer box can't clip its own text
   (it did while that height was a hardcoded 30px). Measure with
@@ -100,8 +113,8 @@ plus the scroll/debounce/Finalize-button machinery:
 - **A row's first-ever build can measure as `winfo_height()==1` even right
   after `canvas.update_idletasks()`.** A real bug: resuming a session whose
   saved focus slot is deep in the transcript jumps straight there
-  (`_ensure_materialized`), which materializes that whole window of rows in
-  the session's very *first* `_reconcile` call - a deeply nested `ttk.Frame`
+  (`VirtualRows.ensure_materialized`), which materializes that whole window of rows in
+  the session's very *first* `VirtualRows.reconcile` call - a deeply nested `ttk.Frame`
   tree, several levels deep, none of which have ever been mapped to the
   screen before. `update_idletasks()` only drains Tcl's idle queue (what
   pack's own size negotiation runs on), not the window-system `Map` event a
@@ -109,10 +122,10 @@ plus the scroll/debounce/Finalize-button machinery:
   event doesn't always arrive within a single idle-queue pass for that much
   brand-new tree at once. `_remeasure_built_rows` used to take
   `winfo_height()`'s bogus `1` at face value, permanently writing
-  `2*ROW_PACK_PADY_PX` (9px) into `self._row_heights` for every row in that
-  first window - and since a row already in `self._row_frames` is never
-  rebuilt (so never remeasured) just because a later `_reconcile` runs, that
-  9px-per-row corruption then threw `self._offset_of` off by hundreds of px
+  `2*ROW_PACK_PADY_PX` (9px) into `VirtualRows.heights` for every row in that
+  first window - and since a row already in `VirtualRows.row_frames` is never
+  rebuilt (so never remeasured) just because a later `VirtualRows.reconcile` runs, that
+  9px-per-row corruption then threw `VirtualRows.offset_of` off by hundreds of px
   for every row after it, for the rest of the session, with no further
   chance to self-correct - the user-visible symptom was Tab/Shift-Tab's
   scroll-into-view looking completely broken from the moment a deep resume
@@ -122,7 +135,7 @@ plus the scroll/debounce/Finalize-button machinery:
   measures correctly on the first try, since by then the canvas has already
   been mapped once - this is specifically a first-reconcile problem.
 
-  `_reconcile` now calls `_settle_pending_geometry` (`review_view.py`) right
+  `VirtualRows.reconcile` now calls `_settle_pending_geometry` (`virtual_rows.py`) right
   after `update_idletasks()` and before trusting any measurement: it retries
   `update_idletasks()` a bounded number of times first (cheap, no
   event-processing side effects, covers the ordinary "pack is still
@@ -131,7 +144,7 @@ plus the scroll/debounce/Finalize-button machinery:
   drains *all* pending events, not just idle callbacks, which is what
   actually unblocks the stuck `Map`; confirmed by a standalone repro that
   `update_idletasks()` alone never resolves it, no matter how many retries,
-  while a single `update()` does. `update()` can call back into `_reconcile`
+  while a single `update()` does. `update()` can call back into `VirtualRows.reconcile`
   itself before returning (e.g. an already-scheduled debounced reconcile
   from the canvas's first `<Configure>` event) - expected and *not* guarded
   against: an earlier version added a reentrancy flag that made such a
@@ -141,7 +154,7 @@ plus the scroll/debounce/Finalize-button machinery:
   bug, because the nested call's own geometry-touching work (re-issuing
   `canvas.configure(scrollregion=...)`/`canvas.coords`) turned out to be
   what actually finishes flushing the stuck `Map`, not incidental to it.
-  `_reconcile`/`_sync_materialized_rows` are already written to be
+  `VirtualRows.reconcile`/`_sync_materialized_rows` are already written to be
   idempotent and safe to re-enter (see the module docstring), so trusting
   that existing guarantee - rather than adding a new one - is what makes
   this safe. `_remeasure_built_rows` itself also gained a direct
@@ -164,9 +177,9 @@ plus the scroll/debounce/Finalize-button machinery:
   occasional counterintuitive scroll jumps in `scroll_trace.log`'s
   `remeasure_mismatch` events even after the text-box-height change.
   `estimate_row_height` now computes each column's height the same way
-  `_build_row` actually lays it out (left: label and/or images, stacked;
+  `RowBuilder.fill_row` actually lays it out (left: label and/or images, stacked;
   right: message box and/or one OCR box per image, mirroring
-  `_fixed_text_box_height`'s rules; every stacked element but the last plus
+  `RowBuilder.fixed_text_box_height`'s rules; every stacked element but the last plus
   `GAP_BETWEEN_STACKED_PX`) and takes the taller of the two, rather than a
   flat constant. The margin/gap/row-overhead constants both sides need
   (`TEXT_BOX_MARGIN_PX`, `GAP_BETWEEN_STACKED_PX`, `ROW_FRAME_OVERHEAD_PX`)
@@ -176,7 +189,7 @@ plus the scroll/debounce/Finalize-button machinery:
   copy of the same numbers "kept in sync by hand," which is exactly the kind
   of drift that caused this mismatch in the first place.
 - **`<<Modified>>` fires on a box's initial population, not just real user
-  edits.** `_build_editable_text_box` inserts a box's initial text and
+  edits.** `SlotBoxes.build_content_box` inserts a box's initial text and
   immediately calls `edit_modified(False)`, intending to stop that insert
   from being treated as a user edit by `_on_text_modified` - but Tk queues
   `<<Modified>>` for the next idle tick rather than firing it synchronously,
@@ -184,23 +197,24 @@ plus the scroll/debounce/Finalize-button machinery:
   event loop) still catches it. That meant every newly-built row - including
   ones built only because they entered the virtualization buffer
   (`SCROLL_BUFFER_VIEWPORTS`), not because the user actually scrolled them
-  into view - triggered `_on_text_modified`'s `_scroll_box_into_view`,
+  into view - triggered `_on_text_modified`'s `FocusNavigator.scroll_box_into_view`,
   yanking the canvas to reveal a row the user hadn't scrolled to.
-  `_on_text_modified` now only calls `_scroll_box_into_view` when the edited
+  `_on_text_modified` now only calls `FocusNavigator.scroll_box_into_view` when the edited
   box actually has focus, which a phantom build-time event never does.
 - **Focus/cursor survive a row being torn down, not just edits.** A fast
   Page Up/Page Down burst can move the canvas several viewports between
-  `_reconcile` passes (each debounced - see `DEBOUNCE_MS` - so a held key
+  `VirtualRows.reconcile` passes (each debounced - see `DEBOUNCE_MS` - so a held key
   doesn't reconcile on every event), easily skipping past
   `SCROLL_BUFFER_VIEWPORTS`'s buffer and tearing down a row whose box
-  currently has focus. `_destroy_row` records that box's slot
-  (`self._refocus_slot`), and every box's cursor index goes into its
-  `SlotState.cursor`, before tearing the row down; `_build_row` restores
+  currently has focus. Before `VirtualRows.destroy_row` tears the row down,
+  `ReviewFrame._on_row_destroying` records that box's slot
+  (`FocusNavigator.refocus_slot`), and every box's cursor index goes into its
+  `SlotState.cursor`; `FocusNavigator.restore_focus_after_build` restores
   focus via `after_idle` rather than inline, if/when that index is rebuilt
   later - deferred so the restore's own scroll-into-view isn't immediately
-  clobbered by `_reconcile`'s still-pending `_remeasure_built_rows`
-  correction (which runs after `_sync_materialized_rows`/`_build_row`
-  return, in the same `_reconcile` call, if this fired from inside it).
+  clobbered by `VirtualRows.reconcile`'s still-pending `_remeasure_built_rows`
+  correction (which runs after `_sync_materialized_rows`/`RowBuilder.fill_row`
+  return, in the same `VirtualRows.reconcile` call, if this fired from inside it).
   Guarded on nothing else having since taken focus
   (`self._focused_slot() is None and self.focus_get() is not
   self._finalize_button`) - deliberately not a `self.focus_get() is None`
@@ -213,42 +227,42 @@ plus the scroll/debounce/Finalize-button machinery:
   owner's desktop that's already true by the time the window-close handler
   runs its final save. Asking it at save time recorded no focused box on 18
   of 22 closes in one day's `app.log`, so resuming rarely restored focus.
-  `get_focused_slot` falls back to `self._last_focused_slot`, which every
-  box's `<FocusIn>` (and `_focus_text_box`, since FocusIn only arrives
+  `get_focused_slot` falls back to `FocusNavigator.last_focused_slot`, which every
+  box's `<FocusIn>` (and `FocusNavigator.focus_text_box`, since FocusIn only arrives
   once the app is active) records, and the Finalize button's `<FocusIn>`
   clears. The resume's scroll-fraction fallback had its own trap: it called
   `yview_moveto` before the canvas had a scrollregion, which Tk silently
-  ignores (the same trap `_ensure_materialized` documents), so it now sets
+  ignores (the same trap `VirtualRows.ensure_materialized` documents), so it now sets
   the scrollregion first. Regression tests:
   `test_focus_survives_app_losing_focus_save_and_resume` and
   `test_saved_scroll_fraction_is_restored_when_no_box_was_focused`.
 - **The per-box model lives outside the widgets.** (`discord_transcription/gui/slot_state.py`,
   `discord_transcription/gui/slot_view.py`, `discord_transcription/gui/edit_history.py`.) Each editable box has
   two halves, both keyed by `(item_index, role)`:
-  - `self._slot_states` holds one `SlotState` per box, built eagerly in
-    `ReviewFrame.__init__` for every slot: its default text, current text,
+  - `SlotBoxes.states` holds one `SlotState` per box, built eagerly (in
+    `SlotBoxes.__init__`) for every slot: its default text, current text,
     cursor, undo/redo history, whether the user touched it this session,
     and (for an "ocr" box) its checkbox state and hidden user edit.
-  - `self._slot_views` holds one `SlotView` per *currently built* box: its
+  - `SlotBoxes.views` holds one `SlotView` per *currently built* box: its
     Text widget, container, checkbox variable and pending spellcheck timer.
-    `_release_slot_view` is the one place a view is unregistered (row
-    teardown and `_reclaim_widget_if_present` both use it): it syncs the
+    `SlotBoxes._release_view` is the one place a view is unregistered (row
+    teardown and `SlotBoxes._reclaim_if_present` both use it): it syncs the
     SlotState from the widget, records the cursor and cancels the timer.
 
   The widgets are just a view of the SlotState. Three rules keep the two in
   step:
-  - **A (re)build is always the same:** `_populate_text_box` inserts
+  - **A (re)build is always the same:** `SlotBoxes._populate` inserts
     `SlotState.text` and restores the cursor. There is no separate
     "first build" versus "rebuild" path, and nothing is replayed.
-  - **Widget to model:** `_sync_slot_from_widget` compares the widget's
+  - **Widget to model:** `SlotBoxes.sync_from_widget` compares the widget's
     text with `SlotState.text`. It runs on every `<<Modified>>` event, and
     also before anything reads or replaces a box's text (teardown,
-    `_get_box_text`, undo/redo, the checkbox), because `<<Modified>>` arrives
+    `SlotBoxes.reported_text`, undo/redo, the checkbox), because `<<Modified>>` arrives
     on a later idle tick than the edit itself. A difference is a user edit:
     it's recorded in the history, marks the slot touched, and ticks an
     "ocr" box's checkbox.
   - **Model to widget:** the app's own writes (undo/redo, the checkbox
-    swap) go through `_set_box_text`, which updates `SlotState.text`
+    swap) go through `SlotBoxes.set_text`, which updates `SlotState.text`
     *before* touching the widget. The `<<Modified>>` event that write
     causes then finds no difference, so it is never mistaken for a user
     edit - no suppression flags needed.
@@ -276,33 +290,33 @@ plus the scroll/debounce/Finalize-button machinery:
   mean something different on another widget.
 
   Two backstops from that era remain, since they guard the virtualization
-  core rather than undo: `_reclaim_widget_if_present` (a box built while an
+  core rather than undo: `SlotBoxes._reclaim_if_present` (a box built while an
   old widget for the same key is still registered syncs the old one into
   its SlotState and destroys it, rather than orphaning it), and
-  `review_view.py`'s `_try_build_row` (one row's build failure is logged
+  `virtual_rows.py`'s `_try_build_row` (one row's build failure is logged
   and skipped instead of aborting the rest of the reconcile batch).
   `main.py`'s `root.report_callback_exception` also still routes any
   uncaught Tk-callback exception into `app.log`.
 - **Spellcheck tagging.** (`discord_transcription/spellcheck.py`, wired in via
-  `row_building.RowBuildingMixin._configure_spellcheck_tag`/
-  `_schedule_spellcheck`/`_run_spellcheck`.) A misspelled word is underlined
+  `slot_boxes._configure_spellcheck_tag`/
+  `SlotBoxes.schedule_spellcheck`/`SlotBoxes.run_spellcheck`.) A misspelled word is underlined
   in red via a plain Tk text tag (`tag_configure("misspelled",
   underline=True, underlinefg=...)`) - a straight underline, since Tk has no
   wavy/squiggly underline primitive. First use of `tk.Text` tags anywhere in
   this codebase. Tags don't change a box's text, so they never show up as an
   edit or in undo history. The tradeoff: tags live on the `tk.Text`
   *instance*, not in the box's SlotState, so they don't survive a row being torn down and rebuilt
-  (a fresh widget) - `_build_editable_text_box` schedules a fresh spellcheck
+  (a fresh widget) - `SlotBoxes.build_content_box` schedules a fresh spellcheck
   pass on every (re)build, not just the first, to compensate. Applied only
-  to "message"/"ocr{N}" boxes - `_build_spacer_text_box` never calls into
+  to "message"/"ocr{N}" boxes - `SlotBoxes.build_spacer_box` never calls into
   this, so a spacer box (holding nothing but `\n` tokens) is never a
   candidate for the tag.
 
   `find_misspelled_spans` also loads a second, complementary sidecar file -
   `spellcheck_blacklist.txt`, same one-word-per-line format and
-  lazy-load-and-cache convention as the whitelist (`_get_blacklist`/
-  `_blacklist`/`_blacklist_loaded`, mirroring `_get_whitelist`/`_whitelist`/
-  `_whitelist_loaded`) - for real English words that the dictionary
+  load-and-cache convention as the whitelist (`_get_blacklist`, mirroring
+  `_get_whitelist`; both re-read their file when its modification time
+  changes) - for real English words that the dictionary
   considers correctly spelled but that keep turning out to be OCR misreads
   or typos for something else in this transcript's context. A candidate word
   is flagged if it's either unrecognized by the dictionary *or* in the
@@ -312,7 +326,7 @@ plus the scroll/debounce/Finalize-button machinery:
 
   Debounced per box (`SPELLCHECK_DEBOUNCE_MS`, via `text_widget.after`) so
   typing doesn't re-scan a box's text on every keystroke -
-  `_destroy_row`/`_reclaim_widget_if_present` cancel a box's pending timer
+  `VirtualRows.destroy_row`/`SlotBoxes._reclaim_if_present` cancel a box's pending timer
   before tearing its widget down, the same defensive posture as everything
   else here that reaches back into an about-to-be-destroyed widget. That
   per-row cancellation isn't enough on its own, though: rows still
@@ -320,7 +334,7 @@ plus the scroll/debounce/Finalize-button machinery:
   close, or - in `test_review_view.py` - the per-test teardown fixture
   explicitly destroying that test's frame, since its `root` is now shared
   across the whole module rather than recreated per test) never go through
-  `_destroy_row` at all, so their pending timers would otherwise leak. This surfaced
+  `VirtualRows.destroy_row` at all, so their pending timers would otherwise leak. This surfaced
   immediately as a real, reproduced test failure once spellcheck shipped:
   `test_review_view.py`'s GUI tests build and tear down many `ReviewFrame`s
   (and their many text boxes) back to back in the same process, and Tcl's
@@ -338,8 +352,8 @@ plus the scroll/debounce/Finalize-button machinery:
 - **Slot-addressed boxes.** Since a row can now have a "message" box (a copy
   of the message's own text) and any number of OCR boxes - one per attached
   image, since a single message can have more than one - a plain item index
-  is no longer enough to identify one box. Every per-box structure in
-  `ReviewFrame` (`_slot_states`, `_slot_views`)
+  is no longer enough to identify one box. Every per-box structure
+  (`SlotBoxes.states`, `SlotBoxes.views`)
   is keyed by `(item_index, role)` instead, where `role` is
   `"message"` or `"ocr{N}"` (the Nth attached image's OCR box, 0-indexed in
   attachment order) - encoding the image index into the role string this
@@ -350,15 +364,15 @@ plus the scroll/debounce/Finalize-button machinery:
   in `__init__` from each item's `initial_message_text`/`image_paths` (a
   "message" slot whenever the former isn't None, then one `"ocr{i}"` slot
   per entry in the latter), message before every image's OCR slot. This is
-  what Tab/Shift-Tab navigate (`keyboard_nav.py`'s `_move_focus`, stepping
+  what Tab/Shift-Tab navigate (`keyboard_nav.py`'s `FocusNavigator.move_focus`, stepping
   through `self._slots` by `self._slot_positions[slot]`) and what session
   resume's saved focus position addresses a box by - a plain item index
   couldn't disambiguate which of a row's boxes to refocus. `ImageLoader`
   mirrors this with its own `(item_index, image_index)`-keyed slots (see
   `discord_transcription/gui/image_loading.py`), since a row can likewise now load/unload more
   than one image.
-- **Per-row left-column sizing.** (`row_building.RowBuildingMixin`.) Every
-  row's left column is the same width (`ReviewFrame._image_column_width_px`,
+- **Per-row left-column sizing.** (`row_building.RowBuilder`.) Every
+  row's left column is the same width (`RowBuilder.image_column_width_px`,
   set by the column divider - see below), whether it holds an image, the immutable
   original-text label, or both stacked text-above-image - so every row's
   column pairs line up neatly across the whole transcript. An image's height
@@ -368,22 +382,22 @@ plus the scroll/debounce/Finalize-button machinery:
   only reads the image file's header (cheap), separately from the actual
   lazy pixel decode in `ImageLoader._load_image` once a row scrolls near the
   viewport. The immutable label's height isn't known until the label exists,
-  so `_build_immutable_message_label` reads the label's own
+  so `RowBuilder._build_message_label` reads the label's own
   `winfo_reqheight()` (valid as soon as it's configured) before pinning
   both dimensions, rather than computing it upfront the way
   `fitted_image_size` does for images.
 - **The column divider re-lays out through the rebuild path.**
-  (`column_divider.py`'s `ColumnDividerMixin`.) The image column's width
+  (`column_divider.py`'s `ColumnDivider`.) The image column's width
   sets every row's height (images are fitted to it, and the original-text
   label wraps at it), so changing it can't be patched onto the built rows
   alone - rows that aren't built have estimated heights that depend on it
-  too. `_set_image_column_width` treats it like a far scroll jump: it
+  too. `ColumnDivider.set_width` treats it like a far scroll jump: it
   records an anchor (the focused box's top edge if it's in view, otherwise
   the top row's), tears down every built row, re-estimates every row's
   height at the new width, scrolls so the anchor's *estimated* position is
   back at the same screen offset, reconciles, and then repeats that scroll
   against the rebuilt rows' *real* geometry and reconciles again. It adds
-  no second sizing path: `_build_row` and `estimate_row_height` both just
+  no second sizing path: `RowBuilder.fill_row` and `estimate_row_height` both just
   take the width, and the per-box model carries edits, cursor, undo
   history and focus across the rebuild the same way it does for scrolling.
   Recomputing every row's estimate stays cheap because
@@ -393,7 +407,7 @@ plus the scroll/debounce/Finalize-button machinery:
   The divider is a `tk.Frame` `place()`d over the canvas (`in_=canvas`, so
   its x is in the rows' own coordinates) at `divider_x_for_width`, centered
   in the `2 * COLUMN_PADX_PX` gap between the columns. That position is
-  derived from the same layout constants `_build_row` packs with
+  derived from the same layout constants `RowBuilder.fill_row` packs with
   (`ROW_PACK_PADX_PX`, the row Frame's border/padding, `COLUMN_PADX_PX` -
   combined as `IMAGE_COLUMN_LEFT_PX`), and
   `test_column_divider_sits_in_the_gap_between_the_columns` checks it
@@ -408,11 +422,11 @@ plus the scroll/debounce/Finalize-button machinery:
   half a second at 1900x1000 in a profile, nearly all of it Tk laying out
   and painting the new rows), which is why a live-while-dragging relayout
   would need a cheaper path than a full rebuild.
-- **Per-box text box sizing.** (`row_building.RowBuildingMixin`.) Each
+- **Per-box text box sizing.** (`row_building.RowBuilder`.) Each
   editable text box lives in its own fixed-height container
   (`pack_propagate(False)`, same trick as the left column's placeholders) so
   it doesn't stretch to fill whatever space is left via Tk's `fill="both"`.
-  `_fixed_text_box_height` decides that height once, at build time, from a
+  `RowBuilder.fixed_text_box_height` decides that height once, at build time, from a
   fixed rule rather than measuring the text's actual wrapped line count: its
   paired immutable element's own on-screen height (the label's, for a
   "message" box; the image's, for an "ocr" box) plus `TEXT_BOX_MARGIN_PX`,
@@ -457,22 +471,22 @@ plus the scroll/debounce/Finalize-button machinery:
   `_update_finalize_button_visibility` calls `place()`/`place_forget()` to
   show it only once `canvas.yview()`'s bottom fraction reaches `1.0` (the
   true end of the scrollregion, or trivially true for a transcript that fits
-  on screen with nothing to scroll past) - called from `_reconcile` on every
-  scroll-driven update and from `_scroll_box_into_view` so Tab'ing to the
+  on screen with nothing to scroll past) - called from `VirtualRows.reconcile` on every
+  scroll-driven update and from `FocusNavigator.scroll_box_into_view` so Tab'ing to the
   last box reveals it immediately rather than waiting on the next scroll
   event.
-- **Per-box, not per-row, scroll-into-view.** `_scroll_box_into_view`
+- **Per-box, not per-row, scroll-into-view.** `FocusNavigator.scroll_box_into_view`
   (`keyboard_nav.py`) replaced an earlier `_scroll_into_view` that checked
   only a row's outer bounds against the viewport. A row can stack more than
   one box - a message's text box, one OCR box per attached image, and a
-  spacer box between/after each (`_build_row`) - and can end up taller than
+  spacer box between/after each (`RowBuilder.fill_row`) - and can end up taller than
   the viewport itself, so the row-level check could find the row "already
   fully visible" (because some box within it was) while the specific box
   Tab/Shift-Tab had just focused, or the one the user was typing into, was
   still only partially onscreen - in the worst case almost entirely covered,
   with just a sliver poking into view, which the old check's row-level
   bounds didn't catch as a reason to scroll at all. Computed the same way
-  `_keep_cursor_in_viewport`'s box bounds already were: `self._offset_of(index)`
+  `FocusNavigator.keep_cursor_in_viewport`'s box bounds already were: `VirtualRows.offset_of(index)`
   (the row's document-space offset) plus a `winfo_rooty()` delta for the
   box's offset *within* that row.
 - **Per-OCR-box edited/checkbox state.** Every "ocr" box (one per attached
@@ -485,10 +499,10 @@ plus the scroll/debounce/Finalize-button machinery:
   OCR default, while unchecked). Like the rest of the SlotState, both
   survive a row being torn down and rebuilt with no extra plumbing.
 
-  The seeding rule in `ReviewFrame._initial_slot_states` - checked exactly
+  The seeding rule in `slot_boxes.initial_slot_states` - checked exactly
   when the seeded text (a resumed session's edit, else a finalized edit)
   differs from the OCR default - also implements the project owner's
-  chosen resume behavior: `_get_box_text` (what `collect_edited_texts`,
+  chosen resume behavior: `SlotBoxes.reported_text` (what `collect_edited_texts`,
   autosave and the session file read) reports `None` for an unchecked
   "ocr" box, so a saved, non-default value can only ever mean "there's a
   real edit to surface". An edit hidden behind an unchecked box is kept
@@ -496,9 +510,9 @@ plus the scroll/debounce/Finalize-button machinery:
 
   Three rules decide the checked state:
   - **Any user edit ticks it** (`_on_ocr_box_user_edit`, called from
-    `_sync_slot_from_widget`), even if the new text happens to match the
+    `SlotBoxes.sync_from_widget`), even if the new text happens to match the
     default again.
-  - **Clicking it swaps the text** (`_on_ocr_checkbox_toggle`): unchecking
+  - **Clicking it swaps the text** (`SlotBoxes.on_ocr_checkbox_toggle`): unchecking
     shows the OCR default, checking shows `user_edit` again. The swap is one
     undo step of its own (`EditHistory.record(..., standalone=True)`). The
     new checked state is read before syncing any pending edit, since that
@@ -522,13 +536,13 @@ plus the scroll/debounce/Finalize-button machinery:
   before the checkbox column, not just before `text_widget`, to land at the
   true right edge with the checkbox column directly to its left.
 - **A popup `tk.Menu`'s close can't be detected via `<Unmap>` on Windows.**
-  (`image_context_menu.py`'s `_show_image_context_menu`.) The right-click
+  (`image_context_menu.py`'s `ImageContextMenu.show`.) The right-click
   context menu on a review row's image (Open Image/Open Image in
   Browser/Open Image Location/Open Chatlog at Message/Copy Image) freezes
   review-window scrolling
-  (mousewheel/Page Up-Down/scrollbar - `ReviewFrame._scroll_frozen`, checked
-  in `review_view.py`'s mousewheel/scrollbar handlers and
-  `keyboard_nav.py`'s `_on_page_up`/`_on_page_down`) for as long as it's
+  (mousewheel/Page Up-Down/scrollbar - `VirtualRows.frozen`, checked
+  by `VirtualRows`'s scrollbar handler and `ReviewFrame`'s
+  mousewheel and `_on_page_up`/`_on_page_down` handlers) for as long as it's
   open, so scrolling can't move rows - and this menu's target image - out
   from under it. The first version unfroze via `menu.bind("<Unmap>", ...)`,
   assuming Tk would fire its ordinary widget-unmap event when the popup
@@ -538,7 +552,7 @@ plus the scroll/debounce/Finalize-button machinery:
   commands *did* unfreeze (each command's own callback ran, and the menu
   happening to close right after was incidental), but dismissing the menu
   with Escape or a click elsewhere left scrolling frozen forever, since
-  nothing else ever reset `_scroll_frozen`. Root cause: on Windows,
+  nothing else ever reset `VirtualRows.frozen`. Root cause: on Windows,
   `tk.Menu`'s popup is implemented via the native `TrackPopupMenu` API
   rather than as an ordinary Tk-managed toplevel - so it never generates the
   `Unmap` event Tk's own binding machinery depends on, regardless of how
@@ -552,7 +566,7 @@ plus the scroll/debounce/Finalize-button machinery:
   the real popup menu visible on screen until force-closed (see
   `test_image_context_menu.py`, which mocks `tk.Menu.tk_popup` for exactly
   this reason rather than ever calling the real thing). That blocking makes
-  unfreezing in `_show_image_context_menu`'s own `finally` - right after
+  unfreezing in `ImageContextMenu.show`'s own `finally` - right after
   `tk_popup(...)` returns - deterministic: by the time control gets there,
   the menu is already gone, whichever of the three ways it closed.
   `_on_image_context_menu_closed` (the unfreeze itself, plus its own log

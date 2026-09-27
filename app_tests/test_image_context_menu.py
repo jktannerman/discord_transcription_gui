@@ -7,8 +7,8 @@ Split into two groups the same way test_image_loading.py is:
 - Action logic (_run_image_menu_action's success/failure logging,
   _open_image/_open_image_in_browser/_open_image_location/
   _copy_image_to_clipboard's actual os.startfile/subprocess/registry/
-  clipboard calls) needs no real Tk widget at all - tested via a bare mixin
-  instance the same way test_row_building.py stubs RowBuildingMixin.
+  clipboard calls) needs no real Tk widget at all - tested on a menu
+  object with no parent widget.
 - The menu itself (posting, and - the actual scope of the "clicks do
   nothing" bug this feature is deliberately built to avoid, see the
   module's docstring - scroll freeze/unfreeze around it) needs a real
@@ -25,7 +25,7 @@ import tkinter as tk
 from PIL import Image
 
 from discord_transcription.chatlog import MessageEntry
-from discord_transcription.gui.image_context_menu import ImageContextMenuMixin, _default_browser_command
+from discord_transcription.gui.image_context_menu import ImageContextMenu, _default_browser_command
 from discord_transcription.gui.review_view import ReviewFrame
 from discord_transcription.review_item import build_review_items
 
@@ -33,8 +33,10 @@ from discord_transcription.review_item import build_review_items
 # -- _run_image_menu_action's success/failure logging ------------------------
 
 
-class _MenuActionStub(ImageContextMenuMixin):
-    pass
+def _MenuActionStub(html_path: Path = Path("dummy_chatlog.html")) -> ImageContextMenu:
+    """A menu with no parent widget - enough for its actions, which never
+    create a widget."""
+    return ImageContextMenu(None, html_path, set_scroll_frozen=lambda frozen: None)
 
 
 # These exercise code that only works on Windows: the real winreg module,
@@ -378,7 +380,7 @@ def _frame_with_one_image_row(root, sample_image):
     frame.pack(fill="both", expand=True)
     for _ in range(20):
         root.update()
-        if frame._materialized_range is not None:
+        if frame._rows.materialized_range is not None:
             break
     return frame
 
@@ -392,7 +394,7 @@ def test_right_click_opens_menu_and_freezes_scrolling(root, sample_image):
     thing from an unattended test hangs indefinitely - confirmed by hand
     (the test window stayed open, with the real popup menu visible, until
     force-closed) rather than by inference - so this test asserts only
-    what _show_image_context_menu itself controls: that the freeze is
+    what ImageContextMenu.show itself controls: that the freeze is
     already in effect by the time it would hand off to that blocking call,
     without ever making the call for real."""
     frame = _frame_with_one_image_row(root, sample_image)
@@ -401,20 +403,20 @@ def test_right_click_opens_menu_and_freezes_scrolling(root, sample_image):
     frozen_when_popup_would_run = []
 
     def _fake_tk_popup(menu_self, x, y, entry=""):
-        frozen_when_popup_would_run.append(frame._scroll_frozen)
-        scrollbar_state = frame._scrollbar.state()
+        frozen_when_popup_would_run.append(frame._rows.frozen)
+        scrollbar_state = frame._rows.scrollbar.state()
         frozen_when_popup_would_run.append("disabled" in scrollbar_state)
 
-    assert frame._scroll_frozen is False
+    assert frame._rows.frozen is False
     with patch.object(tk.Menu, "tk_popup", _fake_tk_popup):
-        frame._show_image_context_menu(fake_event, sample_image, "1")
+        frame._menu.show(fake_event, sample_image, "1")
 
     assert frozen_when_popup_would_run == [True, True]
 
 
 @pytest.mark.gui
 def test_menu_closing_unfreezes_scrolling(root, sample_image):
-    """Unfreezing happens in _show_image_context_menu's own `finally`, right
+    """Unfreezing happens in ImageContextMenu.show's own `finally`, right
     after tk_popup returns - not via a menu.bind("<Unmap>", ...) callback,
     which an earlier version of this feature relied on and which turned out
     to never fire for a real popup menu on Windows (native TrackPopupMenu
@@ -430,25 +432,25 @@ def test_menu_closing_unfreezes_scrolling(root, sample_image):
     fake_event = SimpleNamespace(x_root=root.winfo_rootx() + 50, y_root=root.winfo_rooty() + 50)
 
     with patch.object(tk.Menu, "tk_popup", lambda menu_self, x, y, entry="": None):
-        frame._show_image_context_menu(fake_event, sample_image, "1")
+        frame._menu.show(fake_event, sample_image, "1")
 
-    assert frame._scroll_frozen is False
-    assert "disabled" not in frame._scrollbar.state()
+    assert frame._rows.frozen is False
+    assert "disabled" not in frame._rows.scrollbar.state()
 
 
 @pytest.mark.gui
 def test_frozen_mousewheel_and_page_keys_do_not_scroll(root, sample_image):
     frame = _frame_with_one_image_row(root, sample_image)
-    frame._scroll_frozen = True
-    top_before, _ = frame._canvas.yview()
+    frame._rows.set_frozen(True)
+    top_before, _ = frame._rows.canvas.yview()
 
     frame._on_page_down()
     root.update()
-    top_after_page, _ = frame._canvas.yview()
+    top_after_page, _ = frame._rows.canvas.yview()
     assert top_after_page == top_before
 
-    frame._canvas.event_generate("<MouseWheel>", delta=-120, warp=False)
-    frame._canvas.event_generate("<Button-5>", warp=False)  # X11 wheel-down
+    frame._rows.canvas.event_generate("<MouseWheel>", delta=-120, warp=False)
+    frame._rows.canvas.event_generate("<Button-5>", warp=False)  # X11 wheel-down
     root.update()
-    top_after_wheel, _ = frame._canvas.yview()
+    top_after_wheel, _ = frame._rows.canvas.yview()
     assert top_after_wheel == top_before

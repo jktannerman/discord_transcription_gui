@@ -1,32 +1,32 @@
 """The draggable divider between the review screen's image column and text
 column.
 
-Mixed into ReviewFrame, like row_building.py and keyboard_nav.py, since it
-reaches into the frame's canvas, row bookkeeping and virtualization core.
-
 The divider is a thin bar place()'d over the canvas at the column boundary -
 each row is its own Frame, so no single paned widget could span them all.
 Dragging it only moves the bar; releasing it applies the new width
-(_set_image_column_width), which changes every row's height (images are
-fitted to the column width, and the original-text label wraps at it), so it
-goes through the same path a scroll does: every built row is torn down, all
-row heights are re-estimated, and _reconcile rebuilds the rows around the
-view. The per-box model (slot_state.py) keeps edits, cursor, undo history and
-checkbox state across that rebuild, as it does for any scroll-driven one.
+(set_width), which changes every row's height (images are fitted to the
+column width, and the original-text label wraps at it), so every built row
+is torn down, all row heights are re-estimated, and the rows are rebuilt
+around the view. The per-box model (slot_state.py) keeps edits, cursor,
+undo history and checkbox state across that rebuild, as it does for any
+scroll-driven one.
 
 The column width is kept as a fraction of the canvas width, so it keeps its
 proportion when the window is resized; ReviewFrame's caller persists that
-fraction per chatlog (on_image_column_fraction_changed).
+fraction per chatlog (on_fraction_changed).
 """
 
 import bisect
 import time
 import tkinter as tk
-from typing import Optional, Tuple
+from typing import Callable, Optional
 
 from .. import logging_config
 from . import theme
 from .layout_constants import COLUMN_DIVIDER_WIDTH_PX, COLUMN_PADX_PX, IMAGE_COLUMN_LEFT_PX
+from .row_building import RowBuilder
+from .slot_boxes import Slot
+from .virtual_rows import VirtualRows
 from .virtualization import clamp_image_column_width, image_column_width_for_fraction
 
 logger = logging_config.get_logger(__name__)
@@ -39,10 +39,10 @@ RESIZE_DEBOUNCE_MS = 150
 _DIVIDER_COLOR = "#4a4a4a"
 _DIVIDER_ACTIVE_COLOR = theme.DARK_FOCUS_HIGHLIGHT
 
-# (kind, key, screen_offset_px): the box (kind "box", key an (index, role)
-# slot) or row (kind "row", key an item index) whose top edge should stay at
+# (kind, key, screen_offset_px): the box (kind "box", key a slot) or row
+# (kind "row", key an item index) whose top edge should stay at
 # screen_offset_px from the top of the viewport across a relayout.
-ViewAnchor = Tuple[str, object, float]
+ViewAnchor = tuple[str, object, float]
 
 
 def divider_x_for_width(image_column_width_px: int) -> int:
@@ -73,187 +73,211 @@ def width_for_divider_x(divider_center_x: float) -> int:
     return round(divider_center_x - IMAGE_COLUMN_LEFT_PX - COLUMN_PADX_PX)
 
 
-class ColumnDividerMixin:
-    def _build_column_divider(self) -> None:
-        """Create the divider bar and its drag bindings. Placed by
-        _position_column_divider once the canvas has a real width."""
-        divider = tk.Frame(
-            self, width=COLUMN_DIVIDER_WIDTH_PX, bg=_DIVIDER_COLOR,
-            cursor="sb_h_double_arrow", highlightthickness=0, borderwidth=0,
-        )
-        divider.bind("<Enter>", lambda e: divider.configure(bg=_DIVIDER_ACTIVE_COLOR))
-        divider.bind(
-            "<Leave>",
-            lambda e: None if self._divider_drag_width is not None else divider.configure(bg=_DIVIDER_COLOR),
-        )
-        divider.bind("<ButtonPress-1>", self._on_divider_press)
-        divider.bind("<B1-Motion>", self._on_divider_drag)
-        divider.bind("<ButtonRelease-1>", self._on_divider_release)
-        self._column_divider = divider
-        # The width the divider has been dragged to, while a drag is in
-        # progress; None otherwise.
-        self._divider_drag_width: Optional[int] = None
+class ColumnDivider:
+    """The divider bar, and re-laying out the rows when it moves.
+
+    Attributes:
+        widget: The divider bar itself.
+        fraction: The image column's share of the canvas width, or None
+            until the canvas first has a real width.
+        drag_width: The width dragged to while a drag is in progress; None
+            otherwise.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        rows: VirtualRows,
+        builder: RowBuilder,
+        focused_slot: Callable[[], Optional[Slot]],
+        box_top: Callable[[Slot], Optional[float]],
+        initial_fraction: Optional[float] = None,
+        on_fraction_changed: Optional[Callable[[float], None]] = None,
+    ) -> None:
+        """Create the divider bar (placed later, by position()).
+
+        Args:
+            parent: The widget the bar is a child of (placed over the canvas).
+            rows: The rows to re-lay out.
+            builder: Holds the column width, and re-estimates row heights.
+            focused_slot: The box that has focus, if any.
+            box_top: A built box's document-space top, or None.
+            initial_fraction: A saved fraction to start from, if any.
+            on_fraction_changed: Called with the new fraction after a drag.
+        """
+        self._rows = rows
+        self._builder = builder
+        self._focused_slot = focused_slot
+        self._box_top = box_top
+        self._on_fraction_changed = on_fraction_changed
+        self.fraction: Optional[float] = None
+        if initial_fraction is not None and 0.0 < initial_fraction < 1.0:
+            self.fraction = initial_fraction
+        self.drag_width: Optional[int] = None
         self._resize_job: Optional[str] = None
 
-    def _position_column_divider(self, image_column_width_px: Optional[int] = None) -> None:
+        widget = tk.Frame(
+            parent, width=COLUMN_DIVIDER_WIDTH_PX, bg=_DIVIDER_COLOR,
+            cursor="sb_h_double_arrow", highlightthickness=0, borderwidth=0,
+        )
+        widget.bind("<Enter>", lambda e: widget.configure(bg=_DIVIDER_ACTIVE_COLOR))
+        widget.bind(
+            "<Leave>",
+            lambda e: None if self.drag_width is not None else widget.configure(bg=_DIVIDER_COLOR),
+        )
+        widget.bind("<ButtonPress-1>", self.on_press)
+        widget.bind("<B1-Motion>", self.on_drag)
+        widget.bind("<ButtonRelease-1>", self.on_release)
+        self.widget = widget
+
+    def position(self, image_column_width_px: Optional[int] = None) -> None:
         """Place the divider at the boundary for `image_column_width_px`
         (the current column width if omitted)."""
-        width = self._image_column_width_px if image_column_width_px is None else image_column_width_px
+        width = self._builder.image_column_width_px if image_column_width_px is None else image_column_width_px
         # Placed relative to the canvas, so its x is in canvas coordinates
         # (the same ones the rows are laid out in).
-        self._column_divider.place(
-            in_=self._canvas, x=divider_x_for_width(width), y=0,
+        self.widget.place(
+            in_=self._rows.canvas, x=divider_x_for_width(width), y=0,
             width=COLUMN_DIVIDER_WIDTH_PX, relheight=1.0,
         )
 
-    def _canvas_width(self) -> int:
-        return max(self._canvas.winfo_width(), 1)
+    def cancel_pending(self) -> None:
+        """Cancel a pending debounced width sync (the screen is going away)."""
+        if self._resize_job is not None:
+            self.widget.after_cancel(self._resize_job)
+            self._resize_job = None
 
-    def _on_divider_press(self, event: tk.Event) -> str:
-        self._divider_drag_width = self._image_column_width_px
-        self._column_divider.configure(bg=_DIVIDER_ACTIVE_COLOR)
-        self._log_event("divider_drag_start", width=self._image_column_width_px)
+    # -- dragging --------------------------------------------------------------
+
+    def on_press(self, event: tk.Event) -> str:
+        self.drag_width = self._builder.image_column_width_px
+        self.widget.configure(bg=_DIVIDER_ACTIVE_COLOR)
+        self._rows.log_event("divider_drag_start", width=self._builder.image_column_width_px)
         return "break"
 
-    def _on_divider_drag(self, event: tk.Event) -> str:
+    def on_drag(self, event: tk.Event) -> str:
         """Move the divider with the pointer (clamped); rows are only
         re-laid out on release."""
-        if self._divider_drag_width is None:
+        if self.drag_width is None:
             return "break"
-        pointer_x = event.x_root - self._canvas.winfo_rootx()
-        width = clamp_image_column_width(width_for_divider_x(pointer_x), self._canvas_width())
-        self._divider_drag_width = width
-        self._position_column_divider(width)
+        pointer_x = event.x_root - self._rows.canvas.winfo_rootx()
+        width = clamp_image_column_width(width_for_divider_x(pointer_x), self._rows.canvas_width())
+        self.drag_width = width
+        self.position(width)
         return "break"
 
-    def _on_divider_release(self, event: tk.Event) -> str:
+    def on_release(self, event: tk.Event) -> str:
         """Apply the dragged-to width and report the new fraction."""
-        width = self._divider_drag_width
-        self._divider_drag_width = None
-        self._column_divider.configure(bg=_DIVIDER_COLOR)
+        width = self.drag_width
+        self.drag_width = None
+        self.widget.configure(bg=_DIVIDER_COLOR)
         if width is None:
             return "break"
-        self._log_event("divider_drag_end", width=width)
-        self._image_column_fraction = width / self._canvas_width()
-        self._set_image_column_width(width)
-        if self._on_image_column_fraction_changed is not None:
-            self._on_image_column_fraction_changed(self._image_column_fraction)
+        self._rows.log_event("divider_drag_end", width=width)
+        self.fraction = width / self._rows.canvas_width()
+        self.set_width(width)
+        if self._on_fraction_changed is not None:
+            self._on_fraction_changed(self.fraction)
         return "break"
 
-    def _width_for_current_canvas(self) -> int:
+    # -- window resizes ----------------------------------------------------------
+
+    def width_for_current_canvas(self) -> int:
         """The column width the stored fraction gives at the current canvas
         width - or, with no fraction yet, the current width clamped to it
         (and that becomes the fraction, so a later window resize keeps the
         proportion)."""
-        canvas_width = self._canvas_width()
-        if self._image_column_fraction is None:
-            width = clamp_image_column_width(self._image_column_width_px, canvas_width)
-            self._image_column_fraction = width / canvas_width
+        canvas_width = self._rows.canvas_width()
+        if self.fraction is None:
+            width = clamp_image_column_width(self._builder.image_column_width_px, canvas_width)
+            self.fraction = width / canvas_width
             return width
-        return image_column_width_for_fraction(self._image_column_fraction, canvas_width)
+        return image_column_width_for_fraction(self.fraction, canvas_width)
 
-    def _schedule_width_sync(self) -> None:
+    def schedule_width_sync(self) -> None:
         """Debounced: re-lay out rows if the canvas width change (a window
         resize) means a different column width."""
         if self._resize_job is not None:
-            self.after_cancel(self._resize_job)
-        self._resize_job = self.after(RESIZE_DEBOUNCE_MS, self._run_width_sync)
+            self.widget.after_cancel(self._resize_job)
+        self._resize_job = self.widget.after(RESIZE_DEBOUNCE_MS, self.run_width_sync)
 
-    def _run_width_sync(self) -> None:
+    def run_width_sync(self) -> None:
         self._resize_job = None
-        if self._materialized_range is None:
-            return  # _apply_initial_position hasn't run yet; it syncs itself
-        self._set_image_column_width(self._width_for_current_canvas())
+        if self._rows.materialized_range is None:
+            return  # the initial layout hasn't run yet; it syncs itself
+        self.set_width(self.width_for_current_canvas())
 
-    def _capture_view_anchor(self) -> ViewAnchor:
+    # -- re-laying out, keeping the view anchored ---------------------------------
+
+    def capture_view_anchor(self) -> ViewAnchor:
         """What should stay in place on screen across a relayout: the
         focused box's top edge if it's in view, otherwise the top edge of
         the row at the top of the view."""
-        canvas = self._canvas
-        view_top = canvas.canvasy(0)
-        view_bottom = canvas.canvasy(canvas.winfo_height())
+        view_top = self._rows.view_top()
+        view_bottom = self._rows.view_bottom()
         focused = self._focused_slot()
         if focused is not None:
-            view = self._slot_views.get(focused)
-            row = self._row_frames.get(focused[0])
-            if view is not None and view.container is not None and row is not None:
-                try:
-                    box_top = self._box_document_top(focused[0], view.container, row)
-                except tk.TclError:
-                    box_top = None
-                if box_top is not None and view_top <= box_top < view_bottom:
-                    return ("box", focused, box_top - view_top)
+            box_top = self._box_top(focused)
+            if box_top is not None and view_top <= box_top < view_bottom:
+                return ("box", focused, box_top - view_top)
 
         offsets = [0]
-        for height in self._row_heights:
+        for height in self._rows.heights:
             offsets.append(offsets[-1] + height)
-        index = max(0, min(bisect.bisect_right(offsets, view_top) - 1, len(self._row_heights) - 1))
+        index = max(0, min(bisect.bisect_right(offsets, view_top) - 1, len(self._rows.heights) - 1))
         return ("row", index, offsets[index] - view_top)
 
-    def _anchor_document_top(self, anchor: ViewAnchor) -> Optional[float]:
-        """Where the anchor's top edge is now, in document coordinates -
-        None if it's a box whose row isn't built."""
+    def _anchor_document_top(self, anchor: ViewAnchor) -> float:
+        """Where the anchor's top edge is now, in document coordinates (a
+        box whose row isn't built falls back to its row's top)."""
         kind, key, _ = anchor
         if kind == "row":
-            return float(self._offset_of(key))
-        index = key[0]
-        view = self._slot_views.get(key)
-        row = self._row_frames.get(index)
-        if view is None or view.container is None or row is None:
-            return float(self._offset_of(index))
-        try:
-            return self._box_document_top(index, view.container, row)
-        except tk.TclError:
-            return float(self._offset_of(index))
+            return float(self._rows.offset_of(key))
+        box_top = self._box_top(key)
+        return box_top if box_top is not None else float(self._rows.offset_of(key[0]))
 
     def _scroll_to_anchor(self, anchor: ViewAnchor) -> None:
         """Scroll so the anchor sits at its captured screen offset again."""
-        total_height = sum(self._row_heights)
-        document_top = self._anchor_document_top(anchor)
-        if total_height <= 0 or document_top is None:
+        if self._rows.total_height() <= 0:
             return
-        canvas = self._canvas
-        canvas.configure(scrollregion=(0, 0, self._canvas_width(), total_height))
-        view_top = max(0.0, document_top - anchor[2])
-        canvas.yview_moveto(view_top / total_height)
+        self._rows.set_scrollregion()
+        self._rows.move_view_to(self._anchor_document_top(anchor) - anchor[2])
 
-    def _set_image_column_width(self, width: int) -> None:
+    def set_width(self, width: int) -> None:
         """Re-lay out the review screen for a new image column width.
 
         Every row's height depends on the width, so this tears down every
         built row, re-estimates all row heights, then rebuilds around the
-        view with the anchor (_capture_view_anchor) kept in place: first by
+        view with the anchor (capture_view_anchor) kept in place: first by
         its row's estimated position, then - once the rows are built and
         measured - by its real one.
 
         Args:
             width: The new image column width (already clamped).
         """
-        if width == self._image_column_width_px:
-            self._position_column_divider()
+        if width == self._builder.image_column_width_px:
+            self.position()
             return
         started = time.perf_counter()
-        anchor = self._capture_view_anchor()
-        old_width = self._image_column_width_px
-        rows_before = len(self._row_frames)
+        anchor = self.capture_view_anchor()
+        old_width = self._builder.image_column_width_px
+        rows_before = len(self._rows.row_frames)
 
-        for index in list(self._row_frames):
-            self._destroy_row(index)
-        self._materialized_range = None
-        self._image_column_width_px = width
-        self._row_heights = self._estimate_row_heights()
-        self._position_column_divider()
+        self._rows.destroy_all()
+        self._builder.image_column_width_px = width
+        self._rows.heights = self._builder.estimate_heights()
+        self.position()
 
-        # Rough position from the estimates, so _reconcile builds the right
+        # Rough position from the estimates, so reconcile builds the right
         # rows; then the exact one from the built rows' real geometry.
         self._scroll_to_anchor(anchor)
-        self._reconcile()
-        self._canvas.update_idletasks()
+        self._rows.reconcile()
+        self._rows.canvas.update_idletasks()
         self._scroll_to_anchor(anchor)
-        self._reconcile()
+        self._rows.reconcile()
 
         duration_ms = round((time.perf_counter() - started) * 1000, 1)
-        self._log_event(
+        self._rows.log_event(
             "image_column_relayout", old_width=old_width, new_width=width,
             anchor=[anchor[0], anchor[1], round(anchor[2], 1)], duration_ms=duration_ms,
         )
@@ -261,6 +285,6 @@ class ColumnDividerMixin:
             "image column resized",
             extra=logging_config.extra(
                 old_width=old_width, new_width=width, rows_torn_down=rows_before,
-                rows_built=len(self._row_frames), duration_ms=duration_ms,
+                rows_built=len(self._rows.row_frames), duration_ms=duration_ms,
             ),
         )

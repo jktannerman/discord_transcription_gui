@@ -1,5 +1,5 @@
 """Pure layout math for the review screen's virtualized row window - no Tk
-dependency, so this is testable without a display. See review_view.py's
+dependency, so this is testable without a display. See virtual_rows.py's
 module docstring for why the windowing design (idempotent recomputation
 from scratch, rather than incremental step-forward/step-backward) matters.
 """
@@ -54,7 +54,7 @@ DEFAULT_TEXT_METRICS = TextMetrics(
 # An editable box's height is its paired immutable element's own on-screen
 # height (the label's estimate below, for a "message" box; the image's, for
 # an "ocr" box) plus TEXT_BOX_MARGIN_PX - mirrors
-# review_view.ReviewFrame._fixed_text_box_height's rule exactly, via the
+# RowBuilder.fixed_text_box_height's rule exactly, via the
 # shared layout_constants module (review_view.py can't be imported from here
 # - it's the one that imports this Tk-free module). Getting this estimate
 # close to the real eventual height matters more than usual now that a box's
@@ -62,7 +62,7 @@ DEFAULT_TEXT_METRICS = TextMetrics(
 # dominant term in a row's total height, so a wrong constant here
 # overestimates or underestimates every such row by the same large, constant
 # amount, which is exactly the kind of error that turns into a visible
-# scroll jump once ReviewFrame._remeasure_built_rows corrects it away after
+# scroll jump once VirtualRows._remeasure_built_rows corrects it away after
 # the row is actually built.
 
 
@@ -129,18 +129,18 @@ def estimate_row_height(
     a row is materialized, ReviewFrame replaces this estimate with the
     row's real winfo_height().
 
-    This hand-mirrors row_building.RowBuildingMixin._build_row's per-role
+    This hand-mirrors RowBuilder.fill_row's per-role
     sizing (same gap placement, same "content height + margin, capped at
     max_text_box_height_px" rule) rather than calling into it, since this
     module has to stay Tk-free to be unit-testable - so the two can't share
     code, only the ordering (item.slot_roles). If you change how a role's
     height/gap is computed in one of these, change it in the other too:
     drift between them is exactly what previously surfaced as a scroll-
-    position jump once ReviewFrame._remeasure_built_rows corrected the
+    position jump once VirtualRows._remeasure_built_rows corrected the
     estimate away after the row was actually built (see
     docs/ARCHITECTURE_REVIEW_SCREEN.md).
 
-    Walks item.slot_roles - the same ordering _build_row uses - estimating
+    Walks item.slot_roles - the same ordering RowBuilder.fill_row uses - estimating
     both of the row's columns (the immutable left column: label and/or
     images; the editable right column: one box per slot, content or
     spacer) independently and takes the taller of the two, then adds
@@ -148,7 +148,7 @@ def estimate_row_height(
     2*ROW_PACK_PADY_PX for the vertical pack() gap *outside* the row's own
     Frame (see that constant's docstring - winfo_height() can't see it,
     so it has to be added back by hand here and in
-    ReviewFrame._remeasure_built_rows, or the document-space model this
+    VirtualRows._remeasure_built_rows, or the document-space model this
     feeds drifts away from the real screen position one row at a time).
     Each stacked
     element but the last gets GAP_BETWEEN_STACKED_PX added to whichever
@@ -159,7 +159,7 @@ def estimate_row_height(
     anyway so this stays correct regardless of how those two compare for
     any given item.
 
-    `max_text_box_height_px` mirrors RowBuildingMixin._fixed_text_box_height's
+    `max_text_box_height_px` mirrors RowBuilder.fixed_text_box_height's
     own cap on a content box's right-column height (TEXT_BOX_MAX_HEIGHT_
     FRACTION of the canvas) - omitted (None) means "don't cap," for callers
     that don't have a real viewport height to cap against yet. A long
@@ -219,9 +219,9 @@ def compute_visible_range(
 
     Deliberately pure and independent of what's currently materialized -
     calling this twice with the same arguments always returns the same
-    range. That idempotency is what makes ReviewFrame._reconcile immune to
+    range. That idempotency is what makes VirtualRows.reconcile immune to
     the oscillation bug a previous, stateful step-forward/step-backward
-    design suffered from - see review_view.py's module docstring."""
+    design suffered from - see virtual_rows.py's module docstring."""
     n = len(heights)
     if n == 0:
         return (0, -1)

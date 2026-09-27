@@ -26,7 +26,7 @@ class SlotState:
             isn't reported as an edit.
         text: The box's current text - what it shows, or would show if its
             row were built. Kept in step with the live widget on every
-            change (see ReviewFrame._sync_slot_from_widget).
+            change (see SlotBoxes.sync_from_widget).
         history: Undo/redo history, in memory only.
         cursor: Tk index of the cursor, restored when the box is rebuilt.
             Not saved with the session.

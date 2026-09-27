@@ -1,12 +1,11 @@
-"""ReviewFrame's windowing core (_reconcile/_sync_materialized_rows/
-_remeasure_built_rows/_ensure_materialized) had no automated test coverage
-before this - only the pure math it delegates to (virtualization.py) was
-tested, leaving the actual stateful integration (which rows are real Tk
-widgets at any moment, scroll-position correction, edit preservation
-across paging) resting entirely on the README's manual smoke test. This is
-explicitly the most failure-prone part of the app (see ARCHITECTURE.md's
-account of the oscillation bug its current design replaced), so it's the
-highest-value gap to close.
+"""The review screen (ReviewFrame and the objects it wires together) on a
+real Tk window: the windowing core (VirtualRows - which rows are real
+widgets at any moment, scroll-position correction), edits, undo history and
+focus surviving rows being torn down and rebuilt (SlotBoxes,
+FocusNavigator), and the column divider. The pure math VirtualRows
+delegates to is tested separately, without a display (test_virtualization.py).
+This is the most failure-prone part of the app (see ARCHITECTURE.md), so it
+gets the most coverage.
 """
 import copy
 import random
@@ -20,7 +19,6 @@ from PIL import Image
 
 from discord_transcription.chatlog import MessageEntry
 from discord_transcription.gui.layout_constants import ROW_PACK_PADY_PX
-from discord_transcription.gui.main_window import _match_focus_slot
 from discord_transcription.gui.review_view import ReviewFrame
 from discord_transcription.gui.column_divider import divider_x_for_width
 from discord_transcription.gui.image_loading import fitted_image_size, image_bounding_box
@@ -31,6 +29,7 @@ from discord_transcription.gui.virtualization import (
     image_column_width_for_fraction,
 )
 from discord_transcription.review_item import ReviewItem, build_review_items
+from discord_transcription.session import match_focus_slot
 
 # Unlike the other GUI-backed test files, this one can't withdraw() its
 # root - a withdrawn window never gets real pixel geometry, which these
@@ -102,7 +101,7 @@ def _two_image_items(sample_image):
 
 def _items(sample_image, count=40):
     """A mix of text-only, image-only, and image-with-caption rows, in a
-    fixed repeating pattern - the same three row shapes _build_row has to
+    fixed repeating pattern - the same three row shapes RowBuilder.fill_row has to
     lay out differently from one another. Built via build_review_items
     (not constructed by hand) so every item's spacer slots get properly
     populated defaults, the same way a real run's items would."""
@@ -136,7 +135,7 @@ def _build_frame(root, items, **kwargs):
     # immediate update() calls, hence the small sleep and higher retry cap.
     for _ in range(100):
         root.update()
-        if frame._materialized_range is not None:
+        if frame._rows.materialized_range is not None:
             break
         time.sleep(0.01)
     return frame, finalized
@@ -145,35 +144,35 @@ def _build_frame(root, items, **kwargs):
 def test_initial_build_materializes_a_window_starting_at_top(root, sample_image):
     items = _items(sample_image)
     frame, _ = _build_frame(root, items)
-    assert frame._materialized_range is not None
-    first, last = frame._materialized_range
+    assert frame._rows.materialized_range is not None
+    first, last = frame._rows.materialized_range
     assert first == 0
     assert last < len(items) - 1  # not every row materialized up front
-    assert sorted(frame._row_frames) == list(range(first, last + 1))
+    assert sorted(frame._rows.row_frames) == list(range(first, last + 1))
 
 
 def test_reconcile_is_idempotent_with_no_scroll_movement(root, sample_image):
     items = _items(sample_image)
     frame, _ = _build_frame(root, items)
-    range_before = frame._materialized_range
-    rows_before = dict(frame._row_frames)
+    range_before = frame._rows.materialized_range
+    rows_before = dict(frame._rows.row_frames)
 
-    frame._reconcile()
+    frame._rows.reconcile()
 
-    assert frame._materialized_range == range_before
-    assert frame._row_frames == rows_before
+    assert frame._rows.materialized_range == range_before
+    assert frame._rows.row_frames == rows_before
 
 
 def test_scrolling_to_the_end_materializes_the_last_item(root, sample_image):
     items = _items(sample_image)
     frame, _ = _build_frame(root, items)
 
-    frame._canvas.yview_moveto(1.0)
-    frame._reconcile()
+    frame._rows.canvas.yview_moveto(1.0)
+    frame._rows.reconcile()
 
-    first, last = frame._materialized_range
+    first, last = frame._rows.materialized_range
     assert last == len(items) - 1
-    assert sorted(frame._row_frames) == list(range(first, last + 1))
+    assert sorted(frame._rows.row_frames) == list(range(first, last + 1))
 
 
 def test_ensure_materialized_jumps_to_a_far_away_row_without_crashing(root, sample_image):
@@ -181,9 +180,9 @@ def test_ensure_materialized_jumps_to_a_far_away_row_without_crashing(root, samp
     frame, _ = _build_frame(root, items)
     target = len(items) - 1
 
-    frame._ensure_materialized(target)
+    frame._rows.ensure_materialized(target)
 
-    assert target in frame._row_frames
+    assert target in frame._rows.row_frames
 
 
 def test_misspelled_word_gets_tagged_in_a_content_box(root, sample_image):
@@ -191,14 +190,14 @@ def test_misspelled_word_gets_tagged_in_a_content_box(root, sample_image):
     frame, _ = _build_frame(root, items)
     first_text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (first_text_item, "message")
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
 
     widget.delete("1.0", "end")
     widget.insert("1.0", "this is definitly garbld")
     # Debounced in real use (row_building.SPELLCHECK_DEBOUNCE_MS) - run the
     # pass directly rather than waiting on the timer, same as other tests
     # here call internal methods directly instead of driving real timing.
-    frame._run_spellcheck(key, widget)
+    frame._boxes.run_spellcheck(key, widget)
 
     ranges = widget.tag_ranges("misspelled")
     assert len(ranges) > 0
@@ -213,11 +212,11 @@ def test_correctly_spelled_content_box_gets_no_tag(root, sample_image):
     frame, _ = _build_frame(root, items)
     first_text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (first_text_item, "message")
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
 
     widget.delete("1.0", "end")
     widget.insert("1.0", "this is a perfectly normal sentence")
-    frame._run_spellcheck(key, widget)
+    frame._boxes.run_spellcheck(key, widget)
 
     assert widget.tag_ranges("misspelled") == ()
 
@@ -225,11 +224,11 @@ def test_correctly_spelled_content_box_gets_no_tag(root, sample_image):
 def test_spacer_box_never_gets_the_misspelled_tag_configured(root, sample_image):
     items = _items(sample_image)
     frame, _ = _build_frame(root, items)
-    spacer_key = next(k for k in frame._slot_views if k[1].startswith("spacer"))
-    widget = frame._slot_views[spacer_key].text_widget
+    spacer_key = next(k for k in frame._boxes.views if k[1].startswith("spacer"))
+    widget = frame._boxes.views[spacer_key].text_widget
 
     assert "misspelled" not in widget.tag_names()
-    assert frame._slot_views[spacer_key].spellcheck_after_id is None
+    assert frame._boxes.views[spacer_key].spellcheck_after_id is None
 
 
 def test_spellcheck_tag_is_reapplied_after_a_row_is_paged_out_and_back_in(root, sample_image):
@@ -237,37 +236,37 @@ def test_spellcheck_tag_is_reapplied_after_a_row_is_paged_out_and_back_in(root, 
     frame, _ = _build_frame(root, items)
     first_text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (first_text_item, "message")
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.delete("1.0", "end")
     widget.insert("1.0", "definitly misspelled")
-    frame._run_spellcheck(key, widget)
+    frame._boxes.run_spellcheck(key, widget)
     assert widget.tag_ranges("misspelled") != ()
 
     # Page far away (tears the row down, destroying that Text widget - tags
     # live on the widget instance, not the SlotState, so they don't survive
     # this the way edited text/undo history do) and back to the top.
-    frame._ensure_materialized(len(items) - 1)
-    frame._canvas.yview_moveto(0.0)
-    frame._reconcile()
+    frame._rows.ensure_materialized(len(items) - 1)
+    frame._rows.canvas.yview_moveto(0.0)
+    frame._rows.reconcile()
 
-    rebuilt_widget = frame._slot_views[key].text_widget
+    rebuilt_widget = frame._boxes.views[key].text_widget
     assert rebuilt_widget is not widget
-    # The rebuild schedules its own debounced pass (_build_editable_text_box)
+    # The rebuild schedules its own debounced pass (SlotBoxes.build_content_box)
     # rather than applying immediately - run it directly, as above.
-    frame._run_spellcheck(key, rebuilt_widget)
+    frame._boxes.run_spellcheck(key, rebuilt_widget)
     assert rebuilt_widget.tag_ranges("misspelled") != ()
 
 
 def test_destroying_a_row_cancels_its_pending_spellcheck_timer(root, sample_image):
     items = _items(sample_image)
     frame, _ = _build_frame(root, items)
-    key = next(k for k in frame._slot_views if k[1] == "message")
-    after_id = frame._slot_views[key].spellcheck_after_id
+    key = next(k for k in frame._boxes.views if k[1] == "message")
+    after_id = frame._boxes.views[key].spellcheck_after_id
     assert after_id is not None
 
-    frame._destroy_row(key[0])
+    frame._rows.destroy_row(key[0])
 
-    assert key not in frame._slot_views
+    assert key not in frame._boxes.views
     assert after_id not in root.tk.splitlist(root.tk.call("after", "info"))
 
 
@@ -276,17 +275,17 @@ def test_edited_text_survives_a_row_being_paged_out_and_back_in(root, sample_ima
     frame, _ = _build_frame(root, items)
     first_text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
 
-    widget = frame._slot_views[(first_text_item, "message")].text_widget
+    widget = frame._boxes.views[(first_text_item, "message")].text_widget
     widget.delete("1.0", "end")
     widget.insert("1.0", "an edit the user made")
 
     # Page far away (tears the edited row down) and back to the top again.
-    frame._ensure_materialized(len(items) - 1)
-    frame._canvas.yview_moveto(0.0)
-    frame._reconcile()
+    frame._rows.ensure_materialized(len(items) - 1)
+    frame._rows.canvas.yview_moveto(0.0)
+    frame._rows.reconcile()
 
-    assert (first_text_item, "message") in frame._slot_views
-    restored = frame._slot_views[(first_text_item, "message")].text_widget.get("1.0", "end-1c")
+    assert (first_text_item, "message") in frame._boxes.views
+    restored = frame._boxes.views[(first_text_item, "message")].text_widget.get("1.0", "end-1c")
     assert restored == "an edit the user made"
 
 
@@ -300,26 +299,26 @@ def test_undo_history_survives_a_row_being_paged_out_and_back_in(root, sample_im
     key = (first_text_item, "message")
     original = items[first_text_item].initial_message_text
 
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.insert("end", " edited")
 
     # Page far away (tears the edited row down) and back to the top again.
-    frame._ensure_materialized(len(items) - 1)
-    frame._canvas.yview_moveto(0.0)
-    frame._reconcile()
+    frame._rows.ensure_materialized(len(items) - 1)
+    frame._rows.canvas.yview_moveto(0.0)
+    frame._rows.reconcile()
 
-    rebuilt = frame._slot_views[key].text_widget
+    rebuilt = frame._boxes.views[key].text_widget
     assert rebuilt.get("1.0", "end-1c") == original + " edited"
 
-    frame._undo_text(type("Event", (), {"widget": rebuilt})())
+    frame._boxes.undo_text(type("Event", (), {"widget": rebuilt})())
 
     assert rebuilt.get("1.0", "end-1c") == original
 
 
 def test_undo_after_unchecking_an_ocr_box_restores_the_edit_and_rechecks_it(root, sample_image):
     """Unchecking an OCR box is itself an undoable delete/insert (see
-    RowBuildingMixin._on_ocr_checkbox_toggle) - Ctrl+Z right after must
-    bring the edited text back, and _undo_text's compare-to-default resync
+    SlotBoxes.on_ocr_checkbox_toggle) - Ctrl+Z right after must
+    bring the edited text back, and undo_text's compare-to-default resync
     must re-check the checkbox to match, rather than leaving it unchecked
     while the edited text is back on screen (per the project owner's
     decision: undo/redo always re-derives checked state, never the
@@ -329,24 +328,24 @@ def test_undo_after_unchecking_an_ocr_box_restores_the_edit_and_rechecks_it(root
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
     default_text = items[image_item].initial_ocr_texts[0]
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
     widget.insert("end", " typed")
     root.update()
     edited_text = widget.get("1.0", "end-1c")
 
-    var = frame._slot_views[key].checkbox_var
+    var = frame._boxes.views[key].checkbox_var
     var.set(False)
-    frame._on_ocr_checkbox_toggle(key)
+    frame._boxes.on_ocr_checkbox_toggle(key)
     assert widget.get("1.0", "end-1c") == default_text
-    assert frame._slot_states[key].checked is False
+    assert frame._boxes.states[key].checked is False
 
-    frame._undo_text(type("Event", (), {"widget": widget})())
+    frame._boxes.undo_text(type("Event", (), {"widget": widget})())
 
     assert widget.get("1.0", "end-1c") == edited_text
-    assert frame._slot_states[key].checked is True
-    assert frame._slot_views[key].checkbox_var.get() is True
+    assert frame._boxes.states[key].checked is True
+    assert frame._boxes.views[key].checkbox_var.get() is True
 
 
 def test_focusing_a_box_scrolls_the_whole_box_fully_into_view_not_just_its_row(root, sample_image):
@@ -356,7 +355,7 @@ def test_focusing_a_box_scrolls_the_whole_box_fully_into_view_not_just_its_row(r
     end up only slightly overlapping the viewport edge - or almost entirely
     covered - without triggering a scroll, since the row-level bounds
     (spanning every box in it) could already satisfy that check.
-    _scroll_box_into_view checks the focused box's own bounds instead, so
+    scroll_box_into_view checks the focused box's own bounds instead, so
     it always ends up fully onscreen after a Tab/focus."""
     items = _items(sample_image, count=6)
     frame, _ = _build_frame(root, items)
@@ -369,65 +368,65 @@ def test_focusing_a_box_scrolls_the_whole_box_fully_into_view_not_just_its_row(r
     # edge - pokes into view at the bottom of the viewport; the rest of the
     # box sits below it, offscreen.
     container_top, container_bottom = _container_bounds(frame, *key)
-    total_height = sum(frame._row_heights)
-    viewport_height = frame._canvas.winfo_height()
+    total_height = sum(frame._rows.heights)
+    viewport_height = frame._rows.canvas.winfo_height()
     target_view_bottom = container_top + 5
-    frame._canvas.yview_moveto(max(target_view_bottom - viewport_height, 0) / total_height)
-    frame._reconcile()
+    frame._rows.canvas.yview_moveto(max(target_view_bottom - viewport_height, 0) / total_height)
+    frame._rows.reconcile()
     root.update_idletasks()
 
-    view_bottom_before = frame._canvas.canvasy(frame._canvas.winfo_height())
+    view_bottom_before = frame._rows.canvas.canvasy(frame._rows.canvas.winfo_height())
     assert container_top < view_bottom_before < container_bottom  # only a sliver overlaps
 
-    frame._focus_text_box(*key)
+    frame._nav.focus_text_box(*key)
     root.update_idletasks()
 
     container_top, container_bottom = _container_bounds(frame, *key)
-    view_top = frame._canvas.canvasy(0)
-    view_bottom = frame._canvas.canvasy(frame._canvas.winfo_height())
+    view_top = frame._rows.canvas.canvasy(0)
+    view_bottom = frame._rows.canvas.canvasy(frame._rows.canvas.winfo_height())
     assert container_top >= view_top - 1
     assert container_bottom <= view_bottom + 1
 
 
 
 def test_tab_navigation_aligns_the_target_box_top_with_the_viewport_top(root, sample_image):
-    """Tab/Shift-Tab (_goto_slot) scroll the newly focused box's top edge to
+    """Tab/Shift-Tab (goto_slot) scroll the newly focused box's top edge to
     the top of the review window, even when the box was already fully
-    visible - not just the minimal scroll _focus_text_box does otherwise."""
+    visible - not just the minimal scroll focus_text_box does otherwise."""
     items = _items(sample_image, count=12)
     frame, _ = _build_frame(root, items)
     # A box a little way down the first screen: already fully visible, so
     # the minimal scroll would leave the view where it is.
     key = (1, "ocr0")
     container_top, container_bottom = _container_bounds(frame, *key)
-    assert frame._canvas.canvasy(0) < container_top
-    assert container_bottom <= frame._canvas.canvasy(frame._canvas.winfo_height())
+    assert frame._rows.canvas.canvasy(0) < container_top
+    assert container_bottom <= frame._rows.canvas.canvasy(frame._rows.canvas.winfo_height())
 
-    frame._goto_slot(key)
+    frame._nav.goto_slot(key)
     root.update()
 
     container_top, _ = _container_bounds(frame, *key)
-    assert abs(container_top - frame._canvas.canvasy(0)) <= 1
+    assert abs(container_top - frame._rows.canvas.canvasy(0)) <= 1
     # Real screen pixels agree with the document-space model.
-    real_offset = frame._slot_views[key].container.winfo_rooty() - frame._canvas.winfo_rooty()
+    real_offset = frame._boxes.views[key].container.winfo_rooty() - frame._rows.canvas.winfo_rooty()
     assert abs(real_offset) <= 1
 
 
 def test_tab_navigation_near_the_end_scrolls_only_as_far_as_the_document_allows(root, sample_image):
     items = _items(sample_image, count=12)
     frame, _ = _build_frame(root, items)
-    last_key = frame._slots[-1]
+    last_key = frame._nav.slots[-1]
 
-    frame._goto_slot(last_key)
+    frame._nav.goto_slot(last_key)
     root.update()
 
     # The last box can't reach the top of the window - the view is simply
     # scrolled to the very bottom, with the box fully visible.
-    _, bottom_fraction = frame._canvas.yview()
+    _, bottom_fraction = frame._rows.canvas.yview()
     assert bottom_fraction >= 0.999
     container_top, container_bottom = _container_bounds(frame, *last_key)
-    assert container_top >= frame._canvas.canvasy(0) - 1
-    assert container_bottom <= frame._canvas.canvasy(frame._canvas.winfo_height()) + 1
+    assert container_top >= frame._rows.canvas.canvasy(0) - 1
+    assert container_bottom <= frame._rows.canvas.canvasy(frame._rows.canvas.winfo_height()) + 1
 
 def test_collect_edited_texts_reports_none_for_untouched_items(root, sample_image):
     items = _items(sample_image, count=5)
@@ -441,7 +440,7 @@ def test_collect_edited_texts_reports_none_for_untouched_items(root, sample_imag
             # A box still at its default isn't an edit - even though every
             # row here has been built (so has live widgets) - and an
             # untouched OCR box's checkbox starts unchecked anyway. None
-            # means "use the default" (see ReviewFrame._get_box_text).
+            # means "use the default" (see SlotBoxes.reported_text).
             assert edited[role] is None
     assert frame.get_touched_slots() == set()
 
@@ -452,9 +451,9 @@ def test_ocr_checkbox_starts_unchecked_for_an_untouched_box(root, sample_image):
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
 
-    assert frame._slot_states[key].checked is False
-    assert frame._slot_views[key].checkbox_var.get() is False
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == items[image_item].initial_ocr_texts[0]
+    assert frame._boxes.states[key].checked is False
+    assert frame._boxes.views[key].checkbox_var.get() is False
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == items[image_item].initial_ocr_texts[0]
 
 
 def test_ocr_checkbox_starts_checked_for_a_resumed_edit_differing_from_default(root, sample_image):
@@ -466,9 +465,9 @@ def test_ocr_checkbox_starts_checked_for_a_resumed_edit_differing_from_default(r
     frame, _ = _build_frame(root, items, initial_saved_texts=saved_texts)
     key = (image_item, "ocr0")
 
-    assert frame._slot_states[key].checked is True
-    assert frame._slot_views[key].checkbox_var.get() is True
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "a resumed ocr edit"
+    assert frame._boxes.states[key].checked is True
+    assert frame._boxes.views[key].checkbox_var.get() is True
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == "a resumed ocr edit"
 
 
 def test_typing_into_an_ocr_box_checks_its_checkbox(root, sample_image):
@@ -476,15 +475,15 @@ def test_typing_into_an_ocr_box_checks_its_checkbox(root, sample_image):
     frame, _ = _build_frame(root, items)
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_force()  # focus_set() alone doesn't reliably win real OS focus in a test run
     root.update_idletasks()
 
     widget.insert("end", " typed")
     root.update()  # let the queued <<Modified>> event fire
 
-    assert frame._slot_states[key].checked is True
-    assert frame._slot_views[key].checkbox_var.get() is True
+    assert frame._boxes.states[key].checked is True
+    assert frame._boxes.views[key].checkbox_var.get() is True
 
 
 def test_unchecking_then_rechecking_an_ocr_box_round_trips_both_versions(root, sample_image):
@@ -497,49 +496,49 @@ def test_unchecking_then_rechecking_an_ocr_box_round_trips_both_versions(root, s
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
     default_text = items[image_item].initial_ocr_texts[0]
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
     widget.insert("end", " typed")
     root.update()
     edited_text = widget.get("1.0", "end-1c")
     assert edited_text != default_text
-    assert frame._slot_views[key].checkbox_var.get() is True
+    assert frame._boxes.views[key].checkbox_var.get() is True
 
-    var = frame._slot_views[key].checkbox_var
+    var = frame._boxes.views[key].checkbox_var
     var.set(False)
-    frame._on_ocr_checkbox_toggle(key)
+    frame._boxes.on_ocr_checkbox_toggle(key)
 
     assert widget.get("1.0", "end-1c") == default_text
-    assert frame._slot_states[key].checked is False
-    assert frame._slot_states[key].user_edit == edited_text  # not discarded
+    assert frame._boxes.states[key].checked is False
+    assert frame._boxes.states[key].user_edit == edited_text  # not discarded
 
     var.set(True)
-    frame._on_ocr_checkbox_toggle(key)
+    frame._boxes.on_ocr_checkbox_toggle(key)
 
     assert widget.get("1.0", "end-1c") == edited_text
-    assert frame._slot_states[key].checked is True
+    assert frame._boxes.states[key].checked is True
 
 
 def test_collect_edited_texts_reports_none_for_an_unchecked_ocr_box(root, sample_image):
     """Even though the box still has live, different-from-default text
-    cached for restoration (self._user_edited_texts), collect_edited_texts
+    cached for restoration (SlotState.user_edit), collect_edited_texts
     - what autosave/the session file persist - must report None while
     unchecked, since unchecked means "use the default" (see
-    ReviewFrame._get_box_text). The actual Finalize output is unaffected
+    SlotBoxes.reported_text). The actual Finalize output is unaffected
     either way, since None already falls back to the same default text."""
     items = _items(sample_image, count=5)
     frame, _ = _build_frame(root, items)
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
     widget.insert("end", " typed")
     root.update()
-    var = frame._slot_views[key].checkbox_var
+    var = frame._boxes.views[key].checkbox_var
     var.set(False)
-    frame._on_ocr_checkbox_toggle(key)
+    frame._boxes.on_ocr_checkbox_toggle(key)
 
     collected = frame.collect_edited_texts()
 
@@ -551,12 +550,12 @@ def test_rows_paged_out_and_back_in_still_report_no_edits(root, sample_image):
     counted as an edit - and was stored as a finalized edit at Finalize."""
     items = _items(sample_image, count=40)
     frame, _ = _build_frame(root, items)
-    first_row = frame._row_frames[0]
-    frame._canvas.yview_moveto(1.0)
-    frame._reconcile()
-    frame._canvas.yview_moveto(0.0)
-    frame._reconcile()
-    assert frame._row_frames[0] is not first_row  # rows really were torn down and rebuilt
+    first_row = frame._rows.row_frames[0]
+    frame._rows.canvas.yview_moveto(1.0)
+    frame._rows.reconcile()
+    frame._rows.canvas.yview_moveto(0.0)
+    frame._rows.reconcile()
+    assert frame._rows.row_frames[0] is not first_row  # rows really were torn down and rebuilt
 
     collected = frame.collect_edited_texts()
 
@@ -568,7 +567,7 @@ def test_typing_marks_a_box_touched_and_reverting_by_hand_reports_none(root, sam
     frame, _ = _build_frame(root, items)
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (text_item, "message")
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
     widget.insert("end", "!")
@@ -589,10 +588,10 @@ def test_unticking_an_ocr_box_marks_it_touched(root, sample_image):
     frame, _ = _build_frame(root, items)
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
-    frame._slot_views[key].checkbox_var.set(True)
-    frame._on_ocr_checkbox_toggle(key)
-    frame._slot_views[key].checkbox_var.set(False)
-    frame._on_ocr_checkbox_toggle(key)
+    frame._boxes.views[key].checkbox_var.set(True)
+    frame._boxes.on_ocr_checkbox_toggle(key)
+    frame._boxes.views[key].checkbox_var.set(False)
+    frame._boxes.on_ocr_checkbox_toggle(key)
 
     assert key in frame.get_touched_slots()
 
@@ -602,8 +601,8 @@ def test_building_rows_alone_touches_nothing(root, sample_image):
     that to never remove a stored edit the user didn't act on."""
     items = _items(sample_image, count=40)
     frame, _ = _build_frame(root, items)
-    frame._canvas.yview_moveto(1.0)
-    frame._reconcile()
+    frame._rows.canvas.yview_moveto(1.0)
+    frame._rows.reconcile()
     root.update()
 
     assert frame.get_touched_slots() == set()
@@ -622,27 +621,27 @@ def test_ocr_checkbox_state_and_both_versions_survive_paging_out_and_back_in(roo
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
     default_text = items[image_item].initial_ocr_texts[0]
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
     widget.insert("end", " typed")
     root.update()
     edited_text = widget.get("1.0", "end-1c")
 
-    var = frame._slot_views[key].checkbox_var
+    var = frame._boxes.views[key].checkbox_var
     var.set(False)
-    frame._on_ocr_checkbox_toggle(key)
+    frame._boxes.on_ocr_checkbox_toggle(key)
 
     # Page far away (tears the row down) and back to the top again.
-    frame._ensure_materialized(len(items) - 1)
-    frame._canvas.yview_moveto(0.0)
-    frame._reconcile()
+    frame._rows.ensure_materialized(len(items) - 1)
+    frame._rows.canvas.yview_moveto(0.0)
+    frame._rows.reconcile()
 
-    assert key in frame._slot_views
-    assert frame._slot_states[key].checked is False
-    assert frame._slot_views[key].checkbox_var.get() is False
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == default_text
-    assert frame._slot_states[key].user_edit == edited_text
+    assert key in frame._boxes.views
+    assert frame._boxes.states[key].checked is False
+    assert frame._boxes.views[key].checkbox_var.get() is False
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == default_text
+    assert frame._boxes.states[key].user_edit == edited_text
 
 
 def test_finalize_button_visible_for_a_transcript_that_fits_on_screen(root, sample_image):
@@ -656,8 +655,8 @@ def test_finalize_button_hidden_until_scrolled_to_the_end_of_a_long_transcript(r
     frame, _ = _build_frame(root, items)
     assert frame._finalize_button_visible is False
 
-    frame._canvas.yview_moveto(1.0)
-    frame._reconcile()
+    frame._rows.canvas.yview_moveto(1.0)
+    frame._rows.reconcile()
     assert frame._finalize_button_visible is True
 
 
@@ -681,11 +680,11 @@ def test_spacer_slot_boxes_are_one_line_tall_and_hold_their_own_text(root, sampl
     ]
     frame, _ = _build_frame(root, items)
 
-    spacer_widget = frame._slot_views[(0, "spacer_msg_img")].text_widget
+    spacer_widget = frame._boxes.views[(0, "spacer_msg_img")].text_widget
     assert int(spacer_widget.cget("height")) == 1
     assert spacer_widget.get("1.0", "end-1c") == "\\n\\n"
 
-    end_widget = frame._slot_views[(0, "spacer_end")].text_widget
+    end_widget = frame._boxes.views[(0, "spacer_end")].text_widget
     assert int(end_widget.cget("height")) == 1
     assert end_widget.get("1.0", "end-1c") == "\\n\\n\\n\\n"
 
@@ -698,7 +697,7 @@ def test_spacer_box_is_tall_enough_for_its_text_line(root, sample_image):
     items = _items(sample_image, count=3)
     frame, _ = _build_frame(root, items)
 
-    view = frame._slot_views[(0, "spacer_end")]
+    view = frame._boxes.views[(0, "spacer_end")]
     assert view.container.winfo_height() >= view.text_widget.winfo_reqheight()
 
 
@@ -712,10 +711,10 @@ def test_text_only_row_estimate_matches_its_built_height(root, sample_image):
 
     estimate = estimate_row_height(
         items[0],
-        max_text_box_height_px=frame._max_text_box_height_px(),
-        metrics=frame._text_metrics,
+        max_text_box_height_px=frame._builder.max_text_box_height_px(),
+        metrics=frame._builder.text_metrics,
     )
-    real = frame._row_frames[0].winfo_height() + 2 * ROW_PACK_PADY_PX
+    real = frame._rows.row_frames[0].winfo_height() + 2 * ROW_PACK_PADY_PX
     assert abs(estimate - real) <= 2
 
 
@@ -723,7 +722,7 @@ def test_resuming_session_restores_saved_edit_and_focus(root, sample_image):
     """Real OS/window-manager focus delivery is too flaky to assert on
     directly in an automated run (several Tk windows get created/destroyed
     across this test session) - so this checks the deterministic part
-    instead: _apply_initial_position actually calls _focus_text_box with
+    instead: _apply_initial_position actually calls focus_text_box with
     the resumed (index, role) slot, which is what would put real focus
     there in a live app."""
     items = _items(sample_image, count=5)
@@ -741,21 +740,21 @@ def test_resuming_session_restores_saved_edit_and_focus(root, sample_image):
     frame.pack(fill="both", expand=True)
 
     focus_calls = []
-    original_focus_text_box = frame._focus_text_box
+    original_focus_text_box = frame._nav.focus_text_box
     def _spy_focus_text_box(index, role):
         focus_calls.append((index, role))
         return original_focus_text_box(index, role)
-    frame._focus_text_box = _spy_focus_text_box
+    frame._nav.focus_text_box = _spy_focus_text_box
 
     # See _build_frame's matching loop for why this needs more than a
     # handful of tight-loop update() calls once root is shared across tests.
     for _ in range(100):
         root.update()
-        if frame._materialized_range is not None:
+        if frame._rows.materialized_range is not None:
             break
         time.sleep(0.01)
 
-    widget = frame._slot_views[(text_item, "message")].text_widget
+    widget = frame._boxes.views[(text_item, "message")].text_widget
     assert widget.get("1.0", "end-1c") == "a resumed edit"
     assert focus_calls == [(text_item, "message")]
 
@@ -782,34 +781,34 @@ def test_resumed_edit_survives_being_paged_out_and_back_in_with_no_further_edits
 
     frame, _ = _build_frame(root, items, initial_saved_texts=saved_texts)
     key = (text_item, "message")
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "a resumed edit"
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == "a resumed edit"
 
     # Page far away (tears the row down with no edits made this build) and
     # back to the top again - no typing in between, matching the real
     # repro (edit made in an earlier session, just scrolled past in this
     # one).
-    frame._ensure_materialized(len(items) - 1)
-    frame._canvas.yview_moveto(0.0)
-    frame._reconcile()
+    frame._rows.ensure_materialized(len(items) - 1)
+    frame._rows.canvas.yview_moveto(0.0)
+    frame._rows.reconcile()
 
-    assert key in frame._slot_views
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "a resumed edit"
+    assert key in frame._boxes.views
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == "a resumed edit"
 
 
 def _container_bounds(frame, index, role):
     """The (top, bottom) of a box's container in the same document-space
-    coordinates _keep_cursor_in_viewport computes them in - see that
+    coordinates keep_cursor_in_viewport computes them in - see that
     method's docstring for why a winfo_rooty() delta against the row (not
     winfo_y(), and not the container's own position relative to the
     repositioned _scroll_frame) is what's reliable here, and ARCHITECTURE.md's
     "Row geometry" section for why ROW_PACK_PADY_PX has to be added on top
-    of frame._offset_of(index): that offset is where row `index`'s full
+    of frame._rows.offset_of(index): that offset is where row `index`'s full
     pack-allocated slot starts, not where its Frame's own visible top edge
     (what the winfo_rooty() delta below is anchored to) actually sits."""
-    container = frame._slot_views[(index, role)].container
-    row = frame._row_frames[index]
+    container = frame._boxes.views[(index, role)].container
+    row = frame._rows.row_frames[index]
     top = (
-        frame._offset_of(index) + ROW_PACK_PADY_PX
+        frame._rows.offset_of(index) + ROW_PACK_PADY_PX
         + (container.winfo_rooty() - row.winfo_rooty())
     )
     return top, top + container.winfo_height()
@@ -836,57 +835,57 @@ def _long_text_items(sample_image, tall_index=5, count=10):
 def test_keep_cursor_in_viewport_scrolls_down_to_align_box_bottom_with_view_bottom(root, sample_image):
     items = _long_text_items(sample_image)
     frame, _ = _build_frame(root, items)
-    frame._canvas.yview_moveto(0.0)
-    frame._reconcile()
+    frame._rows.canvas.yview_moveto(0.0)
+    frame._rows.reconcile()
     root.update_idletasks()
 
     key = (5, "message")
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_set()
     widget.mark_set("insert", "end-1c")
     widget.see("insert")
     root.update_idletasks()
 
     container_top, container_bottom = _container_bounds(frame, 5, "message")
-    view_bottom_before = frame._canvas.canvasy(frame._canvas.winfo_height())
+    view_bottom_before = frame._rows.canvas.canvasy(frame._rows.canvas.winfo_height())
     assert container_bottom > view_bottom_before  # cursor (near box's end) starts offscreen below
 
-    frame._keep_cursor_in_viewport(key, widget)
+    frame._nav.keep_cursor_in_viewport(key, widget)
     root.update_idletasks()
 
-    new_view_bottom = frame._canvas.canvasy(frame._canvas.winfo_height())
+    new_view_bottom = frame._rows.canvas.canvasy(frame._rows.canvas.winfo_height())
     assert abs(new_view_bottom - container_bottom) < 2
 
 
 def test_keep_cursor_in_viewport_scrolls_up_to_align_box_top_with_view_top(root, sample_image):
     items = _long_text_items(sample_image)
     frame, _ = _build_frame(root, items)
-    frame._canvas.yview_moveto(1.0)
-    frame._reconcile()
+    frame._rows.canvas.yview_moveto(1.0)
+    frame._rows.reconcile()
     root.update_idletasks()
 
     key = (5, "message")
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_set()
     widget.mark_set("insert", "1.0")
     widget.see("insert")
     root.update_idletasks()
 
     container_top, _ = _container_bounds(frame, 5, "message")
-    view_top_before = frame._canvas.canvasy(0)
+    view_top_before = frame._rows.canvas.canvasy(0)
     assert container_top < view_top_before  # cursor (at box's start) starts offscreen above
 
-    frame._keep_cursor_in_viewport(key, widget)
+    frame._nav.keep_cursor_in_viewport(key, widget)
     root.update_idletasks()
 
-    new_view_top = frame._canvas.canvasy(0)
+    new_view_top = frame._rows.canvas.canvasy(0)
     assert abs(new_view_top - container_top) < 2
 
 
 def test_jumping_focus_to_a_far_row_lands_it_fully_within_the_real_canvas_viewport(root, sample_image):
     """Regression test for the bug where Tab/Shift-Tab's scroll-into-view
     silently stopped working partway through a long transcript: the
-    document-space model (self._row_heights, self._offset_of) drifted away
+    document-space model (VirtualRows.heights, offset_of) drifted away
     from each row's *real* on-screen position because the vertical gap
     pack() leaves outside a row's own Frame (ROW_PACK_PADY_PX, see
     ARCHITECTURE.md's "Row geometry" section) wasn't counted in either the
@@ -894,7 +893,7 @@ def test_jumping_focus_to_a_far_row_lands_it_fully_within_the_real_canvas_viewpo
     keyboard_nav.py converted a document-space offset into a real screen
     comparison. The drift compounded by row, so it only became visible far
     enough into a transcript - this jumps straight to a distant row (the
-    same far-away-Tab-target path _ensure_materialized exists for) and
+    same far-away-Tab-target path ensure_materialized exists for) and
     checks the box's *real* winfo_rooty()/winfo_height() against the
     canvas's, rather than re-deriving the same (potentially still-buggy)
     document-space formula the production code uses, which an earlier
@@ -906,12 +905,12 @@ def test_jumping_focus_to_a_far_row_lands_it_fully_within_the_real_canvas_viewpo
     )
     target_role = next(role for role in items[target_index].slot_roles if role.startswith("ocr"))
 
-    frame._ensure_materialized(target_index)
-    frame._focus_text_box(target_index, target_role)
+    frame._rows.ensure_materialized(target_index)
+    frame._nav.focus_text_box(target_index, target_role)
     root.update()
 
-    canvas = frame._canvas
-    container = frame._slot_views[(target_index, target_role)].container
+    canvas = frame._rows.canvas
+    container = frame._boxes.views[(target_index, target_role)].container
     canvas_top = canvas.winfo_rooty()
     canvas_bottom = canvas_top + canvas.winfo_height()
     box_top = container.winfo_rooty()
@@ -931,13 +930,13 @@ def test_resuming_deep_in_a_long_transcript_remeasures_rows_correctly_on_first_b
     enough to let Tk finish laying that tree out: winfo_height() still
     read back 1 (Tk's "no real geometry yet" default) for every row in
     that window, which _remeasure_built_rows took as ground truth and
-    wrote into self._row_heights as 2*ROW_PACK_PADY_PX (9px) - permanently,
+    wrote into VirtualRows.heights as 2*ROW_PACK_PADY_PX (9px) - permanently,
     since none of those rows get torn down and rebuilt again just because a
-    later reconcile runs. That corrupted self._offset_of for every row
+    later reconcile runs. That corrupted offset_of for every row
     after the resumed one for the rest of the session, by hundreds of px
     per corrupted row - the user-visible symptom was Tab/Shift-Tab's
     scroll-into-view looking broken from the moment a resumed session
-    opened. _reconcile now retries update_idletasks() (_settle_pending_
+    opened. reconcile now retries update_idletasks() (_settle_pending_
     geometry) until every newly-built row reports real geometry before
     trusting any of their heights."""
     items = _long_text_items(sample_image, tall_index=30, count=80)
@@ -950,12 +949,12 @@ def test_resuming_deep_in_a_long_transcript_remeasures_rows_correctly_on_first_b
         root, items, initial_saved_texts=saved_texts, initial_focus_slot=(deep_index, "message"),
     )
 
-    first, last = frame._materialized_range
+    first, last = frame._rows.materialized_range
     assert deep_index in range(first, last + 1)
     for idx in range(first, last + 1):
-        real_height = frame._row_frames[idx].winfo_height() + 2 * ROW_PACK_PADY_PX
-        assert frame._row_heights[idx] == real_height, (
-            f"row {idx}: recorded height {frame._row_heights[idx]} doesn't match "
+        real_height = frame._rows.row_frames[idx].winfo_height() + 2 * ROW_PACK_PADY_PX
+        assert frame._rows.heights[idx] == real_height, (
+            f"row {idx}: recorded height {frame._rows.heights[idx]} doesn't match "
             f"its real on-screen height {real_height} - first-build geometry wasn't "
             "settled before being trusted"
         )
@@ -972,7 +971,7 @@ def test_jumping_focus_past_a_capped_long_message_row_lands_target_fully_in_view
     every later row's document-space offset - this puts one such long
     message well outside the window built at startup, then jumps straight
     past it to a target several rows further down (without ever walking
-    through the long row first, the same far jump _ensure_materialized
+    through the long row first, the same far jump ensure_materialized
     exists for) and checks the target box's real screen position against
     the canvas's."""
     tall_index = 20
@@ -981,15 +980,15 @@ def test_jumping_focus_past_a_capped_long_message_row_lands_target_fully_in_view
     # The long row must not have been part of the window built at startup -
     # otherwise it would already have been remeasured, which isn't the
     # scenario this test is about.
-    assert tall_index not in frame._row_frames
+    assert tall_index not in frame._rows.row_frames
     target_index = 35
 
-    frame._ensure_materialized(target_index)
-    frame._focus_text_box(target_index, "message")
+    frame._rows.ensure_materialized(target_index)
+    frame._nav.focus_text_box(target_index, "message")
     root.update()
 
-    canvas = frame._canvas
-    container = frame._slot_views[(target_index, "message")].container
+    canvas = frame._rows.canvas
+    container = frame._boxes.views[(target_index, "message")].container
     canvas_top = canvas.winfo_rooty()
     canvas_bottom = canvas_top + canvas.winfo_height()
     box_top = container.winfo_rooty()
@@ -1004,22 +1003,22 @@ def test_keep_cursor_in_viewport_does_nothing_when_cursor_already_visible(root, 
     frame, _ = _build_frame(root, items)
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (text_item, "message")
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_set()
     widget.mark_set("insert", "1.0")
     root.update_idletasks()
-    view_before = frame._canvas.yview()
+    view_before = frame._rows.canvas.yview()
 
-    frame._keep_cursor_in_viewport(key, widget)
+    frame._nav.keep_cursor_in_viewport(key, widget)
 
-    assert frame._canvas.yview() == view_before
+    assert frame._rows.canvas.yview() == view_before
 
 
 def test_destroying_a_focused_rows_box_then_rebuilding_restores_focus_and_cursor(root, sample_image):
     """Simulates the part of a fast Page Up/Down burst that previously just
-    dropped focus: _destroy_row tearing down a row whose box currently has
-    focus, followed (once scrolling settles) by _build_row materializing
-    that same row again. _build_row should notice (via self._refocus_slot)
+    dropped focus: destroy_row tearing down a row whose box currently has
+    focus, followed (once scrolling settles) by build_row materializing
+    that same row again. The rebuild should notice (via FocusNavigator.refocus_slot)
     that this row's box was the one that lost focus, and restore both focus
     and the exact cursor position - not just re-show the row with the
     cursor reset to its start."""
@@ -1028,27 +1027,27 @@ def test_destroying_a_focused_rows_box_then_rebuilding_restores_focus_and_cursor
     frame, _ = _build_frame(root, items)
 
     key = (text_item, "message")
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_force()  # focus_set() alone doesn't reliably win real OS focus in a test run
     widget.mark_set("insert", "1.3")
     root.update_idletasks()
 
     focus_calls = []
-    original_focus_text_box = frame._focus_text_box
+    original_focus_text_box = frame._nav.focus_text_box
     def _spy_focus_text_box(index, role):
         focus_calls.append((index, role))
         return original_focus_text_box(index, role)
-    frame._focus_text_box = _spy_focus_text_box
+    frame._nav.focus_text_box = _spy_focus_text_box
 
-    frame._destroy_row(text_item)
-    assert frame._refocus_slot == key
-    assert frame._slot_states[key].cursor == "1.3"
+    frame._rows.destroy_row(text_item)
+    assert frame._nav.refocus_slot == key
+    assert frame._boxes.states[key].cursor == "1.3"
 
-    frame._build_row(text_item)
+    frame._rows.build_row(text_item)
     root.update()  # let the after_idle-scheduled refocus run
 
     assert focus_calls == [key]
-    assert frame._slot_views[key].text_widget.index("insert") == "1.3"
+    assert frame._boxes.views[key].text_widget.index("insert") == "1.3"
 
 
 def test_destroying_an_unfocused_rows_box_then_rebuilding_does_not_steal_focus(root, sample_image):
@@ -1056,7 +1055,7 @@ def test_destroying_an_unfocused_rows_box_then_rebuilding_does_not_steal_focus(r
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     frame, _ = _build_frame(root, items)
     key = (text_item, "message")
-    # Deliberately not focused - _destroy_row should leave self._refocus_slot
+    # Deliberately not focused - destroy_row should leave FocusNavigator.refocus_slot
     # untouched (None) for a row whose box never had focus.
 
     # Baseline instead of asserting focus_get() is None outright: on the
@@ -1068,10 +1067,10 @@ def test_destroying_an_unfocused_rows_box_then_rebuilding_does_not_steal_focus(r
     # doesn't *change* who has focus, whatever it started as.
     baseline_focus = frame.focus_get()
 
-    frame._destroy_row(text_item)
-    assert frame._refocus_slot is None
+    frame._rows.destroy_row(text_item)
+    assert frame._nav.refocus_slot is None
 
-    frame._build_row(text_item)
+    frame._rows.build_row(text_item)
     root.update()
 
     assert frame.focus_get() == baseline_focus
@@ -1085,7 +1084,7 @@ def test_typing_in_a_focused_box_scrolled_offscreen_scrolls_its_row_back_into_vi
     items = _items(sample_image, count=20)
     frame, _ = _build_frame(root, items)
     key = (0, "message")  # i % 3 == 0 -> text-only, per _items
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_force()  # focus_set() alone doesn't reliably win real OS focus in a test run
     root.update_idletasks()
 
@@ -1093,18 +1092,18 @@ def test_typing_in_a_focused_box_scrolled_offscreen_scrolls_its_row_back_into_vi
     # *visible* viewport (so there's something to scroll back into view),
     # but well within the buffered range _reconcile keeps materialized
     # (SCROLL_BUFFER_VIEWPORTS=1 full viewport), so it survives the scroll.
-    total_height = sum(frame._row_heights)
-    frame._canvas.yview_moveto((frame._row_heights[0] + 10) / total_height)
-    frame._reconcile()
+    total_height = sum(frame._rows.heights)
+    frame._rows.canvas.yview_moveto((frame._rows.heights[0] + 10) / total_height)
+    frame._rows.reconcile()
     root.update_idletasks()
-    assert key in frame._slot_views  # row 0 stays materialized (buffer covers it)
+    assert key in frame._boxes.views  # row 0 stays materialized (buffer covers it)
 
     scroll_calls = []
-    original_scroll_box_into_view = frame._scroll_box_into_view
+    original_scroll_box_into_view = frame._nav.scroll_box_into_view
     def _spy_scroll_box_into_view(box_key):
         scroll_calls.append(box_key)
         return original_scroll_box_into_view(box_key)
-    frame._scroll_box_into_view = _spy_scroll_box_into_view
+    frame._nav.scroll_box_into_view = _spy_scroll_box_into_view
 
     widget.insert("insert", "x")
     root.update()  # let the queued <<Modified>> event fire
@@ -1126,7 +1125,7 @@ def test_fresh_run_uses_finalized_text_when_no_session(root, sample_image):
 
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
 
-    assert frame._slot_views[(text_item, "message")].text_widget.get("1.0", "end-1c") == "finalized message text"
+    assert frame._boxes.views[(text_item, "message")].text_widget.get("1.0", "end-1c") == "finalized message text"
 
 
 def test_session_takes_priority_over_finalized_text(root, sample_image):
@@ -1141,7 +1140,7 @@ def test_session_takes_priority_over_finalized_text(root, sample_image):
 
     frame, _ = _build_frame(root, items, initial_saved_texts=saved_texts, initial_finalized_texts=finalized)
 
-    assert frame._slot_views[(text_item, "message")].text_widget.get("1.0", "end-1c") == "session edit"
+    assert frame._boxes.views[(text_item, "message")].text_widget.get("1.0", "end-1c") == "session edit"
 
 
 def test_finalized_used_for_slot_not_covered_by_session(root, sample_image):
@@ -1157,8 +1156,8 @@ def test_finalized_used_for_slot_not_covered_by_session(root, sample_image):
 
     frame, _ = _build_frame(root, items, initial_saved_texts=saved_texts, initial_finalized_texts=finalized)
 
-    assert frame._slot_views[(text_item, "message")].text_widget.get("1.0", "end-1c") == "session message"
-    assert frame._slot_views[(image_item, "ocr0")].text_widget.get("1.0", "end-1c") == "finalized ocr"
+    assert frame._boxes.views[(text_item, "message")].text_widget.get("1.0", "end-1c") == "session message"
+    assert frame._boxes.views[(image_item, "ocr0")].text_widget.get("1.0", "end-1c") == "finalized ocr"
 
 
 def test_ocr_checkbox_starts_checked_when_finalized_differs_from_ocr(root, sample_image):
@@ -1175,10 +1174,10 @@ def test_ocr_checkbox_starts_checked_when_finalized_differs_from_ocr(root, sampl
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
     key = (image_item, "ocr0")
 
-    assert frame._slot_states[key].checked is True
-    assert frame._slot_views[key].checkbox_var.get() is True
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "finalized ocr different from default"
-    assert frame._slot_states[key].user_edit == "finalized ocr different from default"
+    assert frame._boxes.states[key].checked is True
+    assert frame._boxes.views[key].checkbox_var.get() is True
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == "finalized ocr different from default"
+    assert frame._boxes.states[key].user_edit == "finalized ocr different from default"
 
 
 def test_ocr_checkbox_starts_unchecked_when_finalized_matches_ocr(root, sample_image):
@@ -1194,8 +1193,8 @@ def test_ocr_checkbox_starts_unchecked_when_finalized_matches_ocr(root, sample_i
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
     key = (image_item, "ocr0")
 
-    assert frame._slot_states[key].checked is False
-    assert frame._slot_views[key].checkbox_var.get() is False
+    assert frame._boxes.states[key].checked is False
+    assert frame._boxes.views[key].checkbox_var.get() is False
 
 
 def test_finalized_edit_survives_page_out_and_back_in(root, sample_image):
@@ -1212,15 +1211,15 @@ def test_finalized_edit_survives_page_out_and_back_in(root, sample_image):
 
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
     key = (text_item, "message")
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "finalized edit"
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == "finalized edit"
 
     # Page far away (tears the row down with no further edits) and back.
-    frame._ensure_materialized(len(items) - 1)
-    frame._canvas.yview_moveto(0.0)
-    frame._reconcile()
+    frame._rows.ensure_materialized(len(items) - 1)
+    frame._rows.canvas.yview_moveto(0.0)
+    frame._rows.reconcile()
 
-    assert key in frame._slot_views
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "finalized edit"
+    assert key in frame._boxes.views
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == "finalized edit"
 
 
 def test_spacer_finalized_edit_pre_populates_spacer_box(root, sample_image):
@@ -1236,7 +1235,7 @@ def test_spacer_finalized_edit_pre_populates_spacer_box(root, sample_image):
 
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
 
-    spacer_widget = frame._slot_views[(text_item, "spacer_end")].text_widget
+    spacer_widget = frame._boxes.views[(text_item, "spacer_end")].text_widget
     assert spacer_widget.get("1.0", "end-1c") == custom_spacer
 
 
@@ -1248,10 +1247,10 @@ def test_multiple_image_message_finalized_edits_populate_each_ocr_box_independen
 
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
 
-    assert frame._slot_views[(0, "ocr0")].text_widget.get("1.0", "end-1c") == "finalized first image"
-    assert frame._slot_views[(0, "ocr1")].text_widget.get("1.0", "end-1c") == "finalized second image"
-    assert frame._slot_states[(0, "ocr0")].checked is True
-    assert frame._slot_states[(0, "ocr1")].checked is True
+    assert frame._boxes.views[(0, "ocr0")].text_widget.get("1.0", "end-1c") == "finalized first image"
+    assert frame._boxes.views[(0, "ocr1")].text_widget.get("1.0", "end-1c") == "finalized second image"
+    assert frame._boxes.states[(0, "ocr0")].checked is True
+    assert frame._boxes.states[(0, "ocr1")].checked is True
 
 
 def test_unchecking_then_rechecking_ocr_box_starting_from_finalized_edit(root, sample_image):
@@ -1267,22 +1266,22 @@ def test_unchecking_then_rechecking_ocr_box_starting_from_finalized_edit(root, s
 
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
     key = (image_item, "ocr0")
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     assert widget.get("1.0", "end-1c") == "finalized ocr text"
-    assert frame._slot_views[key].checkbox_var.get() is True
+    assert frame._boxes.views[key].checkbox_var.get() is True
 
-    frame._slot_views[key].checkbox_var.set(False)
-    frame._on_ocr_checkbox_toggle(key)
+    frame._boxes.views[key].checkbox_var.set(False)
+    frame._boxes.on_ocr_checkbox_toggle(key)
 
     assert widget.get("1.0", "end-1c") == ocr_default
-    assert frame._slot_states[key].checked is False
-    assert frame._slot_states[key].user_edit == "finalized ocr text"  # not lost
+    assert frame._boxes.states[key].checked is False
+    assert frame._boxes.states[key].user_edit == "finalized ocr text"  # not lost
 
-    frame._slot_views[key].checkbox_var.set(True)
-    frame._on_ocr_checkbox_toggle(key)
+    frame._boxes.views[key].checkbox_var.set(True)
+    frame._boxes.on_ocr_checkbox_toggle(key)
 
     assert widget.get("1.0", "end-1c") == "finalized ocr text"
-    assert frame._slot_states[key].checked is True
+    assert frame._boxes.states[key].checked is True
 
 
 def test_collect_edited_texts_reports_finalized_text_for_checked_ocr_box(root, sample_image):
@@ -1301,8 +1300,8 @@ def test_collect_edited_texts_reports_finalized_text_for_checked_ocr_box(root, s
     collected_checked = frame.collect_edited_texts()
     assert collected_checked[image_item]["ocr0"] == "finalized ocr text"
 
-    frame._slot_views[key].checkbox_var.set(False)
-    frame._on_ocr_checkbox_toggle(key)
+    frame._boxes.views[key].checkbox_var.set(False)
+    frame._boxes.on_ocr_checkbox_toggle(key)
 
     collected_unchecked = frame.collect_edited_texts()
     assert collected_unchecked[image_item]["ocr0"] is None
@@ -1324,17 +1323,17 @@ def test_finalized_ocr_edit_and_checkbox_survive_page_out_and_back_in(root, samp
 
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
     key = (image_item, "ocr0")
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "finalized ocr text"
-    assert frame._slot_states[key].checked is True
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == "finalized ocr text"
+    assert frame._boxes.states[key].checked is True
 
-    frame._ensure_materialized(len(items) - 1)
-    frame._canvas.yview_moveto(0.0)
-    frame._reconcile()
+    frame._rows.ensure_materialized(len(items) - 1)
+    frame._rows.canvas.yview_moveto(0.0)
+    frame._rows.reconcile()
 
-    assert key in frame._slot_views
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "finalized ocr text"
-    assert frame._slot_states[key].checked is True
-    assert frame._slot_views[key].checkbox_var.get() is True
+    assert key in frame._boxes.views
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == "finalized ocr text"
+    assert frame._boxes.states[key].checked is True
+    assert frame._boxes.views[key].checkbox_var.get() is True
 
 
 # --- Regression tests for INVESTIGATION_shift_tab_reconcile_lockup.md -----
@@ -1359,7 +1358,7 @@ def test_selecting_and_deleting_text_survives_a_row_being_paged_out_and_back_in(
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (text_item, "message")
     frame, _ = _build_frame(root, items)
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
 
     widget.insert("1.0", "PREFIX ")
     widget.tag_add("sel", "1.0", "1.7")
@@ -1368,39 +1367,39 @@ def test_selecting_and_deleting_text_survives_a_row_being_paged_out_and_back_in(
 
     # Page far away (tears the row down) and back to the top again - this
     # is exactly where the crash used to happen.
-    frame._ensure_materialized(len(items) - 1)
-    frame._canvas.yview_moveto(0.0)
-    frame._reconcile()  # must not raise
+    frame._rows.ensure_materialized(len(items) - 1)
+    frame._rows.canvas.yview_moveto(0.0)
+    frame._rows.reconcile()  # must not raise
 
-    assert key in frame._slot_views
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == expected_text
+    assert key in frame._boxes.views
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == expected_text
 
 
 def test_double_build_reclaims_the_orphaned_widgets_content(root, sample_image):
-    """_build_row being called twice for the same index without an
-    intervening _destroy_row should be impossible (see
-    _reclaim_widget_if_present's docstring) - but a bookkeeping bug in the
+    """build_row being called twice for the same index without an
+    intervening destroy_row should be impossible (see
+    SlotBoxes._reclaim_if_present's docstring) - but a bookkeeping bug in the
     virtualization core could get here anyway, and before this fix it
     silently discarded whatever the live widget held. Directly exercises
-    RowBuildingMixin._reclaim_widget_if_present's rescue path."""
+    SlotBoxes._reclaim_if_present's rescue path."""
     items = _items(sample_image, count=5)
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (text_item, "message")
     frame, _ = _build_frame(root, items)
 
-    live_widget = frame._slot_views[key].text_widget
+    live_widget = frame._boxes.views[key].text_widget
     live_widget.insert("end", " typed but never torn down")
     live_text = live_widget.get("1.0", "end-1c")
-    old_container = frame._slot_views[key].container
+    old_container = frame._boxes.views[key].container
 
     # Simulate the "should be impossible" double-build directly, without
-    # going through _destroy_row first.
+    # going through destroy_row first.
     right_column = live_widget.master.master  # text_container -> right column frame
-    frame._build_editable_text_box(right_column, text_item, "message", 20)
+    frame._boxes.build_content_box(right_column, key, 20)
 
-    assert frame._slot_states[key].text == live_text
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == live_text
-    assert frame._slot_views[key].text_widget is not live_widget
+    assert frame._boxes.states[key].text == live_text
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == live_text
+    assert frame._boxes.views[key].text_widget is not live_widget
     # The orphaned widget's container must be torn down, not leaked.
     assert str(old_container) not in root.tk.call("info", "commands")
 
@@ -1409,30 +1408,30 @@ def test_one_row_build_failure_does_not_abort_the_rest_of_the_reconcile_batch(ro
     """Before _try_build_row existed, a single row raising partway through
     _sync_materialized_rows's build loop propagated out of _reconcile
     entirely - every later row in that same batch was silently left
-    unbuilt (still listed in self._slots, missing from self._slot_views),
-    and self._materialized_range was never updated to match reality. This
+    unbuilt (still listed in the navigator's slots, missing from the built boxes' views),
+    and VirtualRows.materialized_range was never updated to match reality. This
     directly exercises that a poisoned row is skipped, logged, and does not
     prevent its neighbors from building."""
     items = _items(sample_image, count=40)
     frame, _ = _build_frame(root, items)
     poisoned_index = len(items) - 5  # inside the far-away jump's build batch
 
-    real_build_row = frame._build_row
+    real_build_row = frame._rows.build_row
 
     def _poisoned_build_row(index, before=None):
         if index == poisoned_index:
             raise RuntimeError("simulated row build failure")
         return real_build_row(index, before=before)
 
-    frame._build_row = _poisoned_build_row
+    frame._rows.build_row = _poisoned_build_row
 
-    frame._ensure_materialized(len(items) - 1)  # must not raise
+    frame._rows.ensure_materialized(len(items) - 1)  # must not raise
 
-    assert poisoned_index not in frame._row_frames
-    assert poisoned_index not in frame._slot_views
+    assert poisoned_index not in frame._rows.row_frames
+    assert poisoned_index not in frame._boxes.views
     # Its neighbors in the same jump-triggered batch must still be built.
-    assert (len(items) - 1) in frame._row_frames
-    assert frame._materialized_range is not None
+    assert (len(items) - 1) in frame._rows.row_frames
+    assert frame._rows.materialized_range is not None
 
 
 # --- Property-style composition tests ---------------------------------------
@@ -1462,7 +1461,7 @@ def _random_edit_sequence(frame, root, key, rng, num_ops, allow_checkbox):
     if allow_checkbox:
         actions.append("checkbox_toggle")
     for _ in range(num_ops):
-        widget = frame._slot_views[key].text_widget
+        widget = frame._boxes.views[key].text_widget
         action = rng.choice(actions)
         content = widget.get("1.0", "end-1c")
         if action == "type":
@@ -1477,9 +1476,9 @@ def _random_edit_sequence(frame, root, key, rng, num_ops, allow_checkbox):
             widget.tag_add("sel", f"1.0+{start}c", f"1.0+{end}c")
             widget.delete("sel.first", "sel.last")
         elif action == "undo":
-            frame._undo_text(type("Event", (), {"widget": widget})())
+            frame._boxes.undo_text(type("Event", (), {"widget": widget})())
         elif action == "redo":
-            frame._redo_text(type("Event", (), {"widget": widget})())
+            frame._boxes.redo_text(type("Event", (), {"widget": widget})())
         elif action == "paste":
             # Mirrors what Tk's own <<Paste>> binding (tk::TextPaste) does at
             # the Tcl level - delete any active selection, then insert at the
@@ -1492,9 +1491,9 @@ def _random_edit_sequence(frame, root, key, rng, num_ops, allow_checkbox):
                 widget.delete("sel.first", "sel.last")
             widget.insert("insert", rng.choice(_RANDOM_EDIT_SNIPPETS))
         elif action == "checkbox_toggle":
-            var = frame._slot_views[key].checkbox_var
+            var = frame._boxes.views[key].checkbox_var
             var.set(not var.get())
-            frame._on_ocr_checkbox_toggle(key)
+            frame._boxes.on_ocr_checkbox_toggle(key)
         root.update()
 
 
@@ -1502,7 +1501,7 @@ def _expected_undo_walk(frame, key):
     """The texts repeated Ctrl+Z would pass through from the box's current
     state, worked out on a copy of its history so the real one is left
     untouched."""
-    state = frame._slot_states[key]
+    state = frame._boxes.states[key]
     history = copy.deepcopy(state.history)
     texts = []
     text = state.text
@@ -1515,9 +1514,9 @@ def _actual_undo_walk(frame, key):
     """Press Ctrl+Z on the box's live widget until there's nothing left to
     undo, collecting what the widget shows after each press."""
     texts = []
-    while frame._slot_states[key].history.can_undo:
-        widget = frame._slot_views[key].text_widget
-        frame._undo_text(type("Event", (), {"widget": widget})())
+    while frame._boxes.states[key].history.can_undo:
+        widget = frame._boxes.views[key].text_widget
+        frame._boxes.undo_text(type("Event", (), {"widget": widget})())
         texts.append(widget.get("1.0", "end-1c"))
     return texts
 
@@ -1525,7 +1524,7 @@ def _actual_undo_walk(frame, key):
 def _freeze_clock(frame):
     """Stop EditHistory's pause rule depending on how fast the test runs,
     so a seed always produces the same undo steps."""
-    frame._clock = lambda: 0.0
+    frame._boxes.clock = lambda: 0.0
 
 
 @pytest.mark.parametrize("seed", range(5))
@@ -1548,28 +1547,28 @@ def test_random_interaction_sequence_survives_a_row_teardown_and_rebuild(
     else:
         index = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (index, role)
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
 
     _random_edit_sequence(frame, root, key, rng, num_ops=12, allow_checkbox=(role == "ocr0"))
 
-    live_widget = frame._slot_views[key].text_widget
-    frame._sync_slot_from_widget(key, live_widget)
+    live_widget = frame._boxes.views[key].text_widget
+    frame._boxes.sync_from_widget(key, live_widget)
     live_text = live_widget.get("1.0", "end-1c")
     live_cursor = live_widget.index("insert")
-    live_checked = frame._slot_states[key].checked
+    live_checked = frame._boxes.states[key].checked
     expected_walk = _expected_undo_walk(frame, key)
 
-    frame._destroy_row(index)
-    frame._build_row(index)
+    frame._rows.destroy_row(index)
+    frame._rows.build_row(index)
     root.update()
 
-    rebuilt = frame._slot_views[key].text_widget
+    rebuilt = frame._boxes.views[key].text_widget
     assert rebuilt is not live_widget
     assert rebuilt.get("1.0", "end-1c") == live_text
     assert rebuilt.index("insert") == live_cursor
-    assert frame._slot_states[key].checked == live_checked
+    assert frame._boxes.states[key].checked == live_checked
     assert _actual_undo_walk(frame, key) == expected_walk
 
 
@@ -1587,31 +1586,31 @@ def test_random_interaction_sequence_survives_two_consecutive_teardown_rebuild_c
     _freeze_clock(frame)
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
 
     _random_edit_sequence(frame, root, key, rng, num_ops=8, allow_checkbox=True)
-    frame._destroy_row(image_item)
-    frame._build_row(image_item)
+    frame._rows.destroy_row(image_item)
+    frame._rows.build_row(image_item)
     root.update()
-    frame._slot_views[key].text_widget.focus_force()
+    frame._boxes.views[key].text_widget.focus_force()
     root.update_idletasks()
 
     _random_edit_sequence(frame, root, key, rng, num_ops=8, allow_checkbox=True)
-    live_widget = frame._slot_views[key].text_widget
-    frame._sync_slot_from_widget(key, live_widget)
+    live_widget = frame._boxes.views[key].text_widget
+    frame._boxes.sync_from_widget(key, live_widget)
     live_text = live_widget.get("1.0", "end-1c")
-    live_checked = frame._slot_states[key].checked
+    live_checked = frame._boxes.states[key].checked
     expected_walk = _expected_undo_walk(frame, key)
 
-    frame._destroy_row(image_item)
-    frame._build_row(image_item)
+    frame._rows.destroy_row(image_item)
+    frame._rows.build_row(image_item)
     root.update()
 
-    rebuilt = frame._slot_views[key].text_widget
+    rebuilt = frame._boxes.views[key].text_widget
     assert rebuilt.get("1.0", "end-1c") == live_text
-    assert frame._slot_states[key].checked == live_checked
+    assert frame._boxes.states[key].checked == live_checked
     assert _actual_undo_walk(frame, key) == expected_walk
 
 
@@ -1637,24 +1636,24 @@ def test_random_edits_after_a_seeded_baseline_survive_a_further_teardown_and_reb
     frame, _ = _build_frame(root, items, **kwargs)
     _freeze_clock(frame)
     key = (text_item, "message")
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "seeded baseline text"
-    widget = frame._slot_views[key].text_widget
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == "seeded baseline text"
+    widget = frame._boxes.views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
 
     _random_edit_sequence(frame, root, key, rng, num_ops=10, allow_checkbox=False)
-    live_text = frame._slot_views[key].text_widget.get("1.0", "end-1c")
+    live_text = frame._boxes.views[key].text_widget.get("1.0", "end-1c")
 
     # Page far enough away that this row is actually torn down (not just
     # kept alive by the virtualization buffer), then back.
-    frame._ensure_materialized(len(items) - 1)
-    assert key not in frame._slot_views
-    frame._canvas.yview_moveto(0.0)
-    frame._reconcile()
+    frame._rows.ensure_materialized(len(items) - 1)
+    assert key not in frame._boxes.views
+    frame._rows.canvas.yview_moveto(0.0)
+    frame._rows.reconcile()
     root.update()
 
-    assert key in frame._slot_views
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == live_text
+    assert key in frame._boxes.views
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == live_text
     walk = _actual_undo_walk(frame, key)
     final = walk[-1] if walk else live_text
     assert final == "seeded baseline text"
@@ -1670,7 +1669,7 @@ def test_undo_steps_are_words_and_survive_a_rebuild(root, sample_image):
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (text_item, "message")
     original = items[text_item].initial_message_text
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     widget.focus_force()
     widget.mark_set("insert", "end")
     root.update()
@@ -1678,13 +1677,13 @@ def test_undo_steps_are_words_and_survive_a_rebuild(root, sample_image):
         widget.insert("insert", char)
         root.update()
 
-    frame._destroy_row(text_item)
-    frame._build_row(text_item)
+    frame._rows.destroy_row(text_item)
+    frame._rows.build_row(text_item)
     root.update()
 
     assert _actual_undo_walk(frame, key) == [original + "two ", original]
-    rebuilt = frame._slot_views[key].text_widget
-    frame._redo_text(type("Event", (), {"widget": rebuilt})())
+    rebuilt = frame._boxes.views[key].text_widget
+    frame._boxes.redo_text(type("Event", (), {"widget": rebuilt})())
     assert rebuilt.get("1.0", "end-1c") == original + "two "
 
 
@@ -1709,35 +1708,35 @@ def _long_ocr_item(sample_image):
 ])
 def test_wheel_down_over_the_canvas_scrolls_the_review_window(root, sample_image, sequence, kwargs):
     frame, _ = _build_frame(root, _items(sample_image, count=40))
-    top_before, _ = frame._canvas.yview()
+    top_before, _ = frame._rows.canvas.yview()
 
-    frame._canvas.event_generate(sequence, **kwargs)
+    frame._rows.canvas.event_generate(sequence, **kwargs)
     root.update()
 
-    top_after, _ = frame._canvas.yview()
+    top_after, _ = frame._rows.canvas.yview()
     assert top_after > top_before
 
 
 def test_wheel_up_on_x11_scrolls_the_review_window_back_up(root, sample_image):
     frame, _ = _build_frame(root, _items(sample_image, count=40))
-    frame._canvas.yview_moveto(0.5)
+    frame._rows.canvas.yview_moveto(0.5)
     root.update()
-    top_before, _ = frame._canvas.yview()
+    top_before, _ = frame._rows.canvas.yview()
 
-    frame._canvas.event_generate("<Button-4>")
+    frame._rows.canvas.event_generate("<Button-4>")
     root.update()
 
-    top_after, _ = frame._canvas.yview()
+    top_after, _ = frame._rows.canvas.yview()
     assert top_after < top_before
 
 
 def test_wheel_over_an_overflowing_box_scrolls_only_the_box_once(root, sample_image):
     items = _long_ocr_item(sample_image) + _items(sample_image, count=20)
     frame, _ = _build_frame(root, items)
-    widget = frame._slot_views[(0, "ocr0")].text_widget
+    widget = frame._boxes.views[(0, "ocr0")].text_widget
     root.update()
     box_top_before, _ = widget.yview()
-    canvas_top_before, _ = frame._canvas.yview()
+    canvas_top_before, _ = frame._rows.canvas.yview()
     assert box_top_before == 0.0
 
     widget.event_generate("<Button-5>")
@@ -1747,7 +1746,7 @@ def test_wheel_over_an_overflowing_box_scrolls_only_the_box_once(root, sample_im
     root.update()
     box_after_two, _ = widget.yview()
 
-    assert frame._canvas.yview()[0] == canvas_top_before
+    assert frame._rows.canvas.yview()[0] == canvas_top_before
     # Scrolled, and by the same amount each notch - Tk's own Text wheel
     # binding also running would double the first step.
     assert box_after_one > 0.0
@@ -1757,15 +1756,15 @@ def test_wheel_over_an_overflowing_box_scrolls_only_the_box_once(root, sample_im
 def test_wheel_over_a_box_at_its_limit_scrolls_the_review_window(root, sample_image):
     items = _long_ocr_item(sample_image) + _items(sample_image, count=20)
     frame, _ = _build_frame(root, items)
-    widget = frame._slot_views[(0, "ocr0")].text_widget
+    widget = frame._boxes.views[(0, "ocr0")].text_widget
     widget.yview_moveto(1.0)
     root.update()
-    canvas_top_before, _ = frame._canvas.yview()
+    canvas_top_before, _ = frame._rows.canvas.yview()
 
     widget.event_generate("<Button-5>")
     root.update()
 
-    assert frame._canvas.yview()[0] > canvas_top_before
+    assert frame._rows.canvas.yview()[0] > canvas_top_before
 
 
 @pytest.mark.parametrize("keysym, state", [
@@ -1775,28 +1774,28 @@ def test_wheel_over_a_box_at_its_limit_scrolls_the_review_window(root, sample_im
 def test_shift_tab_key_moves_focus_back_and_scrolls_it_into_view(root, sample_image, keysym, state):
     items = _items(sample_image, count=40)
     frame, _ = _build_frame(root, items)
-    first_key = frame._slots[0]
-    second_key = frame._slots[1]
-    frame._focus_text_box(*second_key)
-    widget = frame._slot_views[second_key].text_widget
+    first_key = frame._nav.slots[0]
+    second_key = frame._nav.slots[1]
+    frame._nav.focus_text_box(*second_key)
+    widget = frame._boxes.views[second_key].text_widget
     widget.focus_force()  # focus_set() alone doesn't reliably win real OS focus in a test run
     root.update()
     # Scroll one page down, the way the mouse/scrollbar can - within the
     # materialization buffer, so both boxes stay built but go off screen.
-    frame._canvas.yview_scroll(1, "pages")
-    frame._reconcile()
+    frame._rows.canvas.yview_scroll(1, "pages")
+    frame._rows.reconcile()
     root.update()
-    first_container = frame._slot_views[first_key].container
-    assert first_container.winfo_rooty() + first_container.winfo_height() <= frame._canvas.winfo_rooty()
+    first_container = frame._boxes.views[first_key].container
+    assert first_container.winfo_rooty() + first_container.winfo_height() <= frame._rows.canvas.winfo_rooty()
     assert frame.focus_get() is widget
 
     widget.event_generate("<KeyPress>", keysym=keysym, state=state)
     root.update()
 
-    assert frame._focused_slot() == first_key
-    container = frame._slot_views[first_key].container
-    box_top = container.winfo_rooty() - frame._canvas.winfo_rooty()
-    assert 0 <= box_top < frame._canvas.winfo_height()
+    assert frame._nav.focused_slot() == first_key
+    container = frame._boxes.views[first_key].container
+    box_top = container.winfo_rooty() - frame._rows.canvas.winfo_rooty()
+    assert 0 <= box_top < frame._rows.canvas.winfo_height()
 
 
 
@@ -1828,28 +1827,28 @@ def _image_container(frame, index):
 
 
 def _resize(frame, root, width):
-    new_width = clamp_image_column_width(width, frame._canvas_width())
+    new_width = clamp_image_column_width(width, frame._rows.canvas_width())
     # The test window is narrow, so a large width can clamp to the current
     # one - which would make the resize (and the test) a no-op.
-    assert new_width != frame._image_column_width_px
-    frame._set_image_column_width(new_width)
+    assert new_width != frame._builder.image_column_width_px
+    frame._divider.set_width(new_width)
     root.update()
 
 
 def test_resizing_image_column_rebuilds_rows_at_the_new_width(root, wide_image):
     items = _wide_items(wide_image)
     frame, _ = _build_frame(root, items)
-    new_width = clamp_image_column_width(500, frame._canvas_width())
+    new_width = clamp_image_column_width(500, frame._rows.canvas_width())
 
     _resize(frame, root, new_width)
 
-    assert frame._image_column_width_px == new_width
+    assert frame._builder.image_column_width_px == new_width
     container = _image_container(frame, 0)
     expected = fitted_image_size(wide_image, image_bounding_box(new_width))
     assert (container.winfo_width(), container.winfo_height()) == expected
-    for index in frame._row_frames:
-        real = frame._row_frames[index].winfo_height() + 2 * ROW_PACK_PADY_PX
-        assert frame._row_heights[index] == real
+    for index in frame._rows.row_frames:
+        real = frame._rows.row_frames[index].winfo_height() + 2 * ROW_PACK_PADY_PX
+        assert frame._rows.heights[index] == real
 
 
 def test_column_divider_sits_in_the_gap_between_the_columns(root, wide_image):
@@ -1860,10 +1859,10 @@ def test_column_divider_sits_in_the_gap_between_the_columns(root, wide_image):
         if width is not None:
             _resize(frame, root, width)
         image_container = _image_container(frame, 0)
-        text_container = frame._slot_views[(0, "message")].container
+        text_container = frame._boxes.views[(0, "message")].container
         image_column_right = image_container.winfo_rootx() + image_container.winfo_width()
         text_column_left = text_container.winfo_rootx()
-        divider = frame._column_divider
+        divider = frame._divider.widget
         divider_center = divider.winfo_rootx() + divider.winfo_width() / 2
         assert image_column_right <= divider.winfo_rootx()
         assert divider.winfo_rootx() + divider.winfo_width() <= text_column_left
@@ -1873,40 +1872,40 @@ def test_column_divider_sits_in_the_gap_between_the_columns(root, wide_image):
 def test_resize_keeps_the_top_row_in_place_when_nothing_is_focused(root, wide_image):
     items = _wide_items(wide_image, count=20)
     frame, _ = _build_frame(root, items)
-    canvas = frame._canvas
+    canvas = frame._rows.canvas
     # Scroll so row 6 starts 40px below the top of the view.
-    frame._canvas.yview_moveto((frame._offset_of(6) - 40) / sum(frame._row_heights))
-    frame._reconcile()
+    frame._rows.canvas.yview_moveto((frame._rows.offset_of(6) - 40) / sum(frame._rows.heights))
+    frame._rows.reconcile()
     root.update()
-    anchor_kind, anchor_index, screen_offset = frame._capture_view_anchor()
+    anchor_kind, anchor_index, screen_offset = frame._divider.capture_view_anchor()
     assert anchor_kind == "row"
-    row_screen_top = frame._row_frames[anchor_index].winfo_rooty()
+    row_screen_top = frame._rows.row_frames[anchor_index].winfo_rooty()
 
     _resize(frame, root, 480)
 
-    assert frame._row_frames[anchor_index].winfo_rooty() == pytest.approx(row_screen_top, abs=2)
-    assert frame._offset_of(anchor_index) - canvas.canvasy(0) == pytest.approx(screen_offset, abs=2)
+    assert frame._rows.row_frames[anchor_index].winfo_rooty() == pytest.approx(row_screen_top, abs=2)
+    assert frame._rows.offset_of(anchor_index) - canvas.canvasy(0) == pytest.approx(screen_offset, abs=2)
 
 
 def test_resize_keeps_the_focused_box_in_place(root, wide_image):
     items = _wide_items(wide_image, count=20)
     frame, _ = _build_frame(root, items)
     key = (4, "ocr0")
-    frame._goto_slot(key)  # builds its row and aligns it to the top
+    frame._nav.goto_slot(key)  # builds its row and aligns it to the top
     root.update()
     # Put the box 60px below the top of the view.
     box_top, _ = _container_bounds(frame, *key)
-    frame._canvas.yview_moveto((box_top - 60) / sum(frame._row_heights))
-    frame._reconcile()
-    frame._slot_views[key].text_widget.focus_force()
+    frame._rows.canvas.yview_moveto((box_top - 60) / sum(frame._rows.heights))
+    frame._rows.reconcile()
+    frame._boxes.views[key].text_widget.focus_force()
     root.update()
-    box_screen_top = frame._slot_views[key].container.winfo_rooty()
-    assert frame._capture_view_anchor()[0] == "box"
+    box_screen_top = frame._boxes.views[key].container.winfo_rooty()
+    assert frame._divider.capture_view_anchor()[0] == "box"
 
     _resize(frame, root, 300)
 
-    assert frame._slot_views[key].container.winfo_rooty() == pytest.approx(box_screen_top, abs=2)
-    assert frame.focus_get() is frame._slot_views[key].text_widget
+    assert frame._boxes.views[key].container.winfo_rooty() == pytest.approx(box_screen_top, abs=2)
+    assert frame.focus_get() is frame._boxes.views[key].text_widget
 
 
 def test_edit_and_undo_survive_a_resize_and_a_later_scroll_teardown(root, wide_image):
@@ -1915,25 +1914,25 @@ def test_edit_and_undo_survive_a_resize_and_a_later_scroll_teardown(root, wide_i
     items = _wide_items(wide_image, count=40)
     frame, _ = _build_frame(root, items)
     key = (0, "message")
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     original = widget.get("1.0", "end-1c")
     widget.insert("1.0", "edited ")
     root.update()
 
     _resize(frame, root, 520)
-    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "edited " + original
+    assert frame._boxes.views[key].text_widget.get("1.0", "end-1c") == "edited " + original
 
-    frame._canvas.yview_moveto(1.0)
-    frame._reconcile()
+    frame._rows.canvas.yview_moveto(1.0)
+    frame._rows.reconcile()
     root.update()
-    assert key not in frame._slot_views
-    frame._canvas.yview_moveto(0.0)
-    frame._reconcile()
+    assert key not in frame._boxes.views
+    frame._rows.canvas.yview_moveto(0.0)
+    frame._rows.reconcile()
     root.update()
 
-    widget = frame._slot_views[key].text_widget
+    widget = frame._boxes.views[key].text_widget
     assert widget.get("1.0", "end-1c") == "edited " + original
-    frame._undo_text(type("Event", (), {"widget": widget})())
+    frame._boxes.undo_text(type("Event", (), {"widget": widget})())
     assert widget.get("1.0", "end-1c") == original
 
 
@@ -1941,40 +1940,40 @@ def test_divider_drag_applies_the_width_on_release_and_reports_the_fraction(root
     items = _wide_items(wide_image)
     reported = []
     frame, _ = _build_frame(root, items, on_image_column_fraction_changed=reported.append)
-    canvas = frame._canvas
-    old_width = frame._image_column_width_px
-    target_width = clamp_image_column_width(600, frame._canvas_width())
+    canvas = frame._rows.canvas
+    old_width = frame._builder.image_column_width_px
+    target_width = clamp_image_column_width(600, frame._rows.canvas_width())
     target_center = divider_x_for_width(target_width) + COLUMN_DIVIDER_WIDTH_PX / 2
     pointer = SimpleNamespace(x_root=canvas.winfo_rootx() + target_center)
 
-    frame._on_divider_press(pointer)
-    frame._on_divider_drag(pointer)
-    assert frame._image_column_width_px == old_width  # only the divider moves while dragging
-    frame._on_divider_release(pointer)
+    frame._divider.on_press(pointer)
+    frame._divider.on_drag(pointer)
+    assert frame._builder.image_column_width_px == old_width  # only the divider moves while dragging
+    frame._divider.on_release(pointer)
     root.update()
 
-    assert frame._image_column_width_px == target_width
-    assert reported == [pytest.approx(target_width / frame._canvas_width())]
+    assert frame._builder.image_column_width_px == target_width
+    assert reported == [pytest.approx(target_width / frame._rows.canvas_width())]
 
 
 def test_saved_fraction_sets_the_initial_width(root, wide_image):
     items = _wide_items(wide_image)
     frame, _ = _build_frame(root, items, initial_image_column_fraction=0.3)
 
-    expected = image_column_width_for_fraction(0.3, frame._canvas_width())
-    assert frame._image_column_width_px == expected
+    expected = image_column_width_for_fraction(0.3, frame._rows.canvas_width())
+    assert frame._builder.image_column_width_px == expected
     assert _image_container(frame, 0).winfo_width() == expected
 
 
 def test_canvas_width_change_keeps_the_column_proportion(root, wide_image):
     items = _wide_items(wide_image)
     frame, _ = _build_frame(root, items)
-    frame._image_column_fraction = 0.4
+    frame._divider.fraction = 0.4
 
-    frame._run_width_sync()
+    frame._divider.run_width_sync()
     root.update()
 
-    assert frame._image_column_width_px == image_column_width_for_fraction(0.4, frame._canvas_width())
+    assert frame._builder.image_column_width_px == image_column_width_for_fraction(0.4, frame._rows.canvas_width())
 
 
 # -- saving/restoring where the user was (resume) -----------------------------
@@ -1993,7 +1992,7 @@ def test_focused_slot_is_kept_after_the_app_loses_focus(root, sample_image):
     the active window - so resuming never restored focus."""
     items = _items(sample_image, count=10)
     frame, _ = _build_frame(root, items)
-    frame._focus_text_box(4, "ocr0")
+    frame._nav.focus_text_box(4, "ocr0")
 
     _app_loses_focus(frame)
 
@@ -2003,10 +2002,10 @@ def test_focused_slot_is_kept_after_the_app_loses_focus(root, sample_image):
 def test_focus_in_on_a_box_updates_the_remembered_slot(root, sample_image):
     items = _items(sample_image, count=10)
     frame, _ = _build_frame(root, items)
-    frame._focus_text_box(4, "ocr0")
+    frame._nav.focus_text_box(4, "ocr0")
 
     # e.g. the user clicks into another box
-    frame._slot_views[(3, "message")].text_widget.event_generate("<FocusIn>")
+    frame._boxes.views[(3, "message")].text_widget.event_generate("<FocusIn>")
     _app_loses_focus(frame)
 
     assert frame.get_focused_slot() == (3, "message")
@@ -2015,7 +2014,7 @@ def test_focus_in_on_a_box_updates_the_remembered_slot(root, sample_image):
 def test_focus_on_the_finalize_button_clears_the_remembered_slot(root, sample_image):
     items = _items(sample_image, count=10)
     frame, _ = _build_frame(root, items)
-    frame._focus_text_box(4, "ocr0")
+    frame._nav.focus_text_box(4, "ocr0")
 
     frame._finalize_button.event_generate("<FocusIn>")
     _app_loses_focus(frame)
@@ -2039,7 +2038,7 @@ def test_saved_scroll_fraction_is_restored_when_no_box_was_focused(root, sample_
     frame, _ = _build_frame(root, items, initial_scroll_fraction=0.5)
     root.update()
 
-    top_fraction = frame._canvas.yview()[0]
+    top_fraction = frame._rows.canvas.yview()[0]
     assert top_fraction == pytest.approx(0.5, abs=0.05)
     assert frame.get_materialized_range()[0] > 0
 
@@ -2051,19 +2050,19 @@ def test_focus_survives_app_losing_focus_save_and_resume(root, sample_image):
     and scrolls that box into view."""
     items = _items(sample_image, count=60)
     frame, _ = _build_frame(root, items)
-    frame._ensure_materialized(40)
-    frame._focus_text_box(40, "ocr0")
+    frame._rows.ensure_materialized(40)
+    frame._nav.focus_text_box(40, "ocr0")
     _app_loses_focus(frame)
 
     slot = frame.get_focused_slot()
-    saved = [items[slot[0]].message_id, slot[1]]  # as main_window._snapshot_and_save stores it
+    saved = [items[slot[0]].message_id, slot[1]]  # as SavedSession.capture stores it
     frame.destroy()
 
-    resumed, _ = _build_frame(root, items, initial_focus_slot=_match_focus_slot(items, saved))
+    resumed, _ = _build_frame(root, items, initial_focus_slot=match_focus_slot(items, saved))
     root.update()
 
     key = (40, "ocr0")
     assert resumed.get_focused_slot() == key
     box_top, box_bottom = _container_bounds(resumed, *key)
-    assert box_top >= resumed._canvas.canvasy(0) - 1
-    assert box_bottom <= resumed._canvas.canvasy(resumed._canvas.winfo_height()) + 1
+    assert box_top >= resumed._rows.canvas.canvasy(0) - 1
+    assert box_bottom <= resumed._rows.canvas.canvasy(resumed._rows.canvas.winfo_height()) + 1

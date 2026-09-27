@@ -440,39 +440,47 @@ gui_transcription/
     chatlog.py            # HTML parsing + date/author filtering
     cleanup.py            # post-run regex cleanup pass (structural only -
                           # OCR-misread fixes moved to ocr_corrections.py)
-    pipeline.py           # OCR batch runner, bulk output writing,
-                          # finalization - orchestration glue only
+    pipeline.py           # run inputs (RunContext), parse + OCR a run
+                          # (prepare_run), output writing, finalization -
+                          # orchestration glue only
+    session.py            # the saved review session (SavedSession): what's
+                          # autosaved, and mapping saved/finalized edits
+                          # back onto a re-parsed chatlog by message ID
     review_item.py        # ReviewItem domain model: slot-role ordering +
                           # spacer-token parsing shared by row building,
                           # height estimation, keyboard nav, output writing
     logging_config.py     # JSON file + console logging setup
     gui/
-      main_window.py      # run orchestration + session persistence on the
-                          # Tk side - constructs setup_view.py/progress_view.py/
-                          # review_view.py in turn as each stage starts
+      main_window.py      # App: screen flow, worker thread, when to
+                          # autosave/resume/finalize - constructs setup_view.py/
+                          # progress_view.py/review_view.py in turn
       setup_view.py        # setup screen: file/folder pickers, start date,
                           # cache checkbox, approved-users list
       progress_view.py    # OCR progress bar
-      review_view.py       # the review screen's windowing core (reconcile/
-                          # paging/scroll-correction) + Finalize button -
-                          # delegates row construction, images, and
-                          # keyboard nav to the modules below
-      row_building.py      # builds a single row's widgets (labels, image
-                          # placeholders, editable text boxes/scrollbars)
+      review_view.py       # ReviewFrame: wires the review screen's parts
+                          # (below) together; scroll input, Finalize button
+      virtual_rows.py      # VirtualRows: the windowing core - canvas,
+                          # which rows are built (reconcile/paging/
+                          # scroll-correction), row heights
+      row_building.py      # RowBuilder: builds a single row's widgets
+                          # (labels, image placeholders) + height estimates
+      slot_boxes.py        # SlotBoxes: every editable box's state and
+                          # widgets - edits, OCR checkbox, spellcheck, undo
       layout_constants.py  # row/text-box sizing constants shared by
                           # row_building.py and virtualization.py, so the
                           # real layout and its pre-build estimate can't
                           # drift out of sync with each other
       virtualization.py    # pure row-height/visible-range math (no Tk)
       image_loading.py     # lazy image load/unload for review rows
-      image_context_menu.py  # right-click menu on a review row's image
+      image_context_menu.py  # ImageContextMenu: right-click menu on an image
                           # (open in browser/location, open chatlog at
                           # message, copy to clipboard) - freezes scrolling
                           # (mousewheel/Page Up-Down/scrollbar) while open
       desktop_linux.py     # Linux side of those actions: default browser,
                           # file manager, clipboard (freedesktop standards)
-      keyboard_nav.py      # Tab/Page Up-Down/undo keyboard shortcuts
-      column_divider.py    # draggable image/text column divider: drag
+      keyboard_nav.py      # FocusNavigator: Tab/Shift-Tab, keeping the
+                          # focused box on screen; app-wide Ctrl+A
+      column_divider.py    # ColumnDivider: image/text column divider: drag
                           # handling, re-layout at the new width, keeping
                           # the view anchored
       wheel.py             # mouse wheel/touchpad events across platforms

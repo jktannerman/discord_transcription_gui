@@ -4,11 +4,11 @@ Part of [ARCHITECTURE.md](ARCHITECTURE.md) - see
 [ARCHITECTURE_REVIEW_SCREEN.md](ARCHITECTURE_REVIEW_SCREEN.md) for the
 review screen's other internals.
 
-`self._row_heights` (estimated pre-build, real post-build) is the single
-source of truth `_offset_of`, the canvas `scrollregion`, and every
+`VirtualRows.heights` (estimated pre-build, real post-build) is the single
+source of truth `VirtualRows.offset_of`, the canvas `scrollregion`, and every
 scroll-into-view calculation in `keyboard_nav.py` derive their numbers from.
-All of that math implicitly assumes **`self._row_heights[idx]` is the full
-vertical screen space row `idx` consumes, including everything `_build_row`
+All of that math implicitly assumes **`VirtualRows.heights[idx]` is the full
+vertical screen space row `idx` consumes, including everything `VirtualRows.build_row`
 puts around it that the row's own `winfo_height()` can't see** - not just
 the row `ttk.Frame`'s own size. Any real on-screen spacing left out of that
 number doesn't show up as a one-off glitch: it silently shifts every row
@@ -23,7 +23,7 @@ list of what has to be accounted for, and where:
 | `ROW_FRAME_PADDING_PX`/`ROW_FRAME_BORDERWIDTH_PX` (`ROW_FRAME_OVERHEAD_PX`) | The row `Frame`'s own `padding=`/`borderwidth=` chrome | Yes | `estimate_row_height` only |
 | `GAP_BETWEEN_STACKED_PX` | Between stacked elements *within* a row's left/right column | Yes | `estimate_row_height` only |
 | `TEXT_BOX_MARGIN_PX` | Extra headroom baked into a text box's own fixed height | Yes | `estimate_row_height` only |
-| `ROW_PACK_PADY_PX` (counted ×2: above *and* below) | `_build_row`'s `row.pack(pady=ROW_PACK_PADY_PX)` - the gap *outside* the row's `Frame`, between it and its neighbors in `_scroll_frame` | **No** | `estimate_row_height`, `ReviewFrame._remeasure_built_rows` (`real = row.winfo_height() + 2*ROW_PACK_PADY_PX`), *and* every place in `keyboard_nav.py` that turns `self._offset_of(index)` into a real screen comparison (`self._offset_of(index) + ROW_PACK_PADY_PX + ...`) |
+| `ROW_PACK_PADY_PX` (counted ×2: above *and* below) | `VirtualRows.build_row`'s `row.pack(pady=ROW_PACK_PADY_PX)` - the gap *outside* the row's `Frame`, between it and its neighbors in `_scroll_frame` | **No** | `estimate_row_height`, `VirtualRows._remeasure_built_rows` (`real = row.winfo_height() + 2*ROW_PACK_PADY_PX`), *and* every place in `keyboard_nav.py` that turns `VirtualRows.offset_of(index)` into a real screen comparison (`VirtualRows.offset_of(index) + ROW_PACK_PADY_PX + ...`) |
 
 `ROW_PACK_PADY_PX` is the one entry that lives *outside* the row's own
 bounding box, which is what made it easy to miss: every other constant above
@@ -35,19 +35,19 @@ size), so it had to be added back explicitly in three places:
 `estimate_row_height` (the pre-build guess), `_remeasure_built_rows` (the
 real height, captured once a row is actually built), and - easy to overlook
 even after fixing the first two - everywhere `keyboard_nav.py` derives a
-real screen y-coordinate from `self._offset_of(index)`. That last one is
+real screen y-coordinate from `VirtualRows.offset_of(index)`. That last one is
 subtle for a second reason beyond just "remember to add it":
-`self._offset_of(index)` is defined as where row `index`'s full
-pack-allocated *slot* starts (`sum(self._row_heights[:index])`), not where
+`VirtualRows.offset_of(index)` is defined as where row `index`'s full
+pack-allocated *slot* starts (`sum(VirtualRows.heights[:index])`), not where
 its `Frame`'s own visible top edge sits - the `Frame` starts
 `ROW_PACK_PADY_PX` further down, past its own leading pady.
-`_scroll_box_into_view`/`_keep_cursor_in_viewport` both anchor a box's
+`FocusNavigator.scroll_box_into_view`/`FocusNavigator.keep_cursor_in_viewport` both anchor a box's
 position off `row.winfo_rooty()` (the `Frame`'s real top edge), so they need
-that `+ ROW_PACK_PADY_PX` correction explicitly, on top of `_row_heights`
+that `+ ROW_PACK_PADY_PX` correction explicitly, on top of `VirtualRows.heights`
 already including it in the row's *total* height.
 
 If a future change adds another constant here - more outer padding, a
-border on `_scroll_frame` itself, anything `_build_row` packs around a row
+border on `_scroll_frame` itself, anything `VirtualRows.build_row` packs around a row
 rather than inside it - it needs the same three-way treatment, not just a
 bump to `ROW_FRAME_OVERHEAD_PX` (which is for chrome *inside* the row only).
 The fastest way to catch a future regression of this kind: focus a box

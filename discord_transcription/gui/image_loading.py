@@ -1,7 +1,7 @@
 """Lazy load/unload of review-row image previews. Images within the
 virtualized window's materialized rows are decoded only once their row is
 near the visible viewport, and unloaded again once scrolled away - see
-review_view.py's module docstring for why rows themselves are virtualized
+virtual_rows.py's module docstring for why rows themselves are virtualized
 the same way.
 """
 
@@ -119,7 +119,7 @@ def _natural_size(image_path: str) -> Optional[Tuple[int, int]]:
     """An image's displayed (EXIF-rotated) size, read from its header once.
 
     Cached per path, so recomputing every row's height for a new column
-    width (see ReviewFrame._set_image_column_width) is plain arithmetic
+    width (see ColumnDivider.set_width) is plain arithmetic
     rather than a file read per image.
 
     Args:
@@ -216,7 +216,7 @@ class ImageLoader:
         absolute coordinates within the full virtual document, not widget-
         relative geometry.
 
-        log_event, if given, is ReviewFrame._log_event - routing every
+        log_event, if given, is VirtualRows.log_event - routing every
         load/unload through it (rather than logging directly here) stamps
         each one with the same seq/scroll-state context as every other
         scroll-trace event, so an image load can be correlated against the
