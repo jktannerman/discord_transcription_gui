@@ -72,10 +72,14 @@ def make_spacer_text_widget(parent: tk.Widget) -> tk.Text:
 
 
 def delete_word_backward(event: tk.Event) -> str:
-    """Ctrl+Backspace: delete the word before the cursor (plus any
-    whitespace trailing it), or just merge with the previous line if the
-    cursor is already at the start of a line."""
+    """Ctrl+Backspace: delete the selection if there is one, like plain
+    Backspace; otherwise the word before the cursor (plus any whitespace
+    trailing it), or just merge with the previous line if the cursor is
+    already at the start of a line."""
     widget = event.widget
+    if widget.tag_ranges("sel"):
+        widget.delete("sel.first", "sel.last")
+        return "break"
     line_start = widget.index("insert linestart")
     text_before = widget.get(line_start, "insert")
     if not text_before:

@@ -2,7 +2,7 @@
 
 Part of [ARCHITECTURE.md](ARCHITECTURE.md).
 
-528 tests in all (as of 2026-09-27): 384 run by default, plus 144 marked
+547 tests in all (as of 2026-09-27): 396 run by default, plus 151 marked
 `gui` (they build a real Tk window - see the README's "Testing" section)
 that only run with `-m gui` or `-m ""`. Of the default ones, 11 test
 Windows-only code and are skipped elsewhere. `python -m pytest --co -q
@@ -65,8 +65,11 @@ deepest coverage:
   recomputed after a row is paged out and rebuilt onto a fresh widget, and a
   torn-down row's pending debounce timer actually getting cancelled).
 - Image preview sizing/visibility (`discord_transcription/gui/image_loading.py`'s aspect-fit
-  math and its load/unload viewport-boundary decision, plus real
-  load/failure/unload behavior against actual Tk widgets).
+  math and its load/unload viewport-boundary decision; background decoding
+  with a fake poll widget, including a decode finishing after its image was
+  unloaded or its row torn down; plus real load/failure/unload behavior
+  against actual Tk widgets, and one review-screen test that an image in
+  view is actually shown).
 - The image/text column divider: width clamping, fraction-to-width and
   width-dependent row estimates (`test_virtualization.py`), divider position
   math (`test_column_divider.py`), per-chatlog persistence
@@ -110,8 +113,9 @@ deepest coverage:
   (`test_image_context_menu.py`, marked `not_windows`).
 - Ctrl+Z/Ctrl+Shift+Z dispatch depending on Shift, not Caps Lock
   (`test_keyboard_nav.py`), EXIF-rotated images being sized and decoded the
-  right way up (`test_image_loading.py`), and Ctrl+A selecting all in every
-  kind of text field (`test_select_all.py`).
+  right way up (`test_image_loading.py`), Ctrl+A selecting all in every
+  kind of text field (`test_select_all.py`), and Ctrl+Backspace deleting a
+  word or the selection (`test_delete_word_backward.py`).
 
 ## Session resume
 

@@ -940,7 +940,6 @@ def test_resuming_deep_in_a_long_transcript_remeasures_rows_correctly_on_first_b
     geometry) until every newly-built row reports real geometry before
     trusting any of their heights."""
     items = _long_text_items(sample_image, tall_index=30, count=80)
-    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     saved_texts = [{} for _ in items]
     deep_index = 60
     saved_texts[deep_index] = {"message": items[deep_index].initial_message_text}
@@ -1054,7 +1053,6 @@ def test_destroying_an_unfocused_rows_box_then_rebuilding_does_not_steal_focus(r
     items = _items(sample_image, count=5)
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     frame, _ = _build_frame(root, items)
-    key = (text_item, "message")
     # Deliberately not focused - destroy_row should leave FocusNavigator.refocus_slot
     # untouched (None) for a row whose box never had focus.
 
@@ -2066,3 +2064,14 @@ def test_focus_survives_app_losing_focus_save_and_resume(root, sample_image):
     box_top, box_bottom = _container_bounds(resumed, *key)
     assert box_top >= resumed._rows.canvas.canvasy(0) - 1
     assert box_bottom <= resumed._rows.canvas.canvasy(resumed._rows.canvas.winfo_height()) + 1
+
+
+def test_images_in_view_are_decoded_off_the_tk_thread_and_then_shown(root, sample_image):
+    frame, _ = _build_frame(root, _items(sample_image, count=6))
+    slot = frame._images._slots[(1, 0)]
+    deadline = time.monotonic() + 5
+    while slot.photo is None and time.monotonic() < deadline:
+        root.update()
+
+    assert slot.photo is not None
+    assert slot.label.cget("image") != ""

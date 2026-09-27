@@ -177,6 +177,12 @@ class App:
             setup.set_error("Please select the HTML file, image folder, and output file.")
             return
 
+        try:
+            pipeline.check_output_path(Path(output_path))
+        except ValueError as exc:
+            setup.set_error(str(exc))
+            return
+
         pending_session = state.load_session(html_path)
         if pending_session is not None:
             # Resuming overwrites this session with autosaves, and declining
@@ -200,7 +206,8 @@ class App:
                 # Cancel - leave the saved session untouched and don't start a run.
                 return
             if resume_choice:
-                self._resume_session(html_path, pending_session)
+                state.add_recent_path("output_path", output_path)
+                self._resume_session(html_path, pending_session, Path(output_path))
                 return
             state.clear_session(html_path)
 
@@ -318,7 +325,9 @@ class App:
 
     # -- session resume ------------------------------------------------------
 
-    def _resume_session(self, html_path_key: str, session: dict) -> None:
+    def _resume_session(
+        self, html_path_key: str, session: dict, output_path: Optional[Path] = None
+    ) -> None:
         """Re-run a saved session's inputs through the normal parse/OCR
         pipeline; _show_review then re-applies its edits, focus and scroll
         position.
@@ -329,10 +338,16 @@ class App:
         image). Otherwise a session whose first run forced a full re-OCR
         would repeat it on every resume.
 
+        The output path can be replaced too (the setup screen's current
+        one), since it only matters at Finalize. The other inputs decide
+        which messages the saved edits belong to, so they're the session's.
+
         Args:
             html_path_key: The path the session was loaded under, used to
                 clear it if it turns out to be malformed.
             session: What state.load_session returned.
+            output_path: The output file to finalize to, or None to keep
+                the session's saved one.
         """
         try:
             saved = SavedSession.from_json(session)
@@ -344,9 +359,19 @@ class App:
             state.clear_session(html_path_key)
             return
 
+        run = dataclasses.replace(saved.run, use_cache=True)
+        if output_path is not None and output_path != run.output_path:
+            logger.info(
+                "resuming with the setup screen's output path",
+                extra=logging_config.extra(
+                    saved_output_path=str(run.output_path), output_path=str(output_path)
+                ),
+            )
+            run = dataclasses.replace(run, output_path=output_path)
+
         self._resume_image_folder_override = str(saved.run.image_folder)
         self._resume_payload = saved
-        self._begin_run(dataclasses.replace(saved.run, use_cache=True))
+        self._begin_run(run)
 
     # -- autosave -------------------------------------------------------------
 

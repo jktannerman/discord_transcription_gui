@@ -2,11 +2,14 @@
 
 A built row's images are decoded only while the row is near the viewport,
 and unloaded again once it's scrolled away. Their on-screen size is known
-before that from the file header alone (fitted_image_size).
+before that from the file header alone (fitted_image_size). Decoding and
+resizing run on worker threads, so a large screenshot doesn't stall
+scrolling; only the finished image is handed to Tk, on the Tk thread.
 """
 
 import functools
 import tkinter as tk
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence, Tuple, Union
 
@@ -25,6 +28,15 @@ MAX_IMAGE_HEIGHT_PX = 950
 # Most an image preview is ever enlarged beyond its own size, so a tiny image
 # (an emoji, a small icon) doesn't blow up to fill the whole column.
 MAX_IMAGE_ENLARGEMENT = 4.0
+# Worker threads decoding images for ImageLoader.
+_DECODE_WORKERS = 2
+# How often the Tk thread checks for finished decodes while any are pending.
+_DECODE_POLL_MS = 30
+
+# Height of the placeholder shown for an image that can't be read (a
+# missing or corrupt file) - enough for its one-line "could not preview"
+# label, rather than a full-height empty box.
+UNREADABLE_IMAGE_HEIGHT_PX = 60
 # Bounding box for an image preview at the default column width.
 THUMBNAIL_SIZE = (DEFAULT_IMAGE_COLUMN_WIDTH_PX, MAX_IMAGE_HEIGHT_PX)
 
@@ -147,12 +159,12 @@ def fitted_image_size(image_path: ImagePath, bounding_box: Tuple[int, int] = THU
         bounding_box: The (width, height) to fit within.
 
     Returns:
-        The fitted (width, height), or `bounding_box` itself if the file
-        can't be read.
+        The fitted (width, height), or a short strip the box's width (see
+        UNREADABLE_IMAGE_HEIGHT_PX) if the file can't be read.
     """
     original_size = _natural_size(str(image_path))
     if original_size is None:
-        return bounding_box
+        return bounding_box[0], min(UNREADABLE_IMAGE_HEIGHT_PX, bounding_box[1])
 
     return fit_to_box(original_size, bounding_box)
 
@@ -164,7 +176,7 @@ class ImageSlot:
     ImageLoader.update_visible), not from widget geometry.
     """
 
-    __slots__ = ("image_path", "label", "bounding_box", "loaded", "photo")
+    __slots__ = ("image_path", "label", "bounding_box", "loaded", "photo", "pending")
 
     def __init__(
         self, image_path: ImagePath, label: tk.Widget, bounding_box: Tuple[int, int] = THUMBNAIL_SIZE
@@ -174,6 +186,10 @@ class ImageSlot:
         self.bounding_box = bounding_box
         self.loaded = False
         self.photo: Optional[ImageTk.PhotoImage] = None
+        # The decode in flight for this slot, if any. A finished decode is
+        # only shown if it's still this slot's pending one - an unload or
+        # the row's teardown in the meantime makes it stale.
+        self.pending: Optional[Future] = None
 
 
 class ImageLoader:
@@ -182,10 +198,17 @@ class ImageLoader:
     RowBuilder registers each image as its row is built, and the row's
     images are unregistered when it's torn down. update_visible() loads or
     unloads a row's images together, by the row's position.
+
+    With a poll_widget, images are decoded on worker threads and shown once
+    ready, polled for with poll_widget.after; close() stops the workers.
+    Without one, they're decoded synchronously (for tests).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, poll_widget: Optional[tk.Misc] = None) -> None:
         self._slots: Dict[Tuple[int, int], ImageSlot] = {}
+        self._poll_widget = poll_widget
+        self._executor: Optional[ThreadPoolExecutor] = None
+        self._poll_job: Optional[str] = None
 
     def register(
         self,
@@ -201,7 +224,19 @@ class ImageLoader:
 
     def unregister_row(self, index: int) -> None:
         for key in [k for k in self._slots if k[0] == index]:
-            del self._slots[key]
+            self._cancel_pending(self._slots.pop(key))
+
+    def close(self) -> None:
+        """Stop decoding: drop pending work and stop polling. Call when
+        the review screen goes away."""
+        for slot in self._slots.values():
+            self._cancel_pending(slot)
+        if self._poll_job is not None and self._poll_widget is not None:
+            self._poll_widget.after_cancel(self._poll_job)
+            self._poll_job = None
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+            self._executor = None
 
     def update_visible(
         self,
@@ -243,22 +278,64 @@ class ImageLoader:
                 self._unload_image(slot)
 
     def _load_image(self, slot: ImageSlot) -> None:
+        # Marked loaded as soon as it's requested, so it isn't requested
+        # again while decoding, or retried every scroll if it can't be.
+        slot.loaded = True
+        if self._poll_widget is None:
+            future: Future = Future()
+            try:
+                future.set_result(load_display_image(slot.image_path, slot.bounding_box))
+            except Exception as exc:
+                future.set_exception(exc)
+            self._show_decoded(slot, future)
+            return
+
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(
+                max_workers=_DECODE_WORKERS, thread_name_prefix="image-decode"
+            )
+        slot.pending = self._executor.submit(load_display_image, slot.image_path, slot.bounding_box)
+        if self._poll_job is None:
+            self._poll_job = self._poll_widget.after(_DECODE_POLL_MS, self._poll_decodes)
+
+    def _poll_decodes(self) -> None:
+        """Show every finished decode, on the Tk thread; keep polling while
+        any are still running."""
+        self._poll_job = None
+        still_running = False
+        for slot in list(self._slots.values()):
+            future = slot.pending
+            if future is None:
+                continue
+            if future.done():
+                self._show_decoded(slot, future)
+            else:
+                still_running = True
+        if still_running and self._poll_widget is not None:
+            self._poll_job = self._poll_widget.after(_DECODE_POLL_MS, self._poll_decodes)
+
+    def _show_decoded(self, slot: ImageSlot, future: Future) -> None:
+        slot.pending = None
         try:
-            photo = ImageTk.PhotoImage(load_display_image(slot.image_path, slot.bounding_box))
+            photo = ImageTk.PhotoImage(future.result())
         except Exception:
             logger.warning(
                 "could not load image preview",
                 extra=logging_config.extra(image_path=str(slot.image_path)),
             )
-            slot.label.config(image="", text=f"(could not preview {slot.image_path.name})")
-            slot.loaded = True  # don't keep retrying a permanently-broken image every scroll
+            slot.label.config(image="", text=f"(could not preview {Path(slot.image_path).name})")
             return
 
         slot.photo = photo
         slot.label.config(image=photo, text="")
-        slot.loaded = True
+
+    def _cancel_pending(self, slot: ImageSlot) -> None:
+        if slot.pending is not None:
+            slot.pending.cancel()
+            slot.pending = None
 
     def _unload_image(self, slot: ImageSlot) -> None:
+        self._cancel_pending(slot)
         slot.label.config(image="", text="(scroll to load image)")
         slot.photo = None  # drop the reference so Tk/PIL can free the memory
         slot.loaded = False

@@ -264,7 +264,11 @@ would spread the invariants below across objects without removing any.
   image's height is its own aspect-preserving fit within
   `image_bounding_box(width)` (`fitted_image_size`, header-only), not the
   full bounding box, so a landscape image isn't letterboxed. The pixels are
-  decoded later, by `ImageLoader`, once the row is near the viewport. The
+  decoded later, by `ImageLoader`, once the row is near the viewport - on
+  worker threads, polled for from the Tk thread, which only turns the
+  finished image into a `PhotoImage`. A decode that finishes after its
+  image was unloaded or its row torn down is dropped. An unreadable image
+  gets a short fixed-height strip (`UNREADABLE_IMAGE_HEIGHT_PX`). The
   original-text label's height is read from its own `winfo_reqheight()`,
   valid as soon as it's configured.
 - **The column divider re-lays out through the rebuild path.**

@@ -2,6 +2,7 @@ import pytest
 
 from discord_transcription.chatlog import MessageEntry
 from discord_transcription.pipeline import (
+    check_output_path,
     parse_approved_user_ids,
     parse_start_date,
     render_items,
@@ -69,3 +70,31 @@ def test_render_items_joins_each_message_in_order(tmp_path):
     assert rendered.startswith("first message")
     assert "card text" in rendered
     assert rendered.index("first message") < rendered.index("card text")
+
+
+def test_check_output_path_accepts_a_new_file_in_an_existing_folder(tmp_path):
+    check_output_path(tmp_path / "out.txt")
+
+
+def test_check_output_path_accepts_an_existing_file(tmp_path):
+    output_path = tmp_path / "out.txt"
+    output_path.write_text("old", encoding="utf8")
+
+    check_output_path(output_path)
+
+
+def test_check_output_path_rejects_a_missing_folder(tmp_path):
+    with pytest.raises(ValueError, match="folder doesn't exist"):
+        check_output_path(tmp_path / "typo" / "out.txt")
+
+
+def test_check_output_path_rejects_a_folder_as_the_output(tmp_path):
+    with pytest.raises(ValueError, match="isn't a file"):
+        check_output_path(tmp_path)
+
+
+def test_check_output_path_rejects_an_unwritable_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr("discord_transcription.pipeline.os.access", lambda path, mode: False)
+
+    with pytest.raises(ValueError, match="isn't writable"):
+        check_output_path(tmp_path / "out.txt")

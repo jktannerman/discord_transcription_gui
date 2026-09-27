@@ -80,6 +80,30 @@ def test_finalize_run_copies_added_text_to_clipboard(tmp_path, clipboard):
     assert result.warnings == []
 
 
+def test_finalize_run_that_adds_nothing_copies_nothing(tmp_path, clipboard):
+    output_path = tmp_path / "out.txt"
+    previous = f"previous run's text\n\n\n{config.BREAK_MARKER}\n\n\n"
+    output_path.write_text(previous, encoding="utf8")
+
+    result = pipeline.finalize_run(output_path, _html(tmp_path), [], [])
+
+    assert result.just_added == ""
+    assert clipboard["text"] == ""
+
+
+def test_finalize_run_copies_all_added_text_even_if_it_contains_a_break_marker(
+    tmp_path, clipboard
+):
+    output_path = tmp_path / "out.txt"
+    output_path.write_text(f"old\n\n\n{config.BREAK_MARKER}\n\n\n", encoding="utf8")
+    text = f"before {config.BREAK_MARKER} after"
+
+    result = pipeline.finalize_run(output_path, _html(tmp_path), _items(tmp_path, text), [{}])
+
+    assert result.just_added.strip() == text
+    assert clipboard["text"] == result.just_added
+
+
 def test_finalize_run_records_run_date_from_html_mtime(tmp_path, clipboard):
     output_path = tmp_path / "out.txt"
 

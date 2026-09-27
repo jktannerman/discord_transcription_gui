@@ -328,6 +328,32 @@ def render_items(items: list[ReviewItem], edited_texts: list[dict[str, Optional[
     )
 
 
+def check_output_path(output_path: Path) -> None:
+    """Check finalize_run will be able to write to output_path.
+
+    Run when Start is clicked, so a bad output path is reported before the
+    review rather than at Finalize. finalize_run reads the existing file,
+    then writes its backup and a temporary file beside it, so the folder
+    must be writable too, not just the file.
+
+    Args:
+        output_path: The transcript file.
+
+    Raises:
+        ValueError: With a message ready to show the user.
+    """
+    folder = output_path.parent
+    if not folder.is_dir():
+        raise ValueError(f"The output file's folder doesn't exist: {folder}")
+    if not os.access(folder, os.W_OK):
+        raise ValueError(f"The output file's folder isn't writable: {folder}")
+    if output_path.exists():
+        if not output_path.is_file():
+            raise ValueError(f"The output path isn't a file: {output_path}")
+        if not os.access(output_path, os.R_OK | os.W_OK):
+            raise ValueError(f"The output file isn't readable and writable: {output_path}")
+
+
 def output_backup_path(output_path: Path) -> Path:
     """Where finalize_run keeps the output file's previous version.
 
@@ -397,7 +423,11 @@ def finalize_run(
 
     existing = output_path.read_text(encoding="utf8") if output_path.exists() else ""
     cleaned = cleanup.clean_transcript(existing, render_items(items, edited_texts))
-    just_added = cleaned.split(config.BREAK_MARKER)[-1]
+    # Taken by position, not by splitting on BREAK_MARKER: text containing
+    # the marker must not cut the copy short. A run that adds nothing ends
+    # up no longer than the existing content (clean_transcript also trims
+    # its trailing marker), and adds nothing.
+    just_added = cleaned[len(existing):] if len(cleaned) > len(existing) else ""
     # Read before the commit point, so a missing/unreadable chatlog aborts
     # cleanly rather than leaving a written output with no recorded date.
     end_time = os.path.getmtime(html_file_path)

@@ -23,6 +23,8 @@ dependencies = [
 dev = [
     "pytest>=8",
     "ruff>=0.6",
+    "mypy>=1.11",
+    "types-pyperclip",
 ]
 
 [project.scripts]
@@ -54,3 +56,12 @@ line-length = 120
 # Ruff's default rule set (pyflakes plus the pycodestyle errors that matter),
 # plus warnings; style-only rules can be added once the code is clean.
 select = ["E4", "E7", "E9", "F", "W"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["discord_transcription"]
+
+[[tool.mypy.overrides]]
+# No type information published for these.
+module = ["pytesseract", "win32clipboard"]
+ignore_missing_imports = true

@@ -157,6 +157,28 @@ def test_valid_approved_users_text_starts_with_parsed_author_ids(app):
     assert approved_author_ids == {"123456789012345678", "987654321098765432"}
 
 
+def test_output_folder_missing_sets_error_before_any_resume_prompt(app, tmp_path):
+    setup = _FakeSetupFrame(output_path=str(tmp_path / "typo" / "out.txt"))
+    with patch.object(main_window.state, "load_session", return_value={"html_path": "chat.html"}), \
+         patch.object(main_window.messagebox, "askyesnocancel") as ask:
+        begin_run_calls, resume_calls = _start(app, setup)
+
+    assert begin_run_calls == []
+    assert resume_calls == []
+    ask.assert_not_called()
+    assert "folder doesn't exist" in setup.errors[-1]
+
+
+def test_pending_session_accepted_resumes_with_the_setup_screens_output_path(app, tmp_path):
+    output_path = tmp_path / "corrected.txt"
+    setup = _FakeSetupFrame(output_path=str(output_path))
+    with patch.object(main_window.state, "load_session", return_value={"html_path": "chat.html"}):
+        _, resume_calls = _start(app, setup, resume_answer=True)
+
+    args, _ = resume_calls[0]
+    assert args[2] == output_path
+
+
 def test_pending_session_declined_clears_it_and_starts_a_fresh_run(app):
     setup = _FakeSetupFrame()
     with patch.object(main_window.state, "load_session", return_value={"html_path": "chat.html"}), \
@@ -266,6 +288,25 @@ def test_resume_session_forces_use_cache_true_when_saved_use_cache_missing(app, 
     assert len(begin_run_calls) == 1
     args, _ = begin_run_calls[0]
     assert args[0].use_cache is True
+
+
+def test_resume_session_uses_the_given_output_path_and_keeps_the_other_inputs(app, tmp_path):
+    session = {
+        "html_path": str(tmp_path / "chat.html"),
+        "image_folder": str(tmp_path / "images"),
+        "output_path": str(tmp_path / "typo" / "out.txt"),
+        "start_time": 0,
+        "approved_author_ids": None,
+    }
+    begin_run_calls = []
+    app._begin_run = lambda *a, **kw: begin_run_calls.append((a, kw))
+
+    app._resume_session("chat.html", session, tmp_path / "out.txt")
+
+    run = begin_run_calls[0][0][0]
+    assert run.output_path == tmp_path / "out.txt"
+    assert str(run.image_folder) == str(tmp_path / "images")
+    assert str(run.html_path) == str(tmp_path / "chat.html")
 
 
 def test_resume_session_discards_session_missing_other_required_fields(app, tmp_path):

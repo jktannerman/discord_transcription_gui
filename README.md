@@ -57,11 +57,16 @@ What's in scope for v1:
    resumed independently, without one evicting the other. The OCR cache is
    likewise kept per image folder rather than for only the most recent one,
    so switching between chatlogs never forces a re-OCR of a folder already
-   done. Clicking Start checks whether the chosen HTML file has a saved
+   done. Clicking Start first checks that the output file's folder exists
+   and is writable (and that the file itself, if it exists, can be read and
+   written), so a bad output path is caught before the review rather than
+   at Finalize. It then checks whether the chosen HTML file has a saved
    session and, if so, prompts to resume it - accepting re-runs that
    session's saved inputs (OCR cache permitting) straight through to the
    review screen, with every saved edit, the focused text box, and the
-   scroll position all restored. Declining discards that chatlog's saved
+   scroll position all restored. The output file is the exception: a
+   resumed session finalizes to the one currently on the setup screen, so
+   a wrong output path can be corrected without losing the session. Declining discards that chatlog's saved
    session outright (other chatlogs' saved sessions are unaffected).
 
    In addition, every text box that had a user edit when a run was Finalized
@@ -158,7 +163,10 @@ What's in scope for v1:
    automatically, rather than leaving keystrokes landing somewhere the user
    can't see. Images within the materialized window
    are additionally decoded/loaded lazily as you scroll near them (and
-   unloaded again once you scroll away). Nothing is written to disk while
+   unloaded again once you scroll away), on background threads, so a large
+   screenshot doesn't stall scrolling. An image that can't be read (e.g.
+   missing from the image folder) is shown as a short "could not preview"
+   strip rather than a full-height empty box. Nothing is written to disk while
    reviewing - but every edit, the focused text box, and the scroll position
    are autosaved to disk every 5 seconds, so closing the app at any point
    mid-review leaves a session that can be resumed from the setup screen's
@@ -305,7 +313,7 @@ What's in scope for v1:
    parsed at Finalize.
 
    Keyboard shortcuts on the review screen: **Ctrl+Backspace** deletes the
-   previous word; **Tab**/**Shift+Tab** move between text boxes in
+   previous word (or the selection, if there is one); **Tab**/**Shift+Tab** move between text boxes in
    transcript order (a message visits its message-text box first, if it
    has one, then one OCR box per attached image, in attachment order,
    matching their top-to-bottom order on screen, with a spacer box visited
@@ -594,7 +602,11 @@ the `.venv` above. pipx's app environment doesn't include them; to use it
 anyway, run pytest from a Python that has it, with the app environment's
 site-packages on `PYTHONPATH`.
 
-Lint with `python -m ruff check .` (configured in `pyproject.toml`).
+Lint with `python -m ruff check .` and type-check with `python -m mypy`
+(both configured in `pyproject.toml`, both in the `dev` extras). Ruff is
+clean; mypy still reports existing errors (mostly `Optional` state it
+can't see is set, and loosely typed tkinter/BeautifulSoup calls), so it
+isn't a pass/fail check yet.
 
 Run the default suite (use `py -3` instead of `python` on Windows):
 
@@ -612,9 +624,10 @@ and Explorer directly) are skipped on other platforms. The tests in
 
 Some tests build a real (if withdrawn) Tk window: all of
 `test_review_view.py`, `test_main_window_on_start.py`,
-`test_select_all.py` and `test_setup_view.py`, plus the `TestOnOcrDone`
+`test_select_all.py`, `test_setup_view.py` and
+`test_delete_word_backward.py`, plus the `TestOnOcrDone`
 tests in `test_main_window_ocr_error.py` and three tests each in
-`test_image_loading.py` and `test_image_context_menu.py` - 144 tests in
+`test_image_loading.py` and `test_image_context_menu.py` - 151 tests in
 all. Even a withdrawn window can briefly flash on screen, most noticeably
 on the very first `Tk()` call in a process (which also runs Tcl/Tk's
 one-time subsystem init), so these are marked `gui` (declared in
@@ -656,7 +669,8 @@ gets the most detailed treatment there.
   (no cross-page image cache); only the edited text itself is cached across
   a page being torn down and rebuilt.
 - Images load a moment after their row appears while scrolling, so an
-  image area can briefly show empty (lazy loading, by design).
+  image area can briefly show empty (lazy loading on background threads,
+  by design).
 - Only one generation of backup is kept per state file (`*.bak`), apart
   from sessions, whose last 3 end-of-session states are also kept in
   `session_backups.json`. A crash can still lose up to one autosave interval's

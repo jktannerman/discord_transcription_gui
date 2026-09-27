@@ -106,7 +106,7 @@ class ReviewFrame(ttk.Frame):
             after_reconcile=self._after_reconcile,
             on_width_change=lambda: self._divider.schedule_width_sync(),
         )
-        self._images = ImageLoader()
+        self._images = ImageLoader(poll_widget=self)
         self._boxes = SlotBoxes(
             items,
             log_event=self._rows.log_event,
@@ -184,6 +184,7 @@ class ReviewFrame(ttk.Frame):
             self.after_cancel(self._initial_position_job)
             self._initial_position_job = None
         self._divider.cancel_pending()
+        self._images.close()
         # Rows still built when the whole frame goes away never go through
         # destroy_row, so their pending spellcheck timers would otherwise
         # fire after their widgets are gone.

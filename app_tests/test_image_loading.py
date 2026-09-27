@@ -4,6 +4,8 @@ fitted_image_size's aspect-fit math and ImageLoader.update_visible's
 load/unload boundary decision are exactly the kind of off-by-one sizing
 logic that previously caused the review screen's scroll-jump bugs (see
 ARCHITECTURE.md) - this had no test coverage at all before."""
+import concurrent.futures
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -15,6 +17,7 @@ from discord_transcription.gui.image_loading import (
     MAX_IMAGE_ENLARGEMENT,
     MAX_IMAGE_HEIGHT_PX,
     THUMBNAIL_SIZE,
+    UNREADABLE_IMAGE_HEIGHT_PX,
     ImageLoader,
     fitted_image_size,
     image_bounding_box,
@@ -102,9 +105,9 @@ def test_fitted_image_size_preserves_aspect_ratio(landscape_image):
     assert abs((w / h) - original_ratio) < 0.02
 
 
-def test_fitted_image_size_unreadable_path_falls_back_to_bounding_box(tmp_path):
+def test_fitted_image_size_unreadable_path_is_a_short_strip_the_box_width(tmp_path):
     bogus = tmp_path / "does_not_exist.png"
-    assert fitted_image_size(bogus, bounding_box=(760, 950)) == (760, 950)
+    assert fitted_image_size(bogus, bounding_box=(760, 950)) == (760, UNREADABLE_IMAGE_HEIGHT_PX)
 
 
 # -- ImageLoader.update_visible's load/unload dispatch -----------------------
@@ -181,6 +184,149 @@ def test_update_visible_calls_log_event_for_each_load_and_unload():
     events = {event for event, _ in logged}
     assert "loading_image" in events
     assert "unloading_image" in events
+
+
+# -- ImageLoader decoding on worker threads --------------------------------
+#
+# A fake poll widget stands in for Tk's after(): each test runs the queued
+# poll itself, once the decode it's waiting on has finished.
+
+
+class _FakePollWidget:
+    def __init__(self):
+        self.jobs = {}
+        self._next = 0
+
+    def after(self, ms, callback):
+        self._next += 1
+        job = f"after#{self._next}"
+        self.jobs[job] = callback
+        return job
+
+    def after_cancel(self, job):
+        self.jobs.pop(job, None)
+
+    def run_jobs(self):
+        jobs, self.jobs = self.jobs, {}
+        for callback in jobs.values():
+            callback()
+
+
+class _FakeLabel:
+    def __init__(self):
+        self.config_calls = []
+
+    def config(self, **kwargs):
+        self.config_calls.append(kwargs)
+
+
+@pytest.fixture
+def async_loader(monkeypatch):
+    """An ImageLoader decoding on worker threads, with decoding gated by an
+    Event (so a test controls when it finishes) and PhotoImage faked (it
+    needs a Tk root)."""
+    import threading
+
+    from discord_transcription.gui import image_loading
+
+    release = threading.Event()
+
+    def fake_decode(path, bounding_box):
+        release.wait(timeout=5)
+        if "broken" in str(path):
+            raise OSError("cannot identify image file")
+        return f"decoded {path}"
+
+    monkeypatch.setattr(image_loading, "load_display_image", fake_decode)
+    monkeypatch.setattr(image_loading.ImageTk, "PhotoImage", lambda image: f"photo of {image}")
+    widget = _FakePollWidget()
+    loader = ImageLoader(poll_widget=widget)
+    yield loader, widget, release
+    release.set()
+    loader.close()
+
+
+def _finish(loader, widget, key):
+    concurrent.futures.wait([loader._slots[key].pending], timeout=5)
+    widget.run_jobs()
+
+
+def _show(loader):
+    loader.update_visible(lambda idx: 0, [100], visible_top=0, visible_bottom=100)
+
+
+def test_async_load_shows_the_image_only_once_decoded(async_loader):
+    loader, widget, release = async_loader
+    label = _FakeLabel()
+    loader.register(0, 0, "a.png", label)
+
+    _show(loader)
+    assert label.config_calls == []  # nothing decoded on the Tk thread
+    assert loader._slots[(0, 0)].loaded is True
+
+    release.set()
+    _finish(loader, widget, (0, 0))
+    assert label.config_calls == [{"image": "photo of decoded a.png", "text": ""}]
+    assert loader._slots[(0, 0)].photo == "photo of decoded a.png"
+    assert widget.jobs == {}  # polling stops once nothing is pending
+
+
+def test_async_decode_finishing_after_unload_is_not_shown(async_loader):
+    loader, widget, release = async_loader
+    label = _FakeLabel()
+    loader.register(0, 0, "a.png", label)
+    _show(loader)
+    future = loader._slots[(0, 0)].pending
+
+    loader.update_visible(lambda idx: 0, [100], visible_top=1000, visible_bottom=2000)
+    release.set()
+    if not future.cancelled():
+        future.result(timeout=5)
+    widget.run_jobs()
+
+    assert label.config_calls == [{"image": "", "text": "(scroll to load image)"}]
+    assert loader._slots[(0, 0)].photo is None
+
+
+def test_async_decode_finishing_after_the_row_is_torn_down_is_not_shown(async_loader):
+    loader, widget, release = async_loader
+    label = _FakeLabel()
+    loader.register(0, 0, "a.png", label)
+    _show(loader)
+    future = loader._slots[(0, 0)].pending
+
+    loader.unregister_row(0)
+    release.set()
+    if not future.cancelled():
+        future.result(timeout=5)
+    widget.run_jobs()
+
+    assert label.config_calls == []
+
+
+def test_async_decode_failure_shows_fallback_text(async_loader):
+    loader, widget, release = async_loader
+    label = _FakeLabel()
+    loader.register(0, 0, Path("broken.png"), label)
+    _show(loader)
+
+    release.set()
+    _finish(loader, widget, (0, 0))
+
+    assert label.config_calls == [{"image": "", "text": "(could not preview broken.png)"}]
+    assert loader._slots[(0, 0)].loaded is True  # not retried every scroll
+
+
+def test_close_stops_polling(async_loader):
+    loader, widget, release = async_loader
+    loader.register(0, 0, "a.png", _FakeLabel())
+    _show(loader)
+    assert widget.jobs
+
+    loader.close()
+
+    assert widget.jobs == {}
+    assert loader._slots[(0, 0)].pending is None
 
 
 # -- ImageLoader._load_image / _unload_image (real Tk widgets) --------------

@@ -80,7 +80,7 @@ State at the time of the review: the default test suite passed (335 passed,
   *Fix:* record run dates per chatlog (`state.path_key`) and update the
   field when the HTML path changes.
 
-- [ ] **A8. Resume ignores the setup screen** [code-read]
+- [x] **A8. Resume ignores the setup screen** [code-read] - fixed: `pipeline.check_output_path` runs when Start is clicked, before the resume prompt (folder exists and is writable; an existing file is a readable, writable file); a resumed session uses the setup screen's output path, and keeps its other saved inputs, since they decide which messages its edits belong to. Tests in `test_pipeline.py`, `test_main_window_on_start.py`
   `_resume_session` uses the session's saved output path, image folder,
   start date and users, whatever the setup screen shows. A mistyped output
   folder can only be fixed by creating that folder, or by declining the
@@ -88,15 +88,15 @@ State at the time of the review: the default test suite passed (335 passed,
   run, so this surfaces only at Finalize.
 
 - [ ] **A9. Smaller issues**
-  - [code-read] If a run adds no text, Finalize copies the *previous* run's
+  - [x] [code-read] (fixed: `just_added` is now the part of the cleaned output after the existing content; tests in `test_pipeline_finalize.py`) If a run adds no text, Finalize copies the *previous* run's
     text to the clipboard (`cleaned.split(BREAK_MARKER)[-1]` after the
     trailing marker is stripped). Text containing `[BREAK]` also truncates
     the clipboard copy.
-  - [code-read] A missing/unreadable image gets a full 950px-tall empty
+  - [x] [code-read] (fixed: `UNREADABLE_IMAGE_HEIGHT_PX` strip instead) A missing/unreadable image gets a full 950px-tall empty
     placeholder (`fitted_image_size` falls back to the bounding box).
-  - [code-read] Images are decoded and resized on the Tk thread inside
+  - [x] [code-read] (fixed: `ImageLoader` decodes on 2 worker threads, polled from the Tk thread; stale results dropped) Images are decoded and resized on the Tk thread inside
     `_reconcile`; large screenshots can stall scrolling.
-  - [code-read] Ctrl+Backspace ignores an active selection.
+  - [x] [code-read] (fixed: deletes the selection, like Backspace) Ctrl+Backspace ignores an active selection.
   - [check] With several images on one message, image N probably sits
     progressively higher than its OCR box: spacer boxes exist only in the
     right column, and right boxes are `TEXT_BOX_MARGIN_PX` taller.
@@ -191,7 +191,7 @@ State at the time of the review: the default test suite passed (335 passed,
 
 ## E. Compared with a professional project
 
-- [ ] **E1. Tooling:** no CI; ruff is configured but installed nowhere, so
+- [ ] **E1. Tooling:** (partly done: mypy added to the `dev` extras and configured in `pyproject.toml`; ruff and mypy run once - ruff's 2 findings, unused test variables, fixed; mypy reports ~70 errors, none a live bug: mostly `Optional` attributes set before use, tkinter's `Misc` widget type, BeautifulSoup's loose types, and Windows-only modules on Linux. CI still to do) no CI; ruff is configured but installed nowhere, so
   the lint never runs; no type checker despite mandatory type hints; no
   coverage. (Earlier D2.)
 - [ ] **E2. Tests:** gaps line up with the bugs - every chatlog test was one
@@ -213,9 +213,32 @@ State at the time of the review: the default test suite passed (335 passed,
 
 ## Suggested order
 
-1. ~~A1 + A2~~ (done).
-2. ~~A3 and A6~~ (done).
-3. ~~A7~~ (done); A4 deferred.
-4. ~~Section D~~ (done; A5 deferred).
-5. Longer jobs: ~~C5~~ (done), E1 (CI, ruff, a type checker). ~~B1~~ and
-   ~~B2~~ done.
+Done so far: ~~A1 + A2~~, ~~A3~~, ~~A6~~, ~~A7~~, ~~A8~~, ~~A9 clipboard~~,
+~~B1~~, ~~B2~~, ~~C5~~, ~~Section D~~. Deferred: A4, A5.
+
+Next, in order (revised 2026-09-27):
+
+1. ~~**A9, first item: the Finalize clipboard copy.**~~ (done) A run that adds nothing
+   copies the *previous* run's text, and `[BREAK]` in the new text cuts
+   the copy short. The only open issue that silently produces wrong
+   output. Small fix: take `just_added` from the rendered text rather than
+   splitting the combined file.
+2. ~~**A8: resume ignores the setup screen; paths aren't validated.**~~ (done) A
+   mistyped output folder only shows up at Finalize, after the whole
+   review. Check the output folder exists and is writable when Start is
+   clicked, and let a resumed session use the setup screen's current
+   output path. Small; do together with 1, since both protect the output
+   file and the user's edits.
+3. ~~**E1: tooling.**~~ (done, apart from CI and fixing mypy's findings) Add ruff and mypy to the `dev` extras and run them
+   once (as pytest is run, via the pipx env's site-packages on
+   `PYTHONPATH` - no project `.venv`). CI later.
+4. **A9, remaining items**: ~~the 950px placeholder for a missing image~~,
+   ~~Ctrl+Backspace ignoring a selection~~, ~~image decoding on the Tk
+   thread~~ (done); still open: (check on a real export first) multi-image
+   rows drifting out of line with their OCR boxes.
+5. **B3: typed box roles.** A medium refactor; fixes nothing by itself but
+   makes later review-screen changes safer.
+
+Lower priority: C3 (a perf gain only for very long transcripts), C1 (a
+theoretical hazard, no reported bug), C4 (cleanup only), C2 (stays open by
+design - the estimate has to stay Tk-free), E2-E5 (nice to have).
