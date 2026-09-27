@@ -42,14 +42,14 @@ State at the time of the review: the default test suite passed (335 passed,
   required. Exact per-message UTC time, no dependence on the postamble,
   the locale-dependent `TIMESTAMP_FORMAT`, DST, or minute rounding.
 
-- [ ] **A3. The `\b([A-Z]),` OCR correction damages ordinary text** [confirmed]
+- [x] **A3. The `\b([A-Z]),` OCR correction damages ordinary text** [confirmed] - fixed: rule is now `\b([A-HJ-Z]),`, with a comment; tests for both cases in `test_ocr_corrections.py`
   `"I, for one, agree."` becomes `"I. for one, agree."`, and
   `"Plan A, then B."` becomes `"Plan A. then B."`. The rule was meant for
   A/B/C lists, but `I,` is very common in chat. It also has no comment,
   though the README says the file's comments explain each rule.
   *Fix:* exclude `I` (e.g. `[A-HJ-Z]`) or require list-like context.
 
-- [ ] **A4. Empty messages add extra blank lines** [confirmed]
+- [ ] **A4. Empty messages add extra blank lines** [confirmed] - deferred: not an issue in practice for now
   A message with no text and no images (video, file or sticker only) still
   gets an empty "message" box plus its `spacer_end`, so the output has 7
   blank lines at that point instead of 3.
@@ -65,14 +65,14 @@ State at the time of the review: the default test suite passed (335 passed,
   *Fix:* strip leading/trailing apostrophes, use a Unicode letter class,
   and consider seeding British variants.
 
-- [ ] **A6. Autosave stops for good after one failure** [code-read]
+- [x] **A6. Autosave stops for good after one failure** [code-read] - fixed: always rescheduled, a warning shown once per run of failures, recovery logged. Also fixed: a failed final save on window close skipped `root.destroy()`, so the window couldn't be closed - it now asks whether to close anyway. Tests in `test_main_window_autosave.py`
   If `_snapshot_and_save` raises inside `App._run_autosave` (disk full,
   permissions), the `root.after` that schedules the next save is never
   reached. Autosave is off for the rest of the session, and only `app.log`
   says so.
   *Fix:* reschedule in a `finally`, and show the failure on screen.
 
-- [ ] **A7. The pre-filled start date ignores which chatlog is chosen** [code-read]
+- [x] **A7. The pre-filled start date ignores which chatlog is chosen** [code-read] - fixed: `run_dates.json` is now {chatlog: [dates]}; the setup screen pre-fills the chosen chatlog's date and updates it when the HTML path changes (empty if never finalized). The old shared list is assigned once to the most recently used chatlog. Tests in `test_state.py`, `test_pipeline_finalize.py`, `test_setup_view.py`
   `run_dates.json` is one global list, so the setup screen pre-fills the
   date of whichever chatlog was finalized last. The README explicitly
   supports alternating chatlogs; doing so gives a wrong start date (gaps or
@@ -212,8 +212,8 @@ State at the time of the review: the default test suite passed (335 passed,
 ## Suggested order
 
 1. ~~A1 + A2~~ (done).
-2. A3 (the `I,` rule) and A6 (autosave rescheduling + visible failure).
-3. A7 (per-chatlog run dates) and A4 (empty messages).
+2. ~~A3 and A6~~ (done).
+3. ~~A7~~ (done); A4 deferred.
 4. A5 (spellcheck word matching) and section D.
 5. Longer jobs: C5 (trim history from comments), B2 (session module), E1
    (CI, ruff, a type checker).

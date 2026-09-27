@@ -5,21 +5,58 @@ import pytest
 from discord_transcription import config, state
 
 
-def test_read_last_run_date_returns_none_when_no_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "RUN_DATE_FILE", tmp_path / "run_dates.json")
-
-    assert state.read_last_run_date() is None
+def test_read_last_run_date_returns_none_when_no_file(tmp_path):
+    assert state.read_last_run_date(tmp_path / "chat.html") is None
 
 
-def test_append_and_read_last_run_date(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "RUN_DATE_FILE", tmp_path / "run_dates.json")
+def test_append_and_read_last_run_date(tmp_path):
+    chat = tmp_path / "chat.html"
+    state.append_run_date(chat, "2024-01-01-00-00-00")
+    state.append_run_date(chat, "2024-02-01-00-00-00")
 
-    state.append_run_date("2024-01-01-00-00-00")
-    state.append_run_date("2024-02-01-00-00-00")
+    assert state.read_last_run_date(chat) == "2024-02-01-00-00-00"
 
-    assert state.read_last_run_date() == "2024-02-01-00-00-00"
+
+def test_run_dates_are_kept_per_chatlog(tmp_path):
+    chat_a, chat_b = tmp_path / "a.html", tmp_path / "b.html"
+    state.append_run_date(chat_a, "2024-01-01-00-00-00")
+    state.append_run_date(chat_b, "2024-03-01-00-00-00")
+    state.append_run_date(chat_a, "2024-02-01-00-00-00")
+
+    assert state.read_last_run_date(chat_a) == "2024-02-01-00-00-00"
+    assert state.read_last_run_date(chat_b) == "2024-03-01-00-00-00"
+    assert state.read_last_run_date(tmp_path / "never_run.html") is None
+
+
+def test_run_dates_are_shared_across_spellings_of_the_same_chatlog(tmp_path):
+    (tmp_path / "sub").mkdir()
+    state.append_run_date(tmp_path / "chat.html", "2024-01-01-00-00-00")
+    assert state.read_last_run_date(str(tmp_path / "sub" / ".." / "chat.html")) == "2024-01-01-00-00-00"
+
+
+def test_shared_run_date_log_is_assigned_to_the_most_recent_chatlog(tmp_path):
+    # The old format: one list shared by every chatlog.
+    config.RUN_DATE_FILE.write_text(
+        json.dumps({"format_version": 1, "data": ["2024-01-01-00-00-00", "2024-02-01-00-00-00"]}),
+        encoding="utf8",
+    )
+    state.add_recent_path("html_path", str(tmp_path / "older.html"))
+    state.add_recent_path("html_path", str(tmp_path / "latest.html"))
+
+    assert state.read_last_run_date(tmp_path / "latest.html") == "2024-02-01-00-00-00"
+    assert state.read_last_run_date(tmp_path / "older.html") is None
+    on_disk = json.loads(config.RUN_DATE_FILE.read_text(encoding="utf8"))["data"]
+    assert on_disk == {
+        state.path_key(tmp_path / "latest.html"): ["2024-01-01-00-00-00", "2024-02-01-00-00-00"]
+    }
+
+
+def test_shared_run_date_log_with_no_recent_chatlog_is_ignored(tmp_path):
+    config.RUN_DATE_FILE.write_text(json.dumps(["2024-01-01-00-00-00"]), encoding="utf8")
+    assert state.read_last_run_date(tmp_path / "chat.html") is None
+
+    state.append_run_date(tmp_path / "chat.html", "2024-05-01-00-00-00")
+    assert state.read_last_run_date(tmp_path / "chat.html") == "2024-05-01-00-00-00"
 
 
 def test_cache_round_trip(tmp_path, monkeypatch):
@@ -665,15 +702,19 @@ def test_ocr_cache_is_shared_across_spellings_of_the_same_folder(tmp_path):
     }
 
 
-def test_state_files_are_written_with_a_format_version():
-    state.append_run_date("2024-01-01-00-00-00")
+def test_state_files_are_written_with_a_format_version(tmp_path):
+    state.append_run_date(tmp_path / "chat.html", "2024-01-01-00-00-00")
     on_disk = json.loads(config.RUN_DATE_FILE.read_text(encoding="utf8"))
-    assert on_disk == {"format_version": state.STATE_FORMAT_VERSION, "data": ["2024-01-01-00-00-00"]}
+    assert on_disk == {
+        "format_version": state.STATE_FORMAT_VERSION,
+        "data": {state.path_key(tmp_path / "chat.html"): ["2024-01-01-00-00-00"]},
+    }
 
 
-def test_unversioned_state_files_are_still_read():
+def test_unversioned_state_files_are_still_read(tmp_path):
+    state.add_recent_path("html_path", str(tmp_path / "chat.html"))
     config.RUN_DATE_FILE.write_text(json.dumps(["2024-01-01-00-00-00"]), encoding="utf8")
-    assert state.read_last_run_date() == "2024-01-01-00-00-00"
+    assert state.read_last_run_date(tmp_path / "chat.html") == "2024-01-01-00-00-00"
 
 
 # -- image column width (per chatlog) -----------------------------------------

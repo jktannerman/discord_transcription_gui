@@ -1,3 +1,4 @@
+import datetime
 import json
 from pathlib import Path
 
@@ -82,10 +83,16 @@ def test_finalize_run_copies_added_text_to_clipboard(tmp_path, clipboard):
 def test_finalize_run_records_run_date_from_html_mtime(tmp_path, clipboard):
     output_path = tmp_path / "out.txt"
 
-    pipeline.finalize_run(output_path, _html(tmp_path), _items(tmp_path), [{}])
+    html_path = _html(tmp_path)
 
-    recorded_dates = json.loads(config.RUN_DATE_FILE.read_text(encoding="utf8"))["data"]
-    assert len(recorded_dates) == 1
+    pipeline.finalize_run(output_path, html_path, _items(tmp_path), [{}])
+
+    recorded = json.loads(config.RUN_DATE_FILE.read_text(encoding="utf8"))["data"]
+    assert list(recorded) == [pipeline.state.path_key(html_path)]
+    assert len(recorded[pipeline.state.path_key(html_path)]) == 1
+    assert pipeline.state.read_last_run_date(html_path) == datetime.datetime.fromtimestamp(
+        html_path.stat().st_mtime, tz=datetime.timezone.utc
+    ).strftime("%Y-%m-%d-%H-%M-%S")
 
 
 def test_finalize_run_leaves_past_runs_text_untouched(tmp_path, clipboard):
@@ -171,7 +178,7 @@ def test_finalize_run_reports_clipboard_failure_as_warning(tmp_path, monkeypatch
 
 
 def test_finalize_run_reports_run_date_failure_as_warning(tmp_path, clipboard, monkeypatch):
-    def failing_append(date_str):
+    def failing_append(html_path, date_str):
         raise OSError("read-only")
 
     monkeypatch.setattr(pipeline.state, "append_run_date", failing_append)

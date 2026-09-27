@@ -93,6 +93,16 @@ def test_default_corrections_fix_im_missing_apostrophe():
     assert apply_corrections("Im going home", corrections) == "I'm going home"
 
 
+def test_default_corrections_fix_list_label_comma():
+    corrections = load_corrections(config.OCR_CORRECTIONS_FILE)
+    assert apply_corrections("A, Go north", corrections) == "A. Go north"
+
+
+def test_default_corrections_leave_i_comma_alone():
+    corrections = load_corrections(config.OCR_CORRECTIONS_FILE)
+    assert apply_corrections("I, for one, agree.", corrections) == "I, for one, agree."
+
+
 def test_load_corrections_logs_the_full_rule_set(tmp_path, caplog):
     path = _write(tmp_path, "a\nb\n# comment\n\nc\nd\n")
     with caplog.at_level("INFO", logger="discord_transcription.ocr_corrections"):

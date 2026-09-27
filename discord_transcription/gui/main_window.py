@@ -333,6 +333,9 @@ class App:
         # than just a running item_count that can't show *which* edit
         # appeared, changed, or vanished.
         self._last_autosave_snapshot: dict[str, dict[str, Optional[str]]] = {}
+        # True from an autosave failure until the next successful save, so
+        # the user is warned once per run of failures (see _run_autosave).
+        self._autosave_failing = False
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.show_setup()
@@ -355,7 +358,20 @@ class App:
                     last_autosaved_count=len(self._last_autosave_snapshot),
                 ),
             )
-            self._snapshot_and_save(frame, tag="window_close")
+            try:
+                self._snapshot_and_save(frame, tag="window_close")
+            except Exception as exc:
+                # Left unhandled, this would also skip root.destroy(), so the
+                # window could never be closed while saving keeps failing.
+                logger.exception("final save on window close failed")
+                close_anyway = messagebox.askokcancel(
+                    "Couldn't save",
+                    f"Your latest review progress couldn't be saved:\n{exc}\n\n"
+                    "Close anyway? Edits since the last successful save will be lost.",
+                    icon="warning",
+                )
+                if not close_anyway:
+                    return
             self._cancel_autosave()
         self.root.destroy()
 
@@ -600,10 +616,30 @@ class App:
         review screen is up (see _start_autosave/_cancel_autosave), every
         config.AUTOSAVE_INTERVAL_MS, so closing the app at any point during
         review leaves a resumable session behind."""
-        frame = getattr(self, "_review_frame", None)
-        if frame is not None and frame.winfo_exists():
-            self._snapshot_and_save(frame, tag="autosave_tick")
-        self._autosave_job = self.root.after(config.AUTOSAVE_INTERVAL_MS, self._run_autosave)
+        try:
+            frame = getattr(self, "_review_frame", None)
+            if frame is not None and frame.winfo_exists():
+                self._snapshot_and_save(frame, tag="autosave_tick")
+        except Exception as exc:
+            logger.exception("autosave failed")
+            if not self._autosave_failing:
+                # Once per run of failures, not on every tick.
+                self._autosave_failing = True
+                messagebox.showwarning(
+                    "Autosave failed",
+                    f"Your review progress couldn't be saved:\n{exc}\n\n"
+                    "Autosave will keep retrying. Until it succeeds, edits "
+                    "since the last successful save would be lost if the app "
+                    "closed.",
+                )
+        else:
+            if self._autosave_failing:
+                self._autosave_failing = False
+                logger.info("autosave succeeded again after failing")
+        finally:
+            # Rescheduled whatever happened, so one failure can't stop
+            # autosave for the rest of the session.
+            self._autosave_job = self.root.after(config.AUTOSAVE_INTERVAL_MS, self._run_autosave)
 
     def _snapshot_and_save(self, frame: ReviewFrame, tag: str) -> None:
         """Snapshot `frame`'s current edits/focus/scroll position and write

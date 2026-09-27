@@ -38,7 +38,10 @@ What's in scope for v1:
    and the output `.txt` file, each a combo box pre-filled with the most
    recently used value and offering your last several picks as a dropdown
    (cached to disk per field, most-recent-first). The start date field is
-   pre-filled from the last recorded run, and is read as UTC. A "Re-run OCR
+   pre-filled with the chosen chatlog's last run-end date (the chatlog
+   file's modification time when that run was finalized), updating as you
+   pick a different chatlog - empty for one never finalized - and is read
+   as UTC. A "Re-run OCR
    on all images (ignore cache)" checkbox starts unticked; normally
    previously OCR'd images are reused from the cache and only new or
    changed ones are OCR'd, and ticking it forces every image in this run
@@ -163,7 +166,10 @@ What's in scope for v1:
    reviewing - but every edit, the focused text box, and the scroll position
    are autosaved to disk every 5 seconds, so closing the app at any point
    mid-review leaves a session that can be resumed from the setup screen's
-   prompt next launch (see "Setup screen" above).
+   prompt next launch (see "Setup screen" above). If a save fails (e.g. a
+   full disk), a warning is shown once and autosave keeps retrying; if the
+   final save on closing the window fails, you're asked whether to close
+   anyway.
 
    Every left column is the same width (so the image/label and
    text-box columns line up neatly across every row), but each image's

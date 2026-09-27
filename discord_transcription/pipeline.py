@@ -303,7 +303,7 @@ def finalize_run(
     Args:
         output_path: The transcript file to append to. Created if missing.
         html_file_path: The chatlog export; its mtime becomes the recorded
-            run-end date (the next run's default start date).
+            run-end date for that chatlog (its next run's default start date).
         items: The review items, in transcript order.
         edited_texts: One role->text dict per item (see render_items).
 
@@ -341,7 +341,7 @@ def finalize_run(
 
     end_date = datetime.datetime.fromtimestamp(end_time, tz=datetime.timezone.utc)
     try:
-        state.append_run_date(end_date.strftime("%Y-%m-%d-%H-%M-%S"))
+        state.append_run_date(html_file_path, end_date.strftime("%Y-%m-%d-%H-%M-%S"))
     except Exception as exc:
         logger.exception("could not record run date")
         result.warnings.append(

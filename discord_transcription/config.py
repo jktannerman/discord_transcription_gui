@@ -62,6 +62,8 @@ SPELLCHECK_WHITELIST_FILE = Path(__file__).resolve().parent / "spellcheck_whitel
 SPELLCHECK_BLACKLIST_FILE = Path(__file__).resolve().parent / "spellcheck_blacklist.txt"
 
 APP_DATA_DIR = Path.home() / ".discord_transcription_gui"
+# {html_path: [end date, ...]} - each chatlog's finalized run-end dates,
+# oldest first; the last one pre-fills that chatlog's next start date.
 RUN_DATE_FILE = APP_DATA_DIR / "run_dates.json"
 # {"version": 2, "folders": {image_folder: {image_name: entry}}} - see
 # state.load_cache for the entry shape. One entry per image folder, kept

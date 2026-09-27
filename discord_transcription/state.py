@@ -156,25 +156,72 @@ def _read_json_with_backup(path: Path) -> Any:
     return None
 
 
-def read_last_run_date() -> Optional[str]:
-    """Return the most recent recorded end date, or None if none recorded yet."""
-    dates = _read_json_with_backup(config.RUN_DATE_FILE)
-    if dates is None:
-        logger.info("no run-date file found, no previous run date")
-        return None
+def _run_dates_by_chatlog() -> dict[str, list[str]]:
+    """The run-date log, as {path_key(html_path): [end dates, oldest first]}.
 
-    last_date = dates[-1] if dates else None
-    logger.info("read last run date", extra=logging_config.extra(last_date=last_date))
+    The log used to be one list shared by every chatlog. Such a file is
+    converted once, on first read: its dates are assigned to the most
+    recently used chatlog (the setup screen's first recent HTML path), the
+    one they almost certainly came from, and the result is written back. If
+    there's no recent chatlog to assign them to, they're dropped (the
+    previous file stays in the .bak).
+    """
+    raw = _read_json_with_backup(config.RUN_DATE_FILE)
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list) and raw:
+        recent_html = load_recent_paths("html_path")
+        if recent_html:
+            migrated = {path_key(recent_html[0]): [str(d) for d in raw]}
+            _atomic_write_json(config.RUN_DATE_FILE, migrated)
+            logger.warning(
+                "converted the shared run-date log to per-chatlog; its dates "
+                "were assigned to the most recently used chatlog",
+                extra=logging_config.extra(html_path=recent_html[0], date_count=len(raw)),
+            )
+            return migrated
+        logger.warning(
+            "shared run-date log has no recent chatlog to assign its dates to; ignoring it",
+            extra=logging_config.extra(date_count=len(raw)),
+        )
+    return {}
+
+
+def read_last_run_date(html_path: StrPath) -> Optional[str]:
+    """The most recent recorded end date for one chatlog.
+
+    Args:
+        html_path: The chatlog export.
+
+    Returns:
+        The date ("YYYY-MM-DD-HH-MM-SS", UTC), or None if that chatlog has
+        never been finalized.
+    """
+    dates = _run_dates_by_chatlog().get(path_key(html_path))
+    last_date = dates[-1] if isinstance(dates, list) and dates else None
+    logger.info(
+        "read last run date",
+        extra=logging_config.extra(html_path=str(html_path), last_date=last_date),
+    )
     return last_date
 
 
-def append_run_date(date_str: str) -> None:
-    """Append a new end date to the run-date log."""
-    dates = _read_json_with_backup(config.RUN_DATE_FILE) or []
-    dates.append(date_str)
-    _atomic_write_json(config.RUN_DATE_FILE, dates)
+def append_run_date(html_path: StrPath, date_str: str) -> None:
+    """Record a new end date for one chatlog; other chatlogs' are kept.
 
-    logger.info("appended run date", extra=logging_config.extra(date=date_str))
+    Args:
+        html_path: The chatlog export the run was for.
+        date_str: The run's end date ("YYYY-MM-DD-HH-MM-SS", UTC).
+    """
+    dates_by_chatlog = _run_dates_by_chatlog()
+    key = path_key(html_path)
+    dates = dates_by_chatlog.get(key)
+    dates_by_chatlog[key] = (dates if isinstance(dates, list) else []) + [date_str]
+    _atomic_write_json(config.RUN_DATE_FILE, dates_by_chatlog)
+
+    logger.info(
+        "appended run date", extra=logging_config.extra(html_path=str(html_path), date=date_str)
+    )
 
 
 def load_recent_paths(field: str) -> list:

@@ -36,8 +36,11 @@ I
 C
 # Misread copyright symbol.
 
-\b([A-Z]),
+\b([A-HJ-Z]),
 \1.
+# A lone capital letter followed by a comma is usually a list label
+# ("A. ...", "B. ...") with its full stop misread as a comma. "I" is left
+# out, since "I, ..." is ordinary text.
 
 
 # try and keep the below alphabetical, for quick reference

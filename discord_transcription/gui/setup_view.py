@@ -31,7 +31,10 @@ class SetupFrame(ttk.Frame):
         self._html_path = tk.StringVar(value=_most_recent("html_path"))
         self._image_folder = tk.StringVar(value=initial_image_folder or _most_recent("image_folder"))
         self._output_path = tk.StringVar(value=_most_recent("output_path"))
-        self._start_date = tk.StringVar(value=state.read_last_run_date() or "")
+        self._start_date = tk.StringVar(value=self._last_run_date_for(self._html_path.get()))
+        # The start date belongs to the chatlog, so it follows the HTML path
+        # (picked, browsed or typed).
+        self._html_path.trace_add("write", lambda *_: self._on_html_path_changed())
         self._reocr_all = tk.BooleanVar(value=False)
 
         approved_users_state = state.read_approved_users_state()
@@ -136,6 +139,18 @@ class SetupFrame(ttk.Frame):
         )
         if path:
             self._output_path.set(path)
+
+    @staticmethod
+    def _last_run_date_for(html_path: str) -> str:
+        """The start date to pre-fill for a chatlog: its last run-end date,
+        or "" if it has none (or no chatlog is chosen)."""
+        html_path = html_path.strip()
+        if not html_path:
+            return ""
+        return state.read_last_run_date(html_path) or ""
+
+    def _on_html_path_changed(self) -> None:
+        self._start_date.set(self._last_run_date_for(self._html_path.get()))
 
     def _add_known_user(self) -> None:
         value = self._known_user_pick.get().strip()
