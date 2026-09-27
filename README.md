@@ -21,9 +21,9 @@ against a real Discord export (OCR pass, review screen, finalize).
 
 What's in scope for v1:
 - Tesseract is the only OCR backend, but it's called through a small
-  swappable interface (`app/ocr.py`) so an EasyOCR backend could be added
+  swappable interface (`discord_transcription/ocr.py`) so an EasyOCR backend could be added
   later without touching calling code.
-- Most config values are hardcoded constants in `app/config.py` (isolated
+- Most config values are hardcoded constants in `discord_transcription/config.py` (isolated
   there for an eventual settings screen, but not yet exposed in the UI). The
   approved-author list is the one exception - it's entered and cached from
   the setup screen, the same way the file/folder pickers are.
@@ -219,7 +219,7 @@ What's in scope for v1:
 
    On Windows these use the registry (default browser), Explorer and the
    Win32 clipboard. On Linux they use freedesktop.org standards instead
-   (`app/gui/desktop_linux.py`): `xdg-open` for Open Image, the browser
+   (`discord_transcription/gui/desktop_linux.py`): `xdg-open` for Open Image, the browser
    `xdg-settings` reports as default (launched from its `.desktop` entry)
    for the two browser actions, the `org.freedesktop.FileManager1` D-Bus
    interface for Open Image Location (falling back to opening the folder
@@ -258,10 +258,10 @@ What's in scope for v1:
    in a standard English dictionary is underlined in red, the same way a
    word processor flags one - checked shortly after you stop typing (not on
    every keystroke), against a small user-editable whitelist
-   (`app/spellcheck_whitelist.txt`, one word per line) for Discord
+   (`discord_transcription/spellcheck_whitelist.txt`, one word per line) for Discord
    usernames/slang that would otherwise be flagged every time, and skipping
    short words and ALL-CAPS acronyms to keep obvious false positives down.
-   A complementary user-editable blacklist (`app/spellcheck_blacklist.txt`,
+   A complementary user-editable blacklist (`discord_transcription/spellcheck_blacklist.txt`,
    same one-word-per-line format) does the opposite - it flags a word even
    though the dictionary considers it a real word, for real English words
    that keep turning out to be OCR misreads or typos for something else in
@@ -354,7 +354,7 @@ What's in scope for v1:
 
 ## OCR corrections
 
-`app/ocr_corrections.txt` is a user-editable, plain-text list of regex
+`discord_transcription/ocr_corrections.txt` is a user-editable, plain-text list of regex
 find/replace rules for common Tesseract misreads (e.g. a stray `|` instead
 of a capital `I`) - not Python code, so it can be tuned by hand without
 touching the app itself. Entries are blank-line-separated blocks of:
@@ -370,13 +370,13 @@ exactly once - right when it becomes that image's starting OCR-box content
 on the review screen - never to a box once you've edited it, and never to
 a message's own original text (which was never OCR'd in the first place).
 A missing or empty file just means no corrections run. See the comments
-in `app/ocr_corrections.txt` itself for the current rule set. Not yet
+in `discord_transcription/ocr_corrections.txt` itself for the current rule set. Not yet
 exposed in the GUI - per the "Known gaps" section below, that's deferred,
 same as the rest of `config.py`'s settings.
 
 ## Appearance
 
-The whole app uses a dark theme (`app/gui/theme.py`). On Windows,
+The whole app uses a dark theme (`discord_transcription/gui/theme.py`). On Windows,
 the title bar's dark mode is forced to repaint immediately on launch via a
 `SetWindowPos(SWP_FRAMECHANGED)` call, since `DwmSetWindowAttribute` alone left
 it light until the window was next resized.
@@ -385,7 +385,7 @@ it light until the window was next resized.
 
 ```
 gui_transcription/
-  app/
+  discord_transcription/
     main.py              # entry point
     config.py            # constants: paths, markers, default approved users
     state.py             # JSON run-date log, OCR cache, approved-users
@@ -473,7 +473,7 @@ gui_transcription/
   `sudo apt install python3-tk`.
 - **Tesseract OCR**, installed separately from the Python packages:
   - Windows: install it to the default location,
-    `C:\Program Files\Tesseract-OCR\`. `app/config.py` points pytesseract
+    `C:\Program Files\Tesseract-OCR\`. `discord_transcription/config.py` points pytesseract
     there directly, since the installer doesn't add it to PATH.
   - Linux: `sudo apt install tesseract-ocr`. It only needs to be on PATH.
 - **Linux only: a clipboard tool** for finalize's copy-to-clipboard step
@@ -500,14 +500,13 @@ discord-transcription-gui
 ```
 
 Install with `--editable`. The app reads `ocr_corrections.txt` and the
-spellcheck whitelist/blacklist from next to its source files, and
-`pyproject.toml` doesn't package those `.txt` files, so a normal
-(non-editable) install would leave them out. An editable install also means
-code and config changes take effect without reinstalling.
+spellcheck whitelist/blacklist from next to its source files, so with an
+editable install your edits to them (and to the code) take effect without
+reinstalling. A normal install also works, but it runs from a copy of those
+files inside pipx's environment, so edits in the repo wouldn't reach it.
 
 Don't `pip install` it into the system Python: most current distros mark it
-as externally managed (PEP 668), and the package installs a top-level module
-with the generic name `app`, which belongs in its own environment.
+as externally managed (PEP 668).
 
 To run it without installing, use a virtual environment inside
 `gui_transcription/`:
@@ -516,13 +515,13 @@ To run it without installing, use a virtual environment inside
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python -m app.main
+python -m discord_transcription.main
 ```
 
 ### Windows
 
-Install it as an editable package (once), which puts the `app` package on
-Python's path and adds a console-script entry point:
+Install it as an editable package (once), which puts the
+`discord_transcription` package on Python's path and adds a console-script entry point:
 
 ```powershell
 py -3 -m pip install -e gui_transcription
@@ -538,7 +537,7 @@ Without installing, it can also be run directly from inside `gui_transcription/`
 
 ```powershell
 py -3 -m pip install -r requirements.txt
-py -3 -m app.main
+py -3 -m discord_transcription.main
 ```
 
 Only one copy of the app can run at a time (it holds a lock on
@@ -555,31 +554,25 @@ changed for a single launch with an environment variable, e.g.
 `DISCORD_TRANSCRIPTION_LOG_LEVEL=DEBUG discord-transcription-gui` for
 per-image OCR detail. Only warnings and errors are printed to the terminal.
 The scroll trace's size budget (10MB x 3 backups), and a switch to turn it
-off entirely, are the `SCROLL_TRACE_*` settings in `app/config.py`.
+off entirely, are the `SCROLL_TRACE_*` settings in `discord_transcription/config.py`.
 
 ## Testing
 
-The tests import the package as `gui_transcription.app`, so run them from
-the directory that *contains* `gui_transcription/`, not from inside it. Use
-whichever Python environment has the requirements plus the `dev` extras
+Run the tests from inside `gui_transcription/` (running them from the folder
+above also works). `pyproject.toml` puts `gui_transcription/` on the path,
+so the tests import the package as `discord_transcription`, the same name
+the installed app uses. Use whichever Python environment has the requirements plus the `dev` extras
 (`pytest`, `ruff`) installed, e.g. `python -m pip install -e ".[dev]"` in
 the `.venv` above. pipx's app environment doesn't include them; to use it
 anyway, run pytest from a Python that has it, with the app environment's
 site-packages on `PYTHONPATH`.
 
-Lint with `python -m ruff check gui_transcription` (configured in
-`pyproject.toml`).
+Lint with `python -m ruff check .` (configured in `pyproject.toml`).
 
-Run the default suite:
+Run the default suite (use `py -3` instead of `python` on Windows):
 
 ```bash
-# Linux
-python -m pytest gui_transcription/app_tests -v
-```
-
-```powershell
-# Windows
-py -3 -m pytest gui_transcription\app_tests -v
+python -m pytest -v
 ```
 
 The tests for the Windows-only image context-menu actions in
@@ -611,19 +604,17 @@ never cleaned up.
 
 ```bash
 # Just the GUI tests
-python -m pytest gui_transcription/app_tests -v -m gui
+python -m pytest -v -m gui
 
 # Everything, GUI tests included
-python -m pytest gui_transcription/app_tests -v -m ""
+python -m pytest -v -m ""
 ```
-
-(On Windows, use `py -3` and `gui_transcription\app_tests` as above.)
 
 ### What's covered where
 
 See `docs/ARCHITECTURE_TESTING.md` for a breakdown of what each area of the
 app is tested for, and what's still only covered by manual smoke-testing. The
-review screen (`app/gui/review_view.py` and friends) is the most
+review screen (`discord_transcription/gui/review_view.py` and friends) is the most
 architecturally involved and historically bug-prone part of the app, so it
 gets the most detailed treatment there.
 

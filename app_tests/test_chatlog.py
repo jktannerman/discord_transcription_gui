@@ -4,7 +4,7 @@ from typing import Optional
 
 import pytest
 
-from gui_transcription.app.chatlog import parse_message_groups
+from discord_transcription.chatlog import parse_message_groups
 
 _EXAMPLE_INPUTS = Path(__file__).resolve().parent.parent / "example_inputs"
 

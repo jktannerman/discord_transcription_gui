@@ -1,7 +1,7 @@
-from gui_transcription.app.cleanup import clean_transcript
+from discord_transcription.cleanup import clean_transcript
 
 # The "|" -> "I" OCR-misread fix that used to be covered here moved to
-# ocr_corrections.py (see app/ocr_corrections.txt and
+# ocr_corrections.py (see discord_transcription/ocr_corrections.txt and
 # test_ocr_corrections.py) - it now runs per-image, before the user ever
 # sees the text, rather than over the whole output file at Finalize time.
 

@@ -14,9 +14,9 @@ from unittest.mock import patch
 import pytest
 import tkinter as tk
 
-from gui_transcription.app import pipeline
-from gui_transcription.app.gui import main_window
-from gui_transcription.app.gui.main_window import App, RunContext
+from discord_transcription import pipeline
+from discord_transcription.gui import main_window
+from discord_transcription.gui.main_window import App, RunContext
 
 
 def _run_context(tmp_path) -> RunContext:

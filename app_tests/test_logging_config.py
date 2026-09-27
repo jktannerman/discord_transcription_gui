@@ -3,12 +3,12 @@ import logging
 
 import pytest
 
-from gui_transcription.app import config, logging_config
+from discord_transcription import config, logging_config
 
 
 def _make_record(**extra_fields) -> logging.LogRecord:
     record = logging.LogRecord(
-        name="app.pipeline", level=logging.INFO, pathname=__file__, lineno=1,
+        name="discord_transcription.pipeline", level=logging.INFO, pathname=__file__, lineno=1,
         msg="something happened", args=(), exc_info=None,
     )
     if extra_fields:
@@ -20,7 +20,7 @@ def test_json_formatter_includes_core_fields():
     payload = json.loads(logging_config.JsonFormatter().format(_make_record()))
 
     assert payload["level"] == "INFO"
-    assert payload["logger"] == "app.pipeline"
+    assert payload["logger"] == "discord_transcription.pipeline"
     assert payload["message"] == "something happened"
     assert "timestamp" in payload
 
@@ -47,7 +47,7 @@ def test_json_formatter_includes_exc_info_when_present():
         import sys
 
         record = logging.LogRecord(
-            name="app.pipeline", level=logging.ERROR, pathname=__file__, lineno=1,
+            name="discord_transcription.pipeline", level=logging.ERROR, pathname=__file__, lineno=1,
             msg="failed", args=(), exc_info=sys.exc_info(),
         )
 
@@ -62,8 +62,8 @@ def test_get_logger_main_falls_back_to_app_logger():
 
 
 def test_get_logger_returns_logger_named_after_module():
-    logger = logging_config.get_logger("app.pipeline")
-    assert logger.name == "app.pipeline"
+    logger = logging_config.get_logger("discord_transcription.pipeline")
+    assert logger.name == "discord_transcription.pipeline"
 
 
 def test_extra_wraps_fields_under_extra_fields_key():

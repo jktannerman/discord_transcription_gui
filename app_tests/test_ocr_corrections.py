@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from gui_transcription.app import config
-from gui_transcription.app.ocr_corrections import apply_corrections, load_corrections
+from discord_transcription import config
+from discord_transcription.ocr_corrections import apply_corrections, load_corrections
 
 
 def _write(tmp_path: Path, content: str) -> Path:
@@ -76,7 +76,7 @@ def test_apply_corrections_supports_capture_groups(tmp_path):
 
 
 def test_default_corrections_file_loads_without_error():
-    # The real, user-editable app/ocr_corrections.txt - this just confirms
+    # The real, user-editable discord_transcription/ocr_corrections.txt - this just confirms
     # it stays well-formed as it's edited over time, not any particular
     # entry's content.
     corrections = load_corrections(config.OCR_CORRECTIONS_FILE)
@@ -95,7 +95,7 @@ def test_default_corrections_fix_im_missing_apostrophe():
 
 def test_load_corrections_logs_the_full_rule_set(tmp_path, caplog):
     path = _write(tmp_path, "a\nb\n# comment\n\nc\nd\n")
-    with caplog.at_level("INFO", logger="gui_transcription.app.ocr_corrections"):
+    with caplog.at_level("INFO", logger="discord_transcription.ocr_corrections"):
         load_corrections(path)
     records = [r for r in caplog.records if r.getMessage() == "loaded OCR corrections"]
     assert len(records) == 1
@@ -110,7 +110,7 @@ def test_load_corrections_logs_the_full_rule_set(tmp_path, caplog):
 
 def test_apply_corrections_logs_each_matching_substitution(tmp_path, caplog):
     corrections = load_corrections(_write(tmp_path, "\\b([A-Z]),\nfix(\\1)\n"))
-    with caplog.at_level("INFO", logger="gui_transcription.app.ocr_corrections"):
+    with caplog.at_level("INFO", logger="discord_transcription.ocr_corrections"):
         apply_corrections("X, Y,", corrections, context="some_image.png")
     records = [r for r in caplog.records if r.getMessage() == "OCR correction applied"]
     assert len(records) == 1
@@ -127,6 +127,6 @@ def test_apply_corrections_logs_each_matching_substitution(tmp_path, caplog):
 
 def test_apply_corrections_logs_nothing_when_no_match(tmp_path, caplog):
     corrections = load_corrections(_write(tmp_path, "zzz\nyyy\n"))
-    with caplog.at_level("INFO", logger="gui_transcription.app.ocr_corrections"):
+    with caplog.at_level("INFO", logger="discord_transcription.ocr_corrections"):
         apply_corrections("no match here", corrections)
     assert not [r for r in caplog.records if r.getMessage() == "OCR correction applied"]

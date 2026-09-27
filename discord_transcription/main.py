@@ -5,8 +5,8 @@ installed - see the README's "Running it" section):
     discord-transcription-gui
 
 Or, from inside gui_transcription/ without installing:
-    python -m app.main      (Linux)
-    py -3 -m app.main       (Windows)
+    python -m discord_transcription.main      (Linux)
+    py -3 -m discord_transcription.main       (Windows)
 """
 
 import tkinter as tk

@@ -114,7 +114,7 @@ def build_review_items(
     the last point in the pipeline where text is still guaranteed to be
     "freshly OCR'd" rather than possibly user-edited (see that module's
     docstring for why that distinction matters). `corrections` defaults to
-    loading app/ocr_corrections.txt; only overridden by tests that want to
+    loading discord_transcription/ocr_corrections.txt; only overridden by tests that want to
     check this step's wiring without depending on that file's actual
     (user-editable, expected-to-change) contents."""
     is_command = [_is_dice_command(entry) for entry in entries]

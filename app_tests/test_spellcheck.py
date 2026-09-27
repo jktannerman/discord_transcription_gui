@@ -4,7 +4,7 @@ the gui-marked tests in test_review_view.py, since it needs a real Text
 widget's tag_add/tag_ranges)."""
 import os
 
-from gui_transcription.app import config, spellcheck
+from discord_transcription import config, spellcheck
 
 
 def test_correctly_spelled_text_has_no_misspelled_spans():
@@ -67,7 +67,7 @@ def test_get_whitelist_reloads_after_the_file_changes(tmp_path, monkeypatch):
 
 
 def test_default_whitelist_file_parses_without_error(monkeypatch):
-    # The real, user-editable app/spellcheck_whitelist.txt - this just
+    # The real, user-editable discord_transcription/spellcheck_whitelist.txt - this just
     # confirms it stays well-formed as it's edited over time.
     monkeypatch.setattr(spellcheck, "_wordlists", {})
     words = spellcheck._get_whitelist(config.SPELLCHECK_WHITELIST_FILE)
@@ -121,7 +121,7 @@ def test_get_blacklist_reloads_after_the_file_changes(tmp_path, monkeypatch):
 
 
 def test_default_blacklist_file_parses_without_error(monkeypatch):
-    # The real, user-editable app/spellcheck_blacklist.txt - this just
+    # The real, user-editable discord_transcription/spellcheck_blacklist.txt - this just
     # confirms it stays well-formed as it's edited over time.
     monkeypatch.setattr(spellcheck, "_wordlists", {})
     words = spellcheck._get_blacklist(config.SPELLCHECK_BLACKLIST_FILE)

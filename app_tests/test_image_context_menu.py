@@ -24,10 +24,10 @@ import pytest
 import tkinter as tk
 from PIL import Image
 
-from gui_transcription.app.chatlog import MessageEntry
-from gui_transcription.app.gui.image_context_menu import ImageContextMenuMixin, _default_browser_command
-from gui_transcription.app.gui.review_view import ReviewFrame
-from gui_transcription.app.review_item import build_review_items
+from discord_transcription.chatlog import MessageEntry
+from discord_transcription.gui.image_context_menu import ImageContextMenuMixin, _default_browser_command
+from discord_transcription.gui.review_view import ReviewFrame
+from discord_transcription.review_item import build_review_items
 
 
 # -- _run_image_menu_action's success/failure logging ------------------------
@@ -46,7 +46,7 @@ not_windows = pytest.mark.skipif(sys.platform == "win32", reason="non-Windows ac
 def test_run_image_menu_action_logs_success_when_func_does_not_raise():
     stub = _MenuActionStub()
     calls = []
-    with patch("gui_transcription.app.gui.image_context_menu.logger") as mock_logger:
+    with patch("discord_transcription.gui.image_context_menu.logger") as mock_logger:
         stub._run_image_menu_action("open_in_browser", "fake.png", calls.append)
     assert calls == ["fake.png"]
     logged_events = [c.args[0] for c in mock_logger.info.call_args_list]
@@ -61,7 +61,7 @@ def test_run_image_menu_action_logs_failure_when_func_raises():
     def _boom(path):
         raise OSError("no")
 
-    with patch("gui_transcription.app.gui.image_context_menu.logger") as mock_logger:
+    with patch("discord_transcription.gui.image_context_menu.logger") as mock_logger:
         stub._run_image_menu_action("copy_image", "fake.png", _boom)
     logged_events = [c.args[0] for c in mock_logger.info.call_args_list]
     assert "image context menu action clicked" in logged_events
@@ -139,7 +139,7 @@ def test_open_image_uses_os_startfile(tmp_path):
     stub = _MenuActionStub()
     image_path = tmp_path / "shot.png"
     Image.new("RGB", (10, 10), color="blue").save(image_path)
-    with patch("gui_transcription.app.gui.image_context_menu.os") as mock_os:
+    with patch("discord_transcription.gui.image_context_menu.os") as mock_os:
         stub._open_image(image_path)
     (path_arg,), _ = mock_os.startfile.call_args
     assert str(image_path.resolve()) == path_arg
@@ -159,10 +159,10 @@ def test_open_image_in_browser_launches_the_registry_default_browser_with_the_fi
     firefox_command = r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url "%1"'
     with (
         patch(
-            "gui_transcription.app.gui.image_context_menu._default_browser_command",
+            "discord_transcription.gui.image_context_menu._default_browser_command",
             return_value=firefox_command,
         ),
-        patch("gui_transcription.app.gui.image_context_menu.subprocess") as mock_subprocess,
+        patch("discord_transcription.gui.image_context_menu.subprocess") as mock_subprocess,
     ):
         stub._open_image_in_browser(image_path)
     (command,), _ = mock_subprocess.Popen.call_args
@@ -178,7 +178,7 @@ def test_open_image_in_browser_raises_when_default_browser_cannot_be_determined(
     image_path = tmp_path / "shot.png"
     Image.new("RGB", (10, 10), color="blue").save(image_path)
     with patch(
-        "gui_transcription.app.gui.image_context_menu._default_browser_command",
+        "discord_transcription.gui.image_context_menu._default_browser_command",
         return_value=None,
     ):
         with pytest.raises(RuntimeError):
@@ -190,7 +190,7 @@ def test_open_image_location_selects_the_file_in_explorer(tmp_path):
     stub = _MenuActionStub()
     image_path = tmp_path / "shot.png"
     Image.new("RGB", (10, 10), color="blue").save(image_path)
-    with patch("gui_transcription.app.gui.image_context_menu.subprocess") as mock_subprocess:
+    with patch("discord_transcription.gui.image_context_menu.subprocess") as mock_subprocess:
         stub._open_image_location(image_path)
     args, _ = mock_subprocess.Popen.call_args
     command = args[0]
@@ -208,10 +208,10 @@ def test_open_chatlog_at_message_launches_default_browser_with_message_anchor(tm
     firefox_command = r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url "%1"'
     with (
         patch(
-            "gui_transcription.app.gui.image_context_menu._default_browser_command",
+            "discord_transcription.gui.image_context_menu._default_browser_command",
             return_value=firefox_command,
         ),
-        patch("gui_transcription.app.gui.image_context_menu.subprocess") as mock_subprocess,
+        patch("discord_transcription.gui.image_context_menu.subprocess") as mock_subprocess,
     ):
         stub._open_chatlog_at_message("1519374940359360783")
     (command,), _ = mock_subprocess.Popen.call_args
@@ -229,14 +229,14 @@ def test_open_chatlog_at_message_raises_when_default_browser_cannot_be_determine
     html_path.write_text("<html></html>", encoding="utf8")
     stub._html_path = html_path
     with patch(
-        "gui_transcription.app.gui.image_context_menu._default_browser_command",
+        "discord_transcription.gui.image_context_menu._default_browser_command",
         return_value=None,
     ):
         with pytest.raises(RuntimeError):
             stub._open_chatlog_at_message("1519374940359360783")
 
 
-_MODULE = "gui_transcription.app.gui.image_context_menu"
+_MODULE = "discord_transcription.gui.image_context_menu"
 
 
 @not_windows

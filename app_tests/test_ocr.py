@@ -1,6 +1,6 @@
 import pytest
 
-from gui_transcription.app import ocr
+from discord_transcription import ocr
 
 
 def test_transcribe_image_dispatches_to_named_backend(monkeypatch):

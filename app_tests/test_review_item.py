@@ -1,9 +1,9 @@
 import re
 from pathlib import Path
 
-from gui_transcription.app.chatlog import MessageEntry
-from gui_transcription.app.ocr_corrections import Correction
-from gui_transcription.app.review_item import build_review_items, lines_for_item
+from discord_transcription.chatlog import MessageEntry
+from discord_transcription.ocr_corrections import Correction
+from discord_transcription.review_item import build_review_items, lines_for_item
 
 
 def test_build_review_items_text_only_message():
@@ -42,7 +42,7 @@ def test_build_review_items_image_message_joins_paragraphs():
 def test_build_review_items_applies_corrections_to_ocr_text_only():
     """ocr_corrections.py's fixes are applied to each image's joined OCR
     text (build_review_items' corrections param, here overridden so this
-    doesn't depend on app/ocr_corrections.txt's actual, user-editable
+    doesn't depend on discord_transcription/ocr_corrections.txt's actual, user-editable
     contents) - but never to a message's own original text, which never
     went through OCR in the first place."""
     corrections = [Correction(re.compile(r"\bfoo\b"), "bar", "")]
@@ -60,7 +60,7 @@ def test_build_review_items_applies_multiple_corrections_in_order_across_images(
     earlier one produced), each running against the real raw OCR text
     (joined from Tesseract-style per-paragraph output) for every image on
     every message - not just the first image/message. Uses synthetic
-    rules unrelated to app/ocr_corrections.txt's actual contents, since
+    rules unrelated to discord_transcription/ocr_corrections.txt's actual contents, since
     this is only checking that corrections get applied at all, not
     verifying any particular real-world rule."""
     corrections = [

@@ -17,14 +17,14 @@ deepest coverage:
   of a long transcript, a far-away Tab/resume target materializing
   correctly, edits surviving a row being paged out and back in, and the
   Finalize button's visibility toggle.
-- Row-height estimation/visible-range math (`app/gui/virtualization.py`, the
+- Row-height estimation/visible-range math (`discord_transcription/gui/virtualization.py`, the
   part of the windowing logic pure enough to unit-test without a
   display) - including a row with multiple images estimating taller than
   one with a single image.
 - Slot-based keyboard navigation (`_move_focus` stepping through
   `(item_index, role)` slots in transcript order, message before one
   `"ocrN"` slot per attached image).
-- Undo-step grouping and the undo/redo stacks (`app/gui/edit_history.py`,
+- Undo-step grouping and the undo/redo stacks (`discord_transcription/gui/edit_history.py`,
   `test_edit_history.py`, no display needed): word boundaries, the pause
   rule, insert/delete switches, cursor jumps, paste/cut/standalone steps,
   redo clearing, and the history cap.
@@ -64,10 +64,10 @@ deepest coverage:
   spacer box never having the tag configured at all, the tag being
   recomputed after a row is paged out and rebuilt onto a fresh widget, and a
   torn-down row's pending debounce timer actually getting cancelled).
-- Image preview sizing/visibility (`app/gui/image_loading.py`'s aspect-fit
+- Image preview sizing/visibility (`discord_transcription/gui/image_loading.py`'s aspect-fit
   math and its load/unload viewport-boundary decision, plus real
   load/failure/unload behavior against actual Tk widgets).
-- The right-click image context menu (`app/gui/image_context_menu.py`,
+- The right-click image context menu (`discord_transcription/gui/image_context_menu.py`,
   `test_image_context_menu.py`): each action's success/failure logging;
   `_open_image`/`_open_image_in_browser`/`_open_image_location`/
   `_open_chatlog_at_message`/`_copy_image_to_clipboard` themselves (mocking
@@ -164,7 +164,7 @@ deepest coverage:
   both kept per-chatlog/per-folder indefinitely rather than as a single
   global slot, and recent-path history.
 - The atomic-write-plus-backup-rotation/recovery behavior of every state
-  file (`app/state.py`).
+  file (`discord_transcription/state.py`).
 - The JSON log formatter.
 - Start-date validation.
 

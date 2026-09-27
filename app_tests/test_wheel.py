@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from gui_transcription.app.gui.wheel import is_horizontal, wheel_delta
+from discord_transcription.gui.wheel import is_horizontal, wheel_delta
 
 SHIFT = 0x1
 

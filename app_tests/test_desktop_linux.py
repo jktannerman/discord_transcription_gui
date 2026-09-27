@@ -4,9 +4,9 @@ from unittest.mock import patch
 
 import pytest
 
-from gui_transcription.app.gui import desktop_linux
+from discord_transcription.gui import desktop_linux
 
-_MODULE = "gui_transcription.app.gui.desktop_linux"
+_MODULE = "discord_transcription.gui.desktop_linux"
 
 
 @pytest.mark.parametrize(

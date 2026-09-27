@@ -7,8 +7,8 @@ methods only reach into self._canvas.winfo_height() and
 self.winfo_screenheight() - no real Tk widgets needed."""
 from types import SimpleNamespace
 
-from gui_transcription.app.gui.layout_constants import TEXT_BOX_MARGIN_PX
-from gui_transcription.app.gui.row_building import (
+from discord_transcription.gui.layout_constants import TEXT_BOX_MARGIN_PX
+from discord_transcription.gui.row_building import (
     TEXT_BOX_MAX_HEIGHT_FRACTION,
     RowBuildingMixin,
 )

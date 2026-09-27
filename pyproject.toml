@@ -26,16 +26,25 @@ dev = [
 ]
 
 [project.scripts]
-discord-transcription-gui = "app.main:main"
+discord-transcription-gui = "discord_transcription.main:main"
 
 [tool.setuptools]
-packages = ["app", "app.gui"]
+packages = ["discord_transcription", "discord_transcription.gui"]
+
+[tool.setuptools.package-data]
+# User-editable OCR corrections and spellcheck word lists, read from next to
+# the source (see config.py) - packaged so a non-editable install has them too.
+discord_transcription = ["*.txt"]
 
 [tool.pytest.ini_options]
 markers = [
     "gui: opens a real (non-withdrawn) Tk window to test real layout/geometry - briefly visible on screen, so excluded by default; run with `-m gui` (or `-m \"\"` for the whole suite including these).",
 ]
 addopts = "-m \"not gui\""
+# Puts this folder on sys.path, so the tests import the package as
+# `discord_transcription` - the same name the installed app uses.
+pythonpath = ["."]
+testpaths = ["app_tests"]
 
 [tool.ruff]
 target-version = "py312"

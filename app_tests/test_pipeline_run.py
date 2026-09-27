@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-from gui_transcription.app import config, ocr, pipeline, state
-from gui_transcription.app.chatlog import MessageEntry
+from discord_transcription import config, ocr, pipeline, state
+from discord_transcription.chatlog import MessageEntry
 
 
 @pytest.fixture

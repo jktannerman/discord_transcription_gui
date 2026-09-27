@@ -10,11 +10,11 @@ from unittest.mock import patch
 import pytest
 import tkinter as tk
 
-from gui_transcription.app import config
-from gui_transcription.app.chatlog import MessageEntry
-from gui_transcription.app.gui import main_window
-from gui_transcription.app.gui.main_window import App, RunContext
-from gui_transcription.app.review_item import ReviewItem
+from discord_transcription import config
+from discord_transcription.chatlog import MessageEntry
+from discord_transcription.gui import main_window
+from discord_transcription.gui.main_window import App, RunContext
+from discord_transcription.review_item import ReviewItem
 
 # Every test here builds a real App (and so a real Tk root) - excluded from
 # the default run (see pyproject.toml's addopts) since the brief window it

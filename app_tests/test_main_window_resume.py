@@ -1,14 +1,14 @@
 from pathlib import Path
 
-from gui_transcription.app.chatlog import MessageEntry
-from gui_transcription.app.gui.main_window import (
+from discord_transcription.chatlog import MessageEntry
+from discord_transcription.gui.main_window import (
     _build_finalized_updates,
     _match_finalized_edits,
     _match_focus_slot,
     _match_saved_edits,
     _match_touched_slots,
 )
-from gui_transcription.app.review_item import ReviewItem
+from discord_transcription.review_item import ReviewItem
 
 
 def _item(message_id: str) -> ReviewItem:

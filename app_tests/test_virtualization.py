@@ -1,20 +1,20 @@
 from pathlib import Path
 
-from gui_transcription.app.chatlog import MessageEntry
-from gui_transcription.app.gui.layout_constants import (
+from discord_transcription.chatlog import MessageEntry
+from discord_transcription.gui.layout_constants import (
     GAP_BETWEEN_STACKED_PX,
     ROW_FRAME_OVERHEAD_PX,
     ROW_PACK_PADY_PX,
     TEXT_BOX_MARGIN_PX,
 )
-from gui_transcription.app.gui.virtualization import (
+from discord_transcription.gui.virtualization import (
     DEFAULT_TEXT_METRICS,
     TextMetrics,
     _estimate_message_text_height,
     compute_visible_range,
     estimate_row_height,
 )
-from gui_transcription.app.review_item import ReviewItem
+from discord_transcription.review_item import ReviewItem
 
 
 def test_estimate_row_height_image_item_is_positive():

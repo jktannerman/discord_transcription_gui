@@ -2,7 +2,7 @@
 
 Part of [ARCHITECTURE.md](ARCHITECTURE.md).
 
-Every module logs through `app/logging_config.py`, which writes single-line
+Every module logs through `discord_transcription/logging_config.py`, which writes single-line
 JSON records to a rotating log file at
 `~/.discord_transcription_gui/app.log` (2MB x 3 backups) - `~` is Python's
 `Path.home()`, so this is `C:\Users\<you>\.discord_transcription_gui\app.log`

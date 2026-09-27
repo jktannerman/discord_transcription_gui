@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from gui_transcription.app import config, state
+from discord_transcription import config, state
 
 
 def test_read_last_run_date_returns_none_when_no_file(tmp_path, monkeypatch):

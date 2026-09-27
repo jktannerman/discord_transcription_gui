@@ -9,7 +9,7 @@ hook logs through the app's own logger with the exception attached, rather
 than needing a real Tk mainloop to exercise."""
 import logging
 
-from gui_transcription.app.main import _log_tk_callback_exception
+from discord_transcription.main import _log_tk_callback_exception
 
 
 def test_uncaught_tk_callback_exception_is_logged_with_traceback(caplog):

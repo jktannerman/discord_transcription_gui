@@ -17,11 +17,11 @@ from typing import Any, Optional
 
 from . import config
 
-# "app" is the package's one registered name (see pyproject.toml) - every
-# module's __name__ is "app.something", so this is always their common
+# The package's name - every module's __name__ is
+# "discord_transcription.something", so this is always their common
 # ancestor logger.
-LOGGER_NAME = "app"
-# Deliberately NOT a child of LOGGER_NAME (e.g. "app.scroll_trace") - it gets
+LOGGER_NAME = "discord_transcription"
+# Deliberately NOT a child of LOGGER_NAME (e.g. "discord_transcription.scroll_trace") - it gets
 # its own handlers/file (see setup_logging) and must not also propagate up
 # into LOGGER_NAME's handlers, which would defeat the point of splitting it
 # out from app.log in the first place.
@@ -134,18 +134,18 @@ def get_trace_logger() -> logging.Logger:
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Return a logger for a module under the 'app' package.
+    """Return a logger for a module under the discord_transcription package.
 
     Pass the module's ``__name__`` - since every module already lives under
-    the ``app`` package, its dotted name is already a child of the
+    the ``discord_transcription`` package, its dotted name is already a child of the
     ``LOGGER_NAME`` logger configured in setup_logging(), so no extra
     prefixing is needed (and would double it up).
 
     The one exception is main.py: if it's run directly with
-    `python -m app.main` (rather than via the installed console-script entry
+    `python -m discord_transcription.main` (rather than via the installed console-script entry
     point, which imports it as a normal module), Python sets *that* one
-    module's ``__name__`` to ``"__main__"`` rather than ``"app.main"`` - a
-    logger built from it would have no relation to the 'app' logger tree
+    module's ``__name__`` to ``"__main__"`` rather than ``"discord_transcription.main"`` - a
+    logger built from it would have no relation to the package's logger tree
     that setup_logging() attaches handlers to, and its records would
     silently vanish into the unconfigured root logger instead of reaching
     the file/console handlers. Fall back to LOGGER_NAME so it's still a

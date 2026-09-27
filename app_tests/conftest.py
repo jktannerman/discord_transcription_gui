@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from gui_transcription.app import config
+from discord_transcription import config
 
 
 @pytest.fixture(autouse=True)

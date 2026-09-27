@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from gui_transcription.app import config, pipeline
-from gui_transcription.app.chatlog import MessageEntry
-from gui_transcription.app.review_item import build_review_items
+from discord_transcription import config, pipeline
+from discord_transcription.chatlog import MessageEntry
+from discord_transcription.review_item import build_review_items
 
 
 def _items(tmp_path: Path, text: str = "new content here"):

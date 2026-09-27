@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 import tkinter as tk
 
-from gui_transcription.app.gui.setup_view import SetupFrame
+from discord_transcription.gui.setup_view import SetupFrame
 
 # Builds a real (withdrawn) Tk root - see pyproject.toml's `gui` marker.
 pytestmark = pytest.mark.gui

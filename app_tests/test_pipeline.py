@@ -1,12 +1,12 @@
 import pytest
 
-from gui_transcription.app.chatlog import MessageEntry
-from gui_transcription.app.pipeline import (
+from discord_transcription.chatlog import MessageEntry
+from discord_transcription.pipeline import (
     parse_approved_user_ids,
     parse_start_date,
     render_items,
 )
-from gui_transcription.app.review_item import build_review_items
+from discord_transcription.review_item import build_review_items
 
 
 def test_parse_start_date_valid():

@@ -17,11 +17,11 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from gui_transcription.app.chatlog import MessageEntry
-from gui_transcription.app.gui.layout_constants import ROW_PACK_PADY_PX
-from gui_transcription.app.gui.review_view import ReviewFrame
-from gui_transcription.app.gui.virtualization import estimate_row_height
-from gui_transcription.app.review_item import ReviewItem, build_review_items
+from discord_transcription.chatlog import MessageEntry
+from discord_transcription.gui.layout_constants import ROW_PACK_PADY_PX
+from discord_transcription.gui.review_view import ReviewFrame
+from discord_transcription.gui.virtualization import estimate_row_height
+from discord_transcription.review_item import ReviewItem, build_review_items
 
 # Unlike the other GUI-backed test files, this one can't withdraw() its
 # root - a withdrawn window never gets real pixel geometry, which these

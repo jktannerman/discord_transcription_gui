@@ -155,7 +155,7 @@ How sure each finding is:
   the live widgets. Separately, `App` reaches into the frame's private
   `_materialized_range`.
 
-- [ ] **B3. Fragile row-height estimation and correction**
+- [x] **B3. Fragile row-height estimation and correction** - fixed: text sizes measured once from the real font and widgets (`row_building.measure_text_metrics` -> `TextMetrics`), feeding `estimate_row_height` and the spacer box height (spacer boxes were clipped: 30px fixed vs 40px needed). Consolas kept: Tk substitutes a monospace font. The settle/correction step is unchanged (it's about widget mapping, not fonts)
   `virtualization.estimate_row_height` uses hardcoded pixel constants
   (`~7px/char`, `18px` line, `SPACER_BOX_HEIGHT_PX = 30`) and assumes the
   `Consolas` font, which doesn't exist on Linux. Rows are then measured again
@@ -247,7 +247,7 @@ How sure each finding is:
   `pyproject.toml` as the single source, with a `[project.optional-dependencies] dev`
   group.
 
-- [ ] **D4. Packaging**
+- [x] **D4. Packaging** - fixed: package renamed `app` -> `discord_transcription` (entry point, logger name, docs); the `.txt` files stay in source and are declared as package-data; pytest's `pythonpath` puts `gui_transcription/` on the path, so tests import `discord_transcription` like the app does. The data folder (`~/.discord_transcription_gui`) is unchanged
   - The top-level package is named `app`, which is very generic.
   - The user-editable `.txt` files aren't package data, so only an editable
     install works.
@@ -358,21 +358,17 @@ How sure each finding is:
 
 ## Suggested order
 
-Everything in A, and B1/B2, is done. What's left, quick wins first:
+Everything in A, and B1/B2/B3, is done. What's left, quick wins first:
 
 1. D1: skip the `example_inputs/` test when the file is missing, so the
    suite is fully green on Linux.
 2. D3: make `pyproject.toml` the only place dependencies are listed.
-3. B3: base row-height estimates on real font metrics, with a font that
-   exists on each platform (`Consolas` isn't on Linux).
-4. E6 + D5 together: trim change-history out of comments and move
+3. E6 + D5 together: trim change-history out of comments and move
    docstrings to Google style, one module at a time. Needs a decision on
    how far to go.
-5. D2: CI, coverage, and actually running ruff. Needs a decision on where
+4. D2: CI, coverage, and actually running ruff. Needs a decision on where
    CI runs.
-6. D4: rename the `app` package and sort out the `.txt` data files (the
-   biggest remaining change; touches every import).
-7. C3: split the state files per chatlog/folder, or move to SQLite. Only
+5. C3: split the state files per chatlog/folder, or move to SQLite. Only
    worth it if saves start to feel slow.
 
 Needs checking or a decision first, no fixed slot:

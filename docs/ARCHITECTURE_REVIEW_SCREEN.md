@@ -4,13 +4,13 @@ Part of [ARCHITECTURE.md](ARCHITECTURE.md) - see there for the general
 testing heuristic this codebase follows, and for links to the other topic
 docs (row geometry, spacer slots, testing, logging).
 
-The review screen (`app/gui/review_view.py`) is the most architecturally
+The review screen (`discord_transcription/gui/review_view.py`) is the most architecturally
 involved part of this app. Its module docstring is the canonical explanation
 and worth reading in full before changing it; this is just enough to orient
 a new contributor.
 
 Building a single row's widgets (`_build_row` and the label/image-placeholder/
-editable-text-box helpers it calls) lives in `app/gui/row_building.py`'s
+editable-text-box helpers it calls) lives in `discord_transcription/gui/row_building.py`'s
 `RowBuildingMixin`, mixed into `ReviewFrame` the same way `keyboard_nav.py`'s
 `KeyboardNavMixin` already is - it doesn't carry the same "disagreed with
 itself across files" risk the windowing core below does, since each row's
@@ -27,7 +27,7 @@ plus the scroll/debounce/Finalize-button machinery:
   with no scroll movement is a no-op). That idempotency is deliberate - an
   earlier, stateful "step the window forward/backward" design could fall
   into a self-sustaining oscillation loop; see the module docstring for the
-  full story. Pure layout math lives in `app/gui/virtualization.py` so it's
+  full story. Pure layout math lives in `discord_transcription/gui/virtualization.py` so it's
   testable without a display.
 - **Nothing may repaint while the materialized block is out of place.**
   All built rows are packed into one frame, positioned on the canvas at
@@ -170,7 +170,7 @@ plus the scroll/debounce/Finalize-button machinery:
   `GAP_BETWEEN_STACKED_PX`) and takes the taller of the two, rather than a
   flat constant. The margin/gap/row-overhead constants both sides need
   (`TEXT_BOX_MARGIN_PX`, `GAP_BETWEEN_STACKED_PX`, `ROW_FRAME_OVERHEAD_PX`)
-  live in their own Tk-free `app/gui/layout_constants.py` module that both
+  live in their own Tk-free `discord_transcription/gui/layout_constants.py` module that both
   `row_building.py` (the real layout) and `virtualization.py` (the estimate)
   import - replacing an earlier design where each side hardcoded its own
   copy of the same numbers "kept in sync by hand," which is exactly the kind
@@ -208,8 +208,8 @@ plus the scroll/debounce/Finalize-button machinery:
   frame rather than clearing it, so it's never actually `None` by the time
   the guard runs. The cursor isn't part of the autosaved session format, so
   a resumed box's cursor still starts at `"1.0"`.
-- **The per-box model lives outside the widgets.** (`app/gui/slot_state.py`,
-  `app/gui/slot_view.py`, `app/gui/edit_history.py`.) Each editable box has
+- **The per-box model lives outside the widgets.** (`discord_transcription/gui/slot_state.py`,
+  `discord_transcription/gui/slot_view.py`, `discord_transcription/gui/edit_history.py`.) Each editable box has
   two halves, both keyed by `(item_index, role)`:
   - `self._slot_states` holds one `SlotState` per box, built eagerly in
     `ReviewFrame.__init__` for every slot: its default text, current text,
@@ -269,7 +269,7 @@ plus the scroll/debounce/Finalize-button machinery:
   and skipped instead of aborting the rest of the reconcile batch).
   `main.py`'s `root.report_callback_exception` also still routes any
   uncaught Tk-callback exception into `app.log`.
-- **Spellcheck tagging.** (`app/spellcheck.py`, wired in via
+- **Spellcheck tagging.** (`discord_transcription/spellcheck.py`, wired in via
   `row_building.RowBuildingMixin._configure_spellcheck_tag`/
   `_schedule_spellcheck`/`_run_spellcheck`.) A misspelled word is underlined
   in red via a plain Tk text tag (`tag_configure("misspelled",
@@ -341,11 +341,11 @@ plus the scroll/debounce/Finalize-button machinery:
   resume's saved focus position addresses a box by - a plain item index
   couldn't disambiguate which of a row's boxes to refocus. `ImageLoader`
   mirrors this with its own `(item_index, image_index)`-keyed slots (see
-  `app/gui/image_loading.py`), since a row can likewise now load/unload more
+  `discord_transcription/gui/image_loading.py`), since a row can likewise now load/unload more
   than one image.
 - **Per-row left-column sizing.** (`row_building.RowBuildingMixin`.) Every
   row's left column is the same fixed width (`THUMBNAIL_SIZE[0]` in
-  `app/gui/image_loading.py`), whether it holds an image, the immutable
+  `discord_transcription/gui/image_loading.py`), whether it holds an image, the immutable
   original-text label, or both stacked text-above-image - so every row's
   column pairs line up neatly across the whole transcript. An image's height
   is its own aspect-preserving fit within `THUMBNAIL_SIZE`

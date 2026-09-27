@@ -8,11 +8,11 @@ doc for the rest.
 ## Topic docs
 
 - **[ARCHITECTURE_REVIEW_SCREEN.md](ARCHITECTURE_REVIEW_SCREEN.md)** - the
-  review screen's internals (`app/gui/review_view.py` and friends): row
+  review screen's internals (`discord_transcription/gui/review_view.py` and friends): row
   virtualization, focus/scroll correction, the per-box model and undo, the OCR
   checkbox, spellcheck, the image context menu. The most architecturally
   involved part of the app, and the one most bugs have shipped in - read
-  before changing anything under `app/gui/`.
+  before changing anything under `discord_transcription/gui/`.
 - **[ARCHITECTURE_ROW_GEOMETRY.md](ARCHITECTURE_ROW_GEOMETRY.md)** - the
   document-space spacing model `_offset_of` and every scroll-into-view
   calculation depend on, and the one constant (`ROW_PACK_PADY_PX`) that's

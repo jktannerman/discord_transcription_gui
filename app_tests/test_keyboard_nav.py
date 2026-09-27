@@ -1,9 +1,9 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from gui_transcription.app.chatlog import MessageEntry
-from gui_transcription.app.gui.keyboard_nav import KeyboardNavMixin
-from gui_transcription.app.review_item import ReviewItem
+from discord_transcription.chatlog import MessageEntry
+from discord_transcription.gui.keyboard_nav import KeyboardNavMixin
+from discord_transcription.review_item import ReviewItem
 
 
 class _FakeTextWidget:

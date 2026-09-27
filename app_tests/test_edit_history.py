@@ -6,7 +6,7 @@ review screen records each <<Modified>> event.
 """
 import pytest
 
-from gui_transcription.app.gui.edit_history import (
+from discord_transcription.gui.edit_history import (
     MAX_UNDO_STEPS,
     PAUSE_SECONDS,
     EditHistory,

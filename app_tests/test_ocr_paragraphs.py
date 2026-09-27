@@ -1,4 +1,4 @@
-from gui_transcription.app.ocr import split_into_paragraphs
+from discord_transcription.ocr import split_into_paragraphs
 
 
 def test_single_paragraph_no_blank_lines():

@@ -11,7 +11,7 @@ import pytest
 import tkinter as tk
 from PIL import Image
 
-from gui_transcription.app.gui.image_loading import (
+from discord_transcription.gui.image_loading import (
     THUMBNAIL_SIZE,
     ImageLoader,
     fitted_image_size,
