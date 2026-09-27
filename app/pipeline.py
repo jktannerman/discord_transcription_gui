@@ -3,7 +3,9 @@
 Split into pieces the GUI can drive explicitly:
 
 - ``parse_start_date`` / ``run_ocr_batch`` run before any user interaction
-  (the latter on a background thread, reporting progress via callback).
+  (the latter on a background thread, reporting progress via callback). The
+  images to OCR come from the parsed chatlog (``referenced_image_names``),
+  not from scanning the image folder.
 - ``review_item.build_review_items`` turns the approved messages + OCR'd
   paragraphs into the flat list the review screen displays all at once -
   see that module for the ``ReviewItem``/spacer-slot domain model this glue
@@ -22,11 +24,11 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 import pyperclip
 
-from . import cleanup, config, logging_config, ocr, state
+from . import chatlog, cleanup, config, logging_config, ocr, state
 from .review_item import ReviewItem, lines_for_item
 
 logger = logging_config.get_logger(__name__)
@@ -102,64 +104,134 @@ def parse_start_date(date_str: str) -> int:
     return timestamp
 
 
+@dataclass
+class OcrBatchResult:
+    """The outcome of run_ocr_batch.
+
+    Attributes:
+        file_info: {image_name: [paragraphs]} for every referenced image
+            found in the image folder.
+        missing_images: Referenced image names with no matching file in the
+            image folder, in first-reference order.
+    """
+
+    file_info: dict[str, list[str]]
+    missing_images: list[str] = field(default_factory=list)
+
+
+def referenced_image_names(entries: Iterable[chatlog.MessageEntry]) -> list[str]:
+    """Return every image name the kept messages reference, deduplicated.
+
+    Args:
+        entries: Parsed messages, as chatlog.parse_message_groups returns.
+
+    Returns:
+        Image names in first-reference order.
+    """
+    return list(dict.fromkeys(name for entry in entries for name in entry.image_names))
+
+
+def _cache_entry_matches(entry: dict, fingerprint: dict[str, int]) -> bool:
+    """Whether a cache entry was OCR'd from the file fingerprint describes.
+
+    An entry without a fingerprint (carried over from the version 1 cache
+    format) is trusted, rather than forcing a one-off re-OCR of everything.
+    """
+    if "size" not in entry or "mtime_ns" not in entry:
+        return True
+    return entry["size"] == fingerprint["size"] and entry["mtime_ns"] == fingerprint["mtime_ns"]
+
+
 def run_ocr_batch(
     image_folder: str,
-    start_time: int,
+    image_names: Iterable[str],
     use_cache: bool,
     progress_callback: Optional[Callable[[float], None]] = None,
-) -> dict[str, list[str]]:
-    """Return {image_name: [paragraphs]} for every new-enough image.
+) -> OcrBatchResult:
+    """OCR the given images, reusing cached results where possible.
 
-    If use_cache is True and a matching cache exists for image_folder, the
-    cache is returned directly and no OCR is run.
+    An image is re-OCR'd if it has no cache entry, its file's size or mtime
+    changed since it was cached, or use_cache is False. New results are
+    merged into the folder's cache, which is saved every
+    config.OCR_CACHE_SAVE_EVERY images and once more at the end (including
+    when OCR fails partway through), so interrupted work isn't lost. Cache
+    entries for images not in image_names are kept.
+
+    Args:
+        image_folder: Folder the images live in.
+        image_names: Names of the images to OCR, relative to image_folder.
+        use_cache: False to re-OCR every image regardless of the cache.
+        progress_callback: Called with the fraction (0-1) of OCR work done.
+
+    Returns:
+        The OCR text per image, plus any referenced images that don't exist.
     """
+    names = list(dict.fromkeys(image_names))
     logger.info(
         "starting OCR batch",
-        extra=logging_config.extra(image_folder=image_folder, start_time=start_time, use_cache=use_cache),
-    )
-
-    if use_cache:
-        cached = state.load_cache(image_folder)
-        if cached is not None:
-            logger.info("using cached OCR data, skipping OCR batch")
-            return cached
-
-    file_info: dict[str, list[str]] = {}
-    image_names = os.listdir(image_folder)
-    total = len(image_names)
-    skipped_type = 0
-    skipped_old = 0
-
-    for i, image_name in enumerate(image_names):
-        if "." in image_name and not any(
-            image_name.endswith(suffix) for suffix in config.SKIP_TYPES
-        ):
-            image_path = os.path.join(image_folder, image_name)
-            creation_time = os.path.getctime(image_path)
-
-            if creation_time >= start_time:
-                raw_string = ocr.transcribe_image(image_path)
-                file_info[image_name] = ocr.split_into_paragraphs(raw_string)
-            else:
-                skipped_old += 1
-        else:
-            skipped_type += 1
-
-        if progress_callback and total:
-            progress_callback((i + 1) / total)
-
-    logger.info(
-        "OCR batch complete",
         extra=logging_config.extra(
-            total_files=total,
-            transcribed=len(file_info),
-            skipped_non_image_type=skipped_type,
-            skipped_too_old=skipped_old,
+            image_folder=image_folder, image_count=len(names), use_cache=use_cache
         ),
     )
 
-    state.save_cache(image_folder, file_info)
-    return file_info
+    folder = Path(image_folder)
+    cache = state.load_cache(image_folder) or {}
+    file_info: dict[str, list[str]] = {}
+    missing: list[str] = []
+    to_ocr: list[tuple[str, Path, dict[str, int]]] = []
+    cache_dirty = False
+
+    for name in names:
+        path = folder / name
+        if not path.is_file():
+            missing.append(name)
+            continue
+        stat = path.stat()
+        fingerprint = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+        entry = cache.get(name)
+        if use_cache and entry is not None and _cache_entry_matches(entry, fingerprint):
+            file_info[name] = entry["paragraphs"]
+            if "size" not in entry or "mtime_ns" not in entry:
+                cache[name] = {"paragraphs": entry["paragraphs"], **fingerprint}
+                cache_dirty = True
+        else:
+            to_ocr.append((name, path, fingerprint))
+
+    reused = len(file_info)
+    unsaved = 0
+    try:
+        for i, (name, path, fingerprint) in enumerate(to_ocr):
+            paragraphs = ocr.split_into_paragraphs(ocr.transcribe_image(str(path)))
+            file_info[name] = paragraphs
+            cache[name] = {"paragraphs": paragraphs, **fingerprint}
+            cache_dirty = True
+            unsaved += 1
+            if unsaved >= config.OCR_CACHE_SAVE_EVERY:
+                state.save_cache(image_folder, cache)
+                cache_dirty = False
+                unsaved = 0
+            if progress_callback:
+                progress_callback((i + 1) / len(to_ocr))
+    finally:
+        if cache_dirty:
+            state.save_cache(image_folder, cache)
+
+    if progress_callback and not to_ocr:
+        progress_callback(1.0)
+
+    if missing:
+        logger.warning(
+            "referenced images not found in image folder",
+            extra=logging_config.extra(image_folder=image_folder, missing_images=missing),
+        )
+    logger.info(
+        "OCR batch complete",
+        extra=logging_config.extra(
+            referenced=len(names), reused_from_cache=reused, transcribed=len(to_ocr),
+            missing=len(missing),
+        ),
+    )
+    return OcrBatchResult(file_info=file_info, missing_images=missing)
 
 
 def render_items(items: list[ReviewItem], edited_texts: list[dict[str, Optional[str]]]) -> str:

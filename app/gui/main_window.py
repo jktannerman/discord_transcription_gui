@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import messagebox, ttk
-from typing import Optional
+from typing import Callable, Optional
 
 from .. import chatlog, config, logging_config, pipeline, review_item, state
 from . import theme
@@ -210,6 +210,81 @@ class RunContext:
     start_time: int
     approved_author_ids: Optional[set[str]]
     use_cache: bool
+
+
+class _RunError(Exception):
+    """A run failure whose message is ready to show the user as-is."""
+
+
+def _prepare_run(
+    run: RunContext,
+    progress_callback: Callable[[float], None],
+    status_callback: Callable[[str], None],
+) -> tuple[list[chatlog.MessageEntry], pipeline.OcrBatchResult]:
+    """Parse the chatlog, then OCR the images its kept messages reference.
+
+    Runs on the worker thread, so it must not touch Tk directly; both
+    callbacks are expected to marshal onto the Tk thread themselves.
+
+    Args:
+        run: The run's inputs.
+        progress_callback: Receives the fraction of OCR work done.
+        status_callback: Receives a short description of the current stage.
+
+    Returns:
+        The kept messages and the OCR results for their images.
+
+    Raises:
+        _RunError: The chatlog couldn't be read or parsed.
+    """
+    try:
+        html_text = run.html_path.read_text(encoding="utf8")
+    except OSError as exc:
+        raise _RunError(f"Could not read HTML file: {exc}") from exc
+    try:
+        entries = chatlog.parse_message_groups(
+            html_text, run.start_time, run.approved_author_ids
+        )
+    except ValueError as exc:
+        # parse_message_groups raises a clear ValueError for a malformed
+        # export (missing/unparseable timezone postamble, missing
+        # per-message data-message-id).
+        logger.exception("chatlog parsing failed")
+        raise _RunError(str(exc)) from exc
+    except Exception as exc:
+        logger.exception("unexpected error while parsing chatlog")
+        raise _RunError(f"Unexpected error while reading the chatlog: {exc!r}") from exc
+
+    status_callback("Running OCR on images...")
+    ocr_result = pipeline.run_ocr_batch(
+        str(run.image_folder),
+        pipeline.referenced_image_names(entries),
+        run.use_cache,
+        progress_callback=progress_callback,
+    )
+    return entries, ocr_result
+
+
+# How many missing image names _warn_missing_images lists before summarizing
+# the rest as a count.
+_MISSING_IMAGES_LISTED = 10
+
+
+def _warn_missing_images(missing_images: list[str]) -> None:
+    """Tell the user some referenced images weren't in the image folder.
+
+    Args:
+        missing_images: The missing image names.
+    """
+    listed = "\n".join(missing_images[:_MISSING_IMAGES_LISTED])
+    remainder = len(missing_images) - _MISSING_IMAGES_LISTED
+    if remainder > 0:
+        listed += f"\n...and {remainder} more"
+    messagebox.showwarning(
+        "Missing images",
+        f"{len(missing_images)} image(s) referenced by the chatlog weren't found in "
+        f"the image folder, so their OCR boxes will be empty:\n\n{listed}",
+    )
 
 
 class App:
@@ -397,7 +472,7 @@ class App:
         approved_author_ids: Optional[set[str]],
         use_cache: bool,
     ) -> None:
-        progress = ProgressFrame(self.container, status_text="Running OCR on images...")
+        progress = ProgressFrame(self.container, status_text="Reading chatlog...")
         self._set_frame(progress)
 
         self._run = RunContext(
@@ -409,20 +484,24 @@ class App:
             use_cache=use_cache,
         )
 
+        run = self._run
+
         def worker():
             try:
-                file_info = pipeline.run_ocr_batch(
-                    str(image_folder),
-                    start_time,
-                    use_cache,
+                entries, ocr_result = _prepare_run(
+                    run,
                     progress_callback=lambda frac: self.root.after(0, progress.set_progress, frac),
+                    status_callback=lambda text: self.root.after(0, progress.set_status, text),
                 )
+            except _RunError as exc:
+                self.root.after(0, self._on_run_error, str(exc))
+                return
             except Exception as exc:  # surfaced to the user, not a crash
                 logger.exception("OCR batch failed")
                 self.root.after(0, self._on_run_error, str(exc))
                 return
 
-            self.root.after(0, self._on_ocr_done, file_info)
+            self.root.after(0, self._on_ocr_done, entries, ocr_result)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -443,16 +522,13 @@ class App:
 
         use_cache is always forced to True here, regardless of the setup
         screen's checkbox or what the session originally recorded: resuming
-        is, by definition, continuing a review that already has OCR results
-        for this image folder (they were produced by that same session's
-        first run, or an earlier one), so redoing OCR on resume is always
-        wasted work - any newly-added images since then are handled by a
-        later fresh run, not a resume. Without this override, a session
-        whose *first* run happened to start with the checkbox unticked would
-        keep reusing that stale False forever (session["use_cache"] is only
+        continues a review whose images were already OCR'd, so re-OCR'ing
+        them all is wasted work. Images that aren't cached yet, or whose
+        file changed, are still OCR'd, since the cache is per image. Without
+        this override, a session whose *first* run happened to force a full
+        re-OCR would repeat it on every resume (session["use_cache"] is only
         ever the value the session was originally started with - see
-        _snapshot_and_save), redoing the full OCR batch on every resume even
-        though a matching cache already exists on disk."""
+        _snapshot_and_save)."""
         try:
             html_path = Path(session["html_path"])
             image_folder = Path(session["image_folder"])
@@ -584,27 +660,24 @@ class App:
                         ),
                     )
 
-    def _on_ocr_done(self, file_info: dict) -> None:
+    def _on_ocr_done(
+        self, entries: list[chatlog.MessageEntry], ocr_result: pipeline.OcrBatchResult
+    ) -> None:
         run = self._run
         try:
-            html_text = run.html_path.read_text(encoding="utf8")
-            entries = chatlog.parse_message_groups(html_text, run.start_time, run.approved_author_ids)
-            self._review_items = review_item.build_review_items(entries, file_info, run.image_folder)
-        except OSError as exc:
-            self._on_run_error(f"Could not read HTML file: {exc}")
+            self._review_items = review_item.build_review_items(
+                entries, ocr_result.file_info, run.image_folder
+            )
+        except Exception as exc:
+            # Runs inside a root.after() callback: anything uncaught here
+            # would only reach report_callback_exception, leaving the user
+            # stuck on the progress screen.
+            logger.exception("building review items failed")
+            self._on_run_error(f"Unexpected error while building the review screen: {exc!r}")
             return
-        except ValueError as exc:
-            # chatlog.parse_message_groups raises a clear ValueError for a
-            # malformed export (missing/unparseable postamble timezone,
-            # missing per-message data-message-id) - this runs inside a
-            # root.after() callback, so without catching it here it would
-            # only ever reach Tk's default report_callback_exception (a
-            # console traceback, never the app's own logger or an error
-            # dialog), leaving the user stuck on the OCR progress screen
-            # with no indication anything went wrong.
-            logger.exception("chatlog parsing failed")
-            self._on_run_error(str(exc))
-            return
+
+        if ocr_result.missing_images:
+            _warn_missing_images(ocr_result.missing_images)
 
         logger.info("OCR done, showing review screen", extra=logging_config.extra(item_count=len(self._review_items)))
         self._show_review()

@@ -1,101 +1,160 @@
 import os
-import time
+
+import pytest
 
 from gui_transcription.app import config, ocr, pipeline, state
+from gui_transcription.app.chatlog import MessageEntry
 
 
-def _touch(path) -> None:
-    # pipeline.run_ocr_batch checks os.path.getctime (creation time), which
-    # can't be backdated via os.utime (that only touches mtime/atime) - so
-    # "old" vs. "new enough" is controlled by where start_time falls relative
-    # to creation time (effectively "now"), not by editing file timestamps.
-    path.write_bytes(b"fake image bytes")
+@pytest.fixture
+def image_folder(tmp_path):
+    folder = tmp_path / "images"
+    folder.mkdir()
+    return folder
 
 
-def test_run_ocr_batch_transcribes_new_enough_images(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "OCR_CACHE_FILE", tmp_path / "ocr_cache.json")
-    monkeypatch.setattr(ocr, "transcribe_image", lambda path: f"raw text for {os.path.basename(path)}")
+@pytest.fixture
+def ocr_calls(monkeypatch):
+    """Record every image OCR runs on; the fake OCR text names the file."""
+    calls = []
 
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    _touch(image_folder / "new.png")
+    def fake_transcribe(path):
+        calls.append(os.path.basename(path))
+        return f"raw text for {os.path.basename(path)}"
 
-    file_info = pipeline.run_ocr_batch(str(image_folder), start_time=0, use_cache=False)
+    monkeypatch.setattr(ocr, "transcribe_image", fake_transcribe)
+    return calls
 
-    assert file_info == {"new.png": ["raw text for new.png"]}
+
+def _write_image(folder, name, content=b"fake image bytes"):
+    (folder / name).write_bytes(content)
 
 
-def test_run_ocr_batch_skips_files_older_than_start_time(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "OCR_CACHE_FILE", tmp_path / "ocr_cache.json")
-    monkeypatch.setattr(ocr, "transcribe_image", lambda path: "should not be called")
+def test_referenced_image_names_dedupes_in_first_reference_order():
+    entries = [
+        MessageEntry(message_id="1", text_lines=[], image_names=["b.png", "a.png"]),
+        MessageEntry(message_id="2", text_lines=["hi"], image_names=[]),
+        MessageEntry(message_id="3", text_lines=[], image_names=["a.png", "c.png"]),
+    ]
 
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    _touch(image_folder / "old.png")
+    assert pipeline.referenced_image_names(entries) == ["b.png", "a.png", "c.png"]
 
-    file_info = pipeline.run_ocr_batch(
-        str(image_folder), start_time=int(time.time()) + 3600, use_cache=False
+
+def test_ocrs_only_the_referenced_images(image_folder, ocr_calls):
+    _write_image(image_folder, "wanted.png")
+    _write_image(image_folder, "unreferenced.png")
+
+    result = pipeline.run_ocr_batch(str(image_folder), ["wanted.png"], use_cache=True)
+
+    assert result.file_info == {"wanted.png": ["raw text for wanted.png"]}
+    assert result.missing_images == []
+    assert ocr_calls == ["wanted.png"]
+
+
+def test_reports_referenced_images_missing_from_the_folder(image_folder, ocr_calls):
+    _write_image(image_folder, "present.png")
+
+    result = pipeline.run_ocr_batch(
+        str(image_folder), ["gone.png", "present.png", "also_gone.png"], use_cache=True
     )
 
-    assert file_info == {}
+    assert result.missing_images == ["gone.png", "also_gone.png"]
+    assert set(result.file_info) == {"present.png"}
 
 
-def test_run_ocr_batch_skips_non_image_extensions(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "OCR_CACHE_FILE", tmp_path / "ocr_cache.json")
-    monkeypatch.setattr(ocr, "transcribe_image", lambda path: "should not be called")
+def test_reuses_cache_and_only_ocrs_images_missing_from_it(image_folder, ocr_calls):
+    _write_image(image_folder, "old.png")
+    pipeline.run_ocr_batch(str(image_folder), ["old.png"], use_cache=True)
+    _write_image(image_folder, "new.png")
+    ocr_calls.clear()
 
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    _touch(image_folder / "styles.css")
+    result = pipeline.run_ocr_batch(str(image_folder), ["old.png", "new.png"], use_cache=True)
 
-    file_info = pipeline.run_ocr_batch(str(image_folder), start_time=0, use_cache=False)
+    assert ocr_calls == ["new.png"]
+    assert result.file_info == {
+        "old.png": ["raw text for old.png"],
+        "new.png": ["raw text for new.png"],
+    }
 
-    assert file_info == {}
+
+def test_reocrs_an_image_whose_file_changed(image_folder, ocr_calls):
+    _write_image(image_folder, "shot.png")
+    pipeline.run_ocr_batch(str(image_folder), ["shot.png"], use_cache=True)
+    _write_image(image_folder, "shot.png", content=b"different, longer image bytes")
+    ocr_calls.clear()
+
+    pipeline.run_ocr_batch(str(image_folder), ["shot.png"], use_cache=True)
+
+    assert ocr_calls == ["shot.png"]
 
 
-def test_run_ocr_batch_uses_cache_when_present(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "OCR_CACHE_FILE", tmp_path / "ocr_cache.json")
+def test_use_cache_false_reocrs_everything_but_keeps_other_entries(image_folder, ocr_calls):
+    _write_image(image_folder, "a.png")
+    _write_image(image_folder, "b.png")
+    pipeline.run_ocr_batch(str(image_folder), ["a.png", "b.png"], use_cache=True)
+    ocr_calls.clear()
+
+    pipeline.run_ocr_batch(str(image_folder), ["a.png"], use_cache=False)
+
+    assert ocr_calls == ["a.png"]
+    assert set(state.load_cache(str(image_folder))) == {"a.png", "b.png"}
+
+
+def test_trusts_version_1_entries_and_adds_their_fingerprint(image_folder, ocr_calls):
+    _write_image(image_folder, "legacy.png")
+    state.save_cache(str(image_folder), {"legacy.png": {"paragraphs": ["cached text"]}})
+
+    result = pipeline.run_ocr_batch(str(image_folder), ["legacy.png"], use_cache=True)
+
+    assert ocr_calls == []
+    assert result.file_info == {"legacy.png": ["cached text"]}
+    stat = (image_folder / "legacy.png").stat()
+    assert state.load_cache(str(image_folder))["legacy.png"] == {
+        "paragraphs": ["cached text"], "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
+    }
+
+
+def test_saves_cache_periodically_during_the_batch(image_folder, ocr_calls, monkeypatch):
+    monkeypatch.setattr(config, "OCR_CACHE_SAVE_EVERY", 2)
+    names = [f"{i}.png" for i in range(5)]
+    for name in names:
+        _write_image(image_folder, name)
+    saved_sizes = []
+    real_save = state.save_cache
     monkeypatch.setattr(
-        ocr, "transcribe_image", lambda path: (_ for _ in ()).throw(AssertionError("OCR should not run"))
+        state, "save_cache",
+        lambda folder, entries: (saved_sizes.append(len(entries)), real_save(folder, entries)),
     )
 
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    state.save_cache(str(image_folder), {"cached.png": ["cached paragraph"]})
+    pipeline.run_ocr_batch(str(image_folder), names, use_cache=True)
 
-    file_info = pipeline.run_ocr_batch(str(image_folder), start_time=0, use_cache=True)
-
-    assert file_info == {"cached.png": ["cached paragraph"]}
+    assert saved_sizes == [2, 4, 5]
 
 
-def test_run_ocr_batch_ignores_cache_when_use_cache_false(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "OCR_CACHE_FILE", tmp_path / "ocr_cache.json")
-    monkeypatch.setattr(ocr, "transcribe_image", lambda path: "freshly ocr'd")
+def test_keeps_completed_work_when_ocr_fails_partway(image_folder, monkeypatch):
+    for name in ("ok.png", "broken.png"):
+        _write_image(image_folder, name)
 
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    state.save_cache(str(image_folder), {"cached.png": ["stale paragraph"]})
-    _touch(image_folder / "new.png")
+    def flaky_transcribe(path):
+        if path.endswith("broken.png"):
+            raise RuntimeError("tesseract crashed")
+        return "fine"
 
-    file_info = pipeline.run_ocr_batch(str(image_folder), start_time=0, use_cache=False)
+    monkeypatch.setattr(ocr, "transcribe_image", flaky_transcribe)
 
-    assert file_info == {"new.png": ["freshly ocr'd"]}
+    with pytest.raises(RuntimeError):
+        pipeline.run_ocr_batch(str(image_folder), ["ok.png", "broken.png"], use_cache=True)
+
+    assert set(state.load_cache(str(image_folder))) == {"ok.png"}
 
 
-def test_run_ocr_batch_saves_results_to_cache(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
-    monkeypatch.setattr(config, "OCR_CACHE_FILE", tmp_path / "ocr_cache.json")
-    monkeypatch.setattr(ocr, "transcribe_image", lambda path: "fresh text")
+def test_progress_reaches_one_when_everything_is_cached(image_folder, ocr_calls):
+    _write_image(image_folder, "a.png")
+    pipeline.run_ocr_batch(str(image_folder), ["a.png"], use_cache=True)
+    progress = []
 
-    image_folder = tmp_path / "images"
-    image_folder.mkdir()
-    _touch(image_folder / "new.png")
+    pipeline.run_ocr_batch(
+        str(image_folder), ["a.png"], use_cache=True, progress_callback=progress.append
+    )
 
-    pipeline.run_ocr_batch(str(image_folder), start_time=0, use_cache=False)
-
-    assert state.load_cache(str(image_folder)) == {"new.png": ["fresh text"]}
+    assert progress == [1.0]

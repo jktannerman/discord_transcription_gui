@@ -412,49 +412,83 @@ def load_finalized_edits_history(html_path: Optional[str] = None) -> list:
     return [entry for entry in history if entry.get("html_path") == key]
 
 
-def load_cache(folder_path: str) -> Optional[dict]:
-    """Return the cached {image_name: [paragraphs]} dict for folder_path.
+# Version 2 wraps the folders in {"version": 2, "folders": {...}} and stores
+# each image as {"paragraphs": [...], "size": int, "mtime_ns": int}. Version 1
+# (no "version" key) was the bare {folder: {image_name: [paragraphs]}} dict.
+OCR_CACHE_VERSION = 2
 
-    Returns None if there is no cache, or no cache was ever saved for that
-    specific image folder - caches for other folders, if any, don't affect
-    this lookup either way.
+
+def _read_ocr_cache_folders() -> dict:
+    """Return the cache file's {folder: entries} dict, in either version."""
+    raw = _read_json_with_backup(config.OCR_CACHE_FILE)
+    if not isinstance(raw, dict):
+        return {}
+    if "version" not in raw:
+        return raw
+    folders = raw.get("folders")
+    return folders if isinstance(folders, dict) else {}
+
+
+def _normalize_cache_entries(data: dict) -> dict[str, dict]:
+    """Convert one folder's entries to the version 2 entry shape.
+
+    A version 1 entry (a bare paragraph list) becomes {"paragraphs": [...]}
+    with no fingerprint; malformed entries are dropped.
     """
-    cache = _read_json_with_backup(config.OCR_CACHE_FILE)
-    if not isinstance(cache, dict):
-        logger.info("no ocr cache file found")
-        return None
+    entries: dict[str, dict] = {}
+    for name, value in data.items():
+        if isinstance(value, list):
+            entries[name] = {"paragraphs": value}
+        elif isinstance(value, dict) and isinstance(value.get("paragraphs"), list):
+            entries[name] = value
+    return entries
 
-    data = cache.get(str(Path(folder_path)))
-    if data is None:
+
+def load_cache(folder_path: str) -> Optional[dict[str, dict]]:
+    """Return the cached {image_name: entry} dict for folder_path.
+
+    Each entry is {"paragraphs": [...]} plus "size"/"mtime_ns" for the image
+    file it was OCR'd from; entries carried over from the version 1 format
+    have no fingerprint.
+
+    Args:
+        folder_path: The image folder whose cache to load.
+
+    Returns:
+        The folder's entries, or None if nothing was ever cached for it.
+    """
+    data = _read_ocr_cache_folders().get(str(Path(folder_path)))
+    if not isinstance(data, dict):
         logger.info(
             "no ocr cache for this folder",
             extra=logging_config.extra(requested_folder=str(Path(folder_path))),
         )
         return None
 
+    entries = _normalize_cache_entries(data)
     logger.info(
         "loaded ocr cache",
-        extra=logging_config.extra(folder=str(Path(folder_path)), image_count=len(data)),
+        extra=logging_config.extra(folder=str(Path(folder_path)), image_count=len(entries)),
     )
-    return data
+    return entries
 
 
-def save_cache(folder_path: str, data: dict) -> None:
-    """Persist the {image_name: [paragraphs]} dict for folder_path,
-    overwriting only that folder's previously cached entry - caches for
-    other folders are kept alongside it indefinitely, so OCR'ing a second
-    chatlog's images never forces a first chatlog's cache to be redone.
-    This is the other high-value target alongside sessions - it represents
-    however long the Tesseract pass over the whole image folder took, and
-    losing it forces redoing OCR from scratch on the next run - so it goes
-    through the same atomic write + backup rotation as sessions."""
-    cache = _read_json_with_backup(config.OCR_CACHE_FILE)
-    if not isinstance(cache, dict):
-        cache = {}
-    cache[str(Path(folder_path))] = data
-    _atomic_write_json(config.OCR_CACHE_FILE, cache)
+def save_cache(folder_path: str, entries: dict[str, dict]) -> None:
+    """Persist the {image_name: entry} dict for folder_path.
+
+    Replaces only that folder's entries; other folders are kept
+    indefinitely. Goes through the same atomic write + backup rotation as
+    sessions, since losing it means redoing OCR.
+
+    Args:
+        folder_path: The image folder the entries belong to.
+        entries: Entries in the shape load_cache returns.
+    """
+    folders = _read_ocr_cache_folders()
+    folders[str(Path(folder_path))] = entries
+    _atomic_write_json(config.OCR_CACHE_FILE, {"version": OCR_CACHE_VERSION, "folders": folders})
 
     logger.info(
         "saved ocr cache",
-        extra=logging_config.extra(folder=str(Path(folder_path)), image_count=len(data)),
+        extra=logging_config.extra(folder=str(Path(folder_path)), image_count=len(entries)),
     )

@@ -222,12 +222,12 @@ class ImageContextMenuMixin:
             raise NotImplementedError(
                 "Open Image Location is not yet implemented outside Windows"
             )
-        # explorer.exe routinely exits non-zero even on a fully successful
-        # /select - its return code isn't a reliable success signal, so this
-        # doesn't check=True; a genuinely broken invocation (missing
-        # explorer.exe, bad path) still raises OSError, which
-        # _run_image_menu_action's try/except logs as a failure.
-        subprocess.run(["explorer", "/select,", str(Path(image_path).resolve())])
+        # Popen, not run: waiting for explorer.exe to exit would freeze the
+        # UI. Its exit code isn't a reliable success signal anyway (it
+        # routinely exits non-zero on a successful /select); a genuinely
+        # broken invocation (missing explorer.exe) still raises OSError,
+        # which _run_image_menu_action's try/except logs as a failure.
+        subprocess.Popen(["explorer", "/select,", str(Path(image_path).resolve())])
 
     def _copy_image_to_clipboard(self, image_path: Path) -> None:
         # Not yet implemented outside Windows: Linux clipboard access is
@@ -267,7 +267,10 @@ def _launch_url_in_default_browser(url: str) -> None:
     if command_template is None:
         raise RuntimeError("could not determine the default browser from the registry")
     command = [url if part == "%1" else part for part in shlex.split(command_template)]
-    subprocess.run(command)
+    # Popen, not run: if the browser wasn't already running, the launched
+    # process lives until the browser is closed, and waiting on it would
+    # freeze the UI for that whole time.
+    subprocess.Popen(command)
 
 
 def _default_browser_command() -> Optional[str]:

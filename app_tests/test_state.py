@@ -27,7 +27,7 @@ def test_cache_round_trip(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "OCR_CACHE_FILE", tmp_path / "ocr_cache.json")
 
     folder = str(tmp_path / "images")
-    data = {"image1.png": ["paragraph one", "paragraph two"]}
+    data = {"image1.png": {"paragraphs": ["paragraph one", "paragraph two"], "size": 10, "mtime_ns": 5}}
 
     state.save_cache(folder, data)
     assert state.load_cache(folder) == data
@@ -37,7 +37,7 @@ def test_cache_returns_none_for_different_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "APP_DATA_DIR", tmp_path)
     monkeypatch.setattr(config, "OCR_CACHE_FILE", tmp_path / "ocr_cache.json")
 
-    state.save_cache(str(tmp_path / "images_a"), {"x.png": ["p"]})
+    state.save_cache(str(tmp_path / "images_a"), {"x.png": {"paragraphs": ["p"]}})
     assert state.load_cache(str(tmp_path / "images_b")) is None
 
 
@@ -50,11 +50,47 @@ def test_cache_keeps_multiple_folders_indefinitely(tmp_path, monkeypatch):
     folder_a = str(tmp_path / "images_a")
     folder_b = str(tmp_path / "images_b")
 
-    state.save_cache(folder_a, {"a.png": ["text a"]})
-    state.save_cache(folder_b, {"b.png": ["text b"]})
+    state.save_cache(folder_a, {"a.png": {"paragraphs": ["text a"]}})
+    state.save_cache(folder_b, {"b.png": {"paragraphs": ["text b"]}})
 
-    assert state.load_cache(folder_a) == {"a.png": ["text a"]}
-    assert state.load_cache(folder_b) == {"b.png": ["text b"]}
+    assert state.load_cache(folder_a) == {"a.png": {"paragraphs": ["text a"]}}
+    assert state.load_cache(folder_b) == {"b.png": {"paragraphs": ["text b"]}}
+
+
+def test_cache_reads_version_1_format(tmp_path, monkeypatch):
+    """A version 1 cache file (bare {folder: {name: [paragraphs]}}) loads
+    as fingerprint-less entries, and the next save upgrades the whole file
+    to version 2 without losing the other folders."""
+    cache_file = tmp_path / "ocr_cache.json"
+    monkeypatch.setattr(config, "OCR_CACHE_FILE", cache_file)
+    folder_a = str(tmp_path / "images_a")
+    folder_b = str(tmp_path / "images_b")
+    cache_file.write_text(
+        json.dumps({folder_a: {"a.png": ["text a"]}, folder_b: {"b.png": ["text b"]}}),
+        encoding="utf8",
+    )
+
+    assert state.load_cache(folder_a) == {"a.png": {"paragraphs": ["text a"]}}
+
+    state.save_cache(folder_a, {"a.png": {"paragraphs": ["text a"], "size": 1, "mtime_ns": 2}})
+
+    on_disk = json.loads(cache_file.read_text(encoding="utf8"))
+    assert on_disk["version"] == state.OCR_CACHE_VERSION
+    assert state.load_cache(folder_b) == {"b.png": {"paragraphs": ["text b"]}}
+
+
+def test_cache_drops_malformed_entries(tmp_path, monkeypatch):
+    cache_file = tmp_path / "ocr_cache.json"
+    monkeypatch.setattr(config, "OCR_CACHE_FILE", cache_file)
+    folder = str(tmp_path / "images")
+    cache_file.write_text(
+        json.dumps({"version": 2, "folders": {folder: {
+            "good.png": {"paragraphs": ["ok"]}, "bad.png": {"size": 3}, "worse.png": "text",
+        }}}),
+        encoding="utf8",
+    )
+
+    assert state.load_cache(folder) == {"good.png": {"paragraphs": ["ok"]}}
 
 
 def test_load_recent_paths_returns_empty_when_no_file(tmp_path, monkeypatch):
@@ -565,9 +601,9 @@ def test_cache_recovers_from_backup_when_primary_corrupt(tmp_path, monkeypatch):
     backup_file = cache_file.with_suffix(".bak")
 
     folder = str(tmp_path / "images")
-    state.save_cache(folder, {"good.png": ["text"]})
-    state.save_cache(folder, {"overwritten.png": ["text"]})
+    state.save_cache(folder, {"good.png": {"paragraphs": ["text"]}})
+    state.save_cache(folder, {"overwritten.png": {"paragraphs": ["text"]}})
     cache_file.write_text("", encoding="utf8")
 
-    assert state.load_cache(folder) == {"good.png": ["text"]}
+    assert state.load_cache(folder) == {"good.png": {"paragraphs": ["text"]}}
     assert backup_file.exists()

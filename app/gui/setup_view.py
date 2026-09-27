@@ -32,7 +32,7 @@ class SetupFrame(ttk.Frame):
         self._image_folder = tk.StringVar(value=initial_image_folder or _most_recent("image_folder"))
         self._output_path = tk.StringVar(value=_most_recent("output_path"))
         self._start_date = tk.StringVar(value=state.read_last_run_date() or "")
-        self._use_cache = tk.BooleanVar(value=True)
+        self._reocr_all = tk.BooleanVar(value=False)
 
         approved_users_state = state.read_approved_users_state()
         if approved_users_state is None:
@@ -64,11 +64,11 @@ class SetupFrame(ttk.Frame):
         ).grid(row=2, column=1, pady=4)
         ttk.Button(self, text="Browse...", command=self._pick_output).grid(row=2, column=2, padx=4)
 
-        ttk.Label(self, text="Start date (YYYY-MM-DD):").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Label(self, text="Start date, UTC (YYYY-MM-DD[-HH-MM-SS]):").grid(row=3, column=0, sticky="w", pady=4)
         ttk.Entry(self, textvariable=self._start_date, width=30).grid(row=3, column=1, sticky="w", pady=4)
 
         self._cache_check = ttk.Checkbutton(
-            self, text="Use cached OCR data for this image folder", variable=self._use_cache
+            self, text="Re-run OCR on all images (ignore cache)", variable=self._reocr_all
         )
         self._cache_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=4)
 
@@ -141,7 +141,11 @@ class SetupFrame(ttk.Frame):
         value = self._known_user_pick.get().strip()
         if not value:
             return
-        self._approved_users_text.insert("end", value + "\n")
+        # Start on a fresh line if the last entry has no trailing newline,
+        # so the new entry isn't joined onto it.
+        existing = self._approved_users_text.get("1.0", "end-1c")
+        prefix = "\n" if existing and not existing.endswith("\n") else ""
+        self._approved_users_text.insert("end", prefix + value + "\n")
 
     def _update_approved_users_enabled(self) -> None:
         """The approved-users list and "known users" picker are irrelevant
@@ -171,7 +175,9 @@ class SetupFrame(ttk.Frame):
         return self._start_date.get()
 
     def get_use_cache(self) -> bool:
-        return self._use_cache.get()
+        # The checkbox is phrased as the exception ("re-run OCR"), so the
+        # cache is used whenever it's unticked.
+        return not self._reocr_all.get()
 
     def get_use_all_users(self) -> bool:
         return self._use_all_users.get()

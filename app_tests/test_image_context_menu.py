@@ -154,7 +154,7 @@ def test_open_image_in_browser_launches_the_registry_default_browser_with_the_fi
         patch("gui_transcription.app.gui.image_context_menu.subprocess") as mock_subprocess,
     ):
         stub._open_image_in_browser(image_path)
-    (command,), _ = mock_subprocess.run.call_args
+    (command,), _ = mock_subprocess.Popen.call_args
     assert command[0] == r"C:\Program Files\Mozilla Firefox\firefox.exe"
     assert command[-1].startswith("file:")
     assert image_path.name in command[-1]
@@ -179,7 +179,7 @@ def test_open_image_location_selects_the_file_in_explorer(tmp_path):
     Image.new("RGB", (10, 10), color="blue").save(image_path)
     with patch("gui_transcription.app.gui.image_context_menu.subprocess") as mock_subprocess:
         stub._open_image_location(image_path)
-    args, _ = mock_subprocess.run.call_args
+    args, _ = mock_subprocess.Popen.call_args
     command = args[0]
     assert command[0] == "explorer"
     assert command[1] == "/select,"
@@ -200,7 +200,7 @@ def test_open_chatlog_at_message_launches_default_browser_with_message_anchor(tm
         patch("gui_transcription.app.gui.image_context_menu.subprocess") as mock_subprocess,
     ):
         stub._open_chatlog_at_message("1519374940359360783")
-    (command,), _ = mock_subprocess.run.call_args
+    (command,), _ = mock_subprocess.Popen.call_args
     assert command[0] == r"C:\Program Files\Mozilla Firefox\firefox.exe"
     url = command[-1]
     assert url.startswith("file:")

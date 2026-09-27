@@ -29,9 +29,9 @@ TESSERACT_CMD = (
     else "tesseract"
 )
 
-# File extensions DiscordChatExporter downloads alongside media that are
-# never image attachments worth OCR'ing.
-SKIP_TYPES: tuple[str, ...] = (".svg", ".woff2", ".js", ".css")
+# How many newly OCR'd images to process between cache saves, so closing or
+# crashing mid-batch loses at most this many images' worth of OCR.
+OCR_CACHE_SAVE_EVERY = 10
 
 DEFAULT_APPROVED_USERS: tuple[str, ...] = tuple()
 
@@ -63,8 +63,9 @@ SPELLCHECK_BLACKLIST_FILE = Path(__file__).resolve().parent / "spellcheck_blackl
 
 APP_DATA_DIR = Path.home() / ".discord_transcription_gui"
 RUN_DATE_FILE = APP_DATA_DIR / "run_dates.json"
-# {image_folder: {image_name: [paragraphs]}} - one entry per image folder,
-# kept indefinitely so OCR'ing one chatlog's images never evicts another
+# {"version": 2, "folders": {image_folder: {image_name: entry}}} - see
+# state.load_cache for the entry shape. One entry per image folder, kept
+# indefinitely so OCR'ing one chatlog's images never evicts another
 # chatlog's already-OCR'd cache.
 OCR_CACHE_FILE = APP_DATA_DIR / "ocr_cache.json"
 RECENT_PATHS_FILE = APP_DATA_DIR / "recent_paths.json"

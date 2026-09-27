@@ -43,7 +43,7 @@ How sure each finding is:
   - Stay on the review screen if it fails.
   - Ask for confirmation before Finalize, since it can't be undone.
 
-- [ ] **A3. The OCR cache is all-or-nothing per image folder** [code-read]
+- [x] **A3. The OCR cache is all-or-nothing per image folder** [code-read] - fixed with B4: per-image cache with a size/mtime fingerprint, versioned file format (v1 still read), saved every 10 images and on failure; cache checkbox is now "Re-run OCR on all images (ignore cache)"
   In `pipeline.run_ocr_batch`, if the cache is used, the whole cached dict
   for the folder is returned. Images added since then get
   `file_info.get(name, [])`, which is an empty OCR box with no warning.
@@ -77,21 +77,21 @@ How sure each finding is:
   *Fix:* bind Button-4/5 too, and turn them into the same delta handling.
   Please check on your machine first.
 
-- [ ] **A6. The context-menu browser/Explorer launch blocks the UI (Windows)** [code-read]
+- [x] **A6. The context-menu browser/Explorer launch blocks the UI (Windows)** [code-read] - fixed: `subprocess.Popen` for both launches
   `image_context_menu._launch_url_in_default_browser` and
   `_open_image_location` use `subprocess.run`, which waits for the process to
   exit. If the browser wasn't already running, the app freezes until you
   close the browser.
   *Fix:* use `subprocess.Popen`.
 
-- [ ] **A7. A few unexpected parse errors leave the app stuck on the progress screen** [code-read]
+- [x] **A7. A few unexpected parse errors leave the app stuck on the progress screen** [code-read] - fixed: catch-all `except Exception` routed to `_on_run_error`, with a regression test
   `main_window._on_ocr_done` only catches `OSError`/`ValueError`. Anything
   else, for example a `KeyError` from an `<img>` with no `src` in
   `chatlog._parse_message`, only gets logged by
   `report_callback_exception`, and the UI stays on the progress screen.
   *Fix:* catch everything there and route it to `_on_run_error`.
 
-- [ ] **A8. Small setup-screen bugs** [code-read]
+- [x] **A8. Small setup-screen bugs** [code-read] - fixed: Add starts a new line if needed (tested in `test_setup_view.py`); label now reads "Start date, UTC (YYYY-MM-DD[-HH-MM-SS])"
   - "Known users → Add" inserts at `"end"` without adding a newline first.
     If the last line has no trailing newline, the new entry gets joined onto
     it.
@@ -166,7 +166,7 @@ How sure each finding is:
   *Fix:* get the constants from real `tkinter.font.Font` metrics, and pick a
   font that exists on each platform (e.g. `TkFixedFont` as a fallback).
 
-- [ ] **B4. Choose OCR images from the chatlog, not by file date**
+- [x] **B4. Choose OCR images from the chatlog, not by file date** - fixed: chatlog parsed first on the worker thread, only referenced images OCR'd, missing ones reported in a warning; `SKIP_TYPES` removed; parallel OCR left for later
   `run_ocr_batch` picks images by `os.path.getctime >= start_time`. On Linux
   that's the inode-change time, not the creation time. It also runs OCR on
   images from unapproved authors.

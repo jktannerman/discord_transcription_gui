@@ -100,9 +100,11 @@ deepest coverage:
   prompt, including `_resume_session` always forcing `use_cache=True`
   regardless of what the saved session originally recorded, so resuming
   never redoes OCR.
-- The malformed-chatlog error path (`App._on_ocr_done` surfacing a clear
-  dialog instead of letting the error escape uncaught from a background Tk
-  callback).
+- The chatlog read/parse error paths (`_prepare_run` turning an unreadable
+  file, a malformed export or an unexpected exception into a `_RunError`
+  with a user-facing message), `App._on_ocr_done` reporting a
+  review-building failure instead of letting it escape uncaught from a Tk
+  callback, and its missing-images warning.
 
 ## HTML parsing / OCR pipeline
 
@@ -119,7 +121,11 @@ deepest coverage:
   parsing/validation and regex application) and its wiring into
   `build_review_items` - applied to OCR text only, never to a message's own
   text.
-- The OCR batch runner/cache short-circuit.
+- The OCR batch runner: only chatlog-referenced images are OCR'd, missing
+  files are reported, cached results are reused unless the file's
+  size/mtime changed, the cache is saved periodically and survives an OCR
+  failure partway through, and version 1 cache entries are trusted and
+  upgraded.
 - The cleanup regexes.
 - Review-item building/output-writing - a text-only message's editable
   spacing copy standing in for its immutable original when written out, a
@@ -132,7 +138,8 @@ deepest coverage:
 
 ## Persistence
 
-- JSON state persistence - run dates, OCR cache and in-progress sessions
+- JSON state persistence - run dates, OCR cache (including reading the
+  version 1 format) and in-progress sessions
   both kept per-chatlog/per-folder indefinitely rather than as a single
   global slot, and recent-path history.
 - The atomic-write-plus-backup-rotation/recovery behavior of every state

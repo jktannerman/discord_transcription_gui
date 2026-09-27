@@ -38,10 +38,11 @@ What's in scope for v1:
    and the output `.txt` file, each a combo box pre-filled with the most
    recently used value and offering your last several picks as a dropdown
    (cached to disk per field, most-recent-first). The start date field is
-   pre-filled from the last recorded run; a "use cached OCR data" checkbox
-   starts checked and can always be toggled - if it's checked but no
-   matching cache exists for the selected image folder, OCR just runs
-   normally. An "Approved users" multi-line box lists which Discord users'
+   pre-filled from the last recorded run, and is read as UTC. A "Re-run OCR
+   on all images (ignore cache)" checkbox starts unticked; normally
+   previously OCR'd images are reused from the cache and only new or
+   changed ones are OCR'd, and ticking it forces every image in this run
+   to be OCR'd again. An "Approved users" multi-line box lists which Discord users'
    messages get kept, one per line in the form `123456789012345678 - Alice` 
    - only the leading digits (the actual Discord user ID) are used for 
    filtering, the rest is just a human-readable label. It's pre-filled with 
@@ -85,10 +86,16 @@ What's in scope for v1:
    normal chatlog growth rather than an error) - similarly, a saved focus
    position whose message has disappeared just isn't restored rather than
    landing on the wrong box.
-2. **OCR pass** (background thread, progress bar) — walks the image folder,
-   skips non-image files and anything older than the start date, and runs
-   Tesseract on the rest. Results are cached to disk as JSON so a re-run
-   (e.g. to redo just the correction pass) doesn't repeat OCR work.
+2. **OCR pass** (background thread, progress bar) — after the chatlog is
+   parsed (see "HTML parsing" below), runs Tesseract on exactly the images
+   the kept messages reference, not on everything in the image folder. The
+   results are cached per image as JSON, together with each file's size and
+   modification time, so a later run only OCRs images that are new or whose
+   file changed. The cache is saved every 10 images during the pass, so
+   closing the app or a crash partway through keeps most of the work
+   done. Any referenced image that isn't in the image folder (e.g. an
+   incomplete media download) is listed in a warning before the review
+   screen opens, and its OCR box starts empty.
 3. **HTML parsing** — parses the export, keeping only messages after the
    start date from the approved users entered on the setup screen (or every
    user, if "all users" was checked). DiscordChatExporter timestamps every
@@ -113,9 +120,8 @@ What's in scope for v1:
    against (see "Setup screen" above). A message whose container is
    missing the ID raises a clear error rather than silently falling back
    to a less stable identity. Either error is caught where parsing runs
-   (`App._on_ocr_done`) and shown in the same error dialog OCR failures
-   use, rather than being left to escape uncaught from a background Tk
-   callback - which would otherwise leave the app stuck on the OCR
+   (on the worker thread, before any OCR starts) and shown in the same
+   error dialog OCR failures use, rather than leaving the app stuck on the
    progress screen with no indication anything went wrong.
 4. **Review screen** — an infinite-scroll window listing every approved
    message in order, mirroring the original chatlog. Every row has the same
