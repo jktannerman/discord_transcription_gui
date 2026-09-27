@@ -96,10 +96,9 @@ def setup_logging(level: int = logging.INFO) -> None:
     # a typical session") specifically so that debugging a rare, hard-to-
     # reproduce bug isn't also a race against this file rotating the
     # relevant window away before anyone thinks to look - a single busy
-    # review session can log deep into six figures of trace events (per-op
-    # fingerprinting added for INVESTIGATION_undo_redo_replay_divergence.md
-    # made each op noisier still), and 10MB x 3 backups worked out to only a
-    # session or two of headroom in practice. The budget and an on/off
+    # review session can log deep into six figures of trace events, and
+    # 10MB x 3 backups worked out to only a session or two of headroom in
+    # practice. The budget and an on/off
     # switch live in config (SCROLL_TRACE_*).
     trace_logger = logging.getLogger(TRACE_LOGGER_NAME)
     trace_logger.propagate = False

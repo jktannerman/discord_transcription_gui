@@ -24,24 +24,23 @@ deepest coverage:
 - Slot-based keyboard navigation (`_move_focus` stepping through
   `(item_index, role)` slots in transcript order, message before one
   `"ocrN"` slot per attached image).
-- Per-box undo/redo history (`text_undo.py`) surviving a row being paged out
-  and rebuilt.
-- `text_undo.py`'s recording proxy resolving symbolic index arguments
-  (`sel.first`/`sel.last`, the `insert` mark) to absolute positions at
-  record time (`app_tests/test_text_undo.py`), plus the end-to-end shape of
-  the bug this fixes: selecting and deleting text, then paging that row out
-  and back in, must not raise and must land on the correct final text
-  (`app_tests/test_review_view.py`). See
-  [ARCHITECTURE_REVIEW_SCREEN.md](ARCHITECTURE_REVIEW_SCREEN.md)'s "Symbolic
-  marks recorded in a UndoLog must be resolved before they can drift".
-- The three defense-in-depth backstops that shipped alongside that fix (same
-  doc): a replay failure that still somehow occurs recovers the box's
-  last-known-good text and self-heals its `UndoLog` instead of crashing;
-  rebuilding an already-live box (a "should be impossible" double-build)
-  reclaims its content into `self._saved_texts` instead of orphaning it; and
-  one row's build exception no longer aborts the rest of its reconcile
-  batch or leaves a dangling `KeyError` trap on later Tab/Shift-Tab
-  navigation to a row that failed to build.
+- Undo-step grouping and the undo/redo stacks (`app/gui/edit_history.py`,
+  `test_edit_history.py`, no display needed): word boundaries, the pause
+  rule, insert/delete switches, cursor jumps, paste/cut/standalone steps,
+  redo clearing, and the history cap.
+- Per-box undo/redo history surviving a row being paged out and rebuilt,
+  plus the randomized property tests (text, cursor, checkbox and the whole
+  Ctrl+Z walk unchanged by a teardown/rebuild) - see ARCHITECTURE.md's
+  general heuristic.
+- Selecting and deleting text, then paging that row out and back in, must
+  not raise and must land on the correct final text
+  (`app_tests/test_review_view.py`) - the end-to-end shape of
+  `archive/INVESTIGATION_shift_tab_reconcile_lockup.md`.
+- Two backstops in the virtualization core: rebuilding an already-live box
+  (a "should be impossible" double-build) syncs its content into its
+  SlotState instead of orphaning it, and one row's build exception doesn't
+  abort the rest of its reconcile batch or leave a dangling `KeyError` trap
+  on later Tab/Shift-Tab navigation to a row that failed to build.
 - A focused box always scrolling fully into view, not just its row, and a
   far-away Tab/resume target landing fully within the *real* canvas
   viewport rather than just the document-space model's own idea of where it

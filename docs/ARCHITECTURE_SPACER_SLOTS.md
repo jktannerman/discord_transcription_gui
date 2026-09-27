@@ -115,12 +115,12 @@ Discord `message_id`. On a subsequent fresh run of the same chatlog,
 `_show_review` loads these via `state.load_finalized_edits` and passes them
 to `ReviewFrame` as `initial_finalized_texts`.
 
-**Priority order** inside `ReviewFrame.__init__`: `_saved_texts` is seeded
-first from the in-progress session (`initial_saved_texts`), then from
-finalized edits for any slot not already covered. The existing
-checkbox-seeding loop (`checked = saved is not None and saved != default`)
-runs last, so a finalized edit that differs from the OCR default starts its
-checkbox checked automatically with no special-case code.
+**Priority order** in `ReviewFrame._initial_slot_states`: each box's
+starting text is the in-progress session's edit (`initial_saved_texts`) if
+there is one, else the finalized edit, else the default. An "ocr" box
+starts checked exactly when that text differs from its OCR default, so a
+finalized edit that differs from the OCR default starts its checkbox checked
+automatically with no special-case code.
 
 **What counts as an edit**: `ReviewFrame._get_box_text` reports `None`
 for any box whose text equals its default (and for any unchecked OCR box),

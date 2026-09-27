@@ -7,8 +7,7 @@ that point in the pipeline there's no such thing yet as "the user's edit",
 so nothing here needs to know or care which boxes a session has touched:
 once a box has a saved edit, ``ReviewItem.initial_ocr_texts`` (this
 module's only output) is never consulted again for it (see
-``row_building.RowBuildingMixin._populate_text_box``'s ``self._saved_texts``
-fallback) - corrections are seen by the user once, as a normal part of
+``ReviewFrame._initial_slot_states``) - corrections are seen by the user once, as a normal part of
 that box's starting text, not silently reapplied over their own typing on
 a later run.
 

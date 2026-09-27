@@ -22,6 +22,7 @@ import tkinter as tk
 from typing import Optional, Tuple
 
 from .. import logging_config
+from .edit_history import cursor_after_change
 from .layout_constants import ROW_PACK_PADY_PX
 
 logger = logging_config.get_logger(__name__)
@@ -51,9 +52,7 @@ class KeyboardNavMixin:
 
     def _key_for_widget(self, widget: tk.Text) -> Optional[Tuple[int, str]]:
         """(item_index, role) of the box currently backed by `widget`, or
-        None if it isn't one of this frame's currently-materialized boxes -
-        used both by _record_undo_replacement and by the logging in
-        _undo_text/_redo_text below."""
+        None if it isn't one of this frame's currently-materialized boxes."""
         for key, candidate in self._text_widgets.items():
             if candidate is widget:
                 return key
@@ -75,162 +74,78 @@ class KeyboardNavMixin:
         return self._redo_text(event) if shift_held else self._undo_text(event)
 
     def _undo_text(self, event: tk.Event) -> str:
-        widget = event.widget
-        key = self._key_for_widget(widget)
-        log = self._undo_logs.get(key) if key is not None else None
-        op_count_before = len(log.ops) if log is not None else None
-        # Suppress the recording proxy (text_undo.py) while edit_undo()
-        # runs - its own internal delete/insert side effects would
-        # otherwise get captured as ordinary ops *in addition to* the
-        # "replace" op _record_undo_replacement appends below, double-
-        # recording this single undo and making a later replay apply it
-        # twice (see UndoLog.suppress's docstring).
-        if log is not None:
-            log.suppress = True
-        # Also suppress _on_text_modified's unconditional "any change checks
-        # the box" reaction (row_building.py) - undo/redo always re-derives
-        # checked/unchecked by comparing the resulting text to the OCR
-        # default instead (see _resync_ocr_checkbox_after_undo), never the
-        # unconditional rule that applies to ordinary typing/paste.
-        if key is not None:
-            self._suppress_ocr_auto_check.add(key)
-        try:
-            widget.edit_undo()
-        except tk.TclError:
-            logger.info(
-                "ctrl+z pressed, nothing to undo",
-                extra=logging_config.extra(key=key, widget=str(widget)),
-            )
-        else:
-            self._record_undo_replacement(widget, "undo")
-            self._resync_ocr_checkbox_after_undo(key, widget)
-            logger.info(
-                "ctrl+z pressed, undo applied",
-                extra=logging_config.extra(
-                    key=key,
-                    widget=str(widget),
-                    op_count_before=op_count_before,
-                    op_count_after=len(log.ops) if log is not None else None,
-                    **logging_config.text_fingerprint(widget.get("1.0", "end-1c")),
-                ),
-            )
-        finally:
-            if log is not None:
-                log.suppress = False
-            if key is not None:
-                self.after_idle(lambda k=key: self._suppress_ocr_auto_check.discard(k))
-        return "break"
+        """Undo one step in the event's box. See _step_history."""
+        return self._step_history(event.widget, redo=False)
 
     def _redo_text(self, event: tk.Event) -> str:
-        widget = event.widget
-        key = self._key_for_widget(widget)
-        log = self._undo_logs.get(key) if key is not None else None
-        op_count_before = len(log.ops) if log is not None else None
-        if log is not None:
-            log.suppress = True
-        if key is not None:
-            self._suppress_ocr_auto_check.add(key)
-        try:
-            widget.edit_redo()
-        except tk.TclError:
-            logger.info(
-                "ctrl+shift+z pressed, nothing to redo",
-                extra=logging_config.extra(key=key, widget=str(widget)),
-            )
-        else:
-            self._record_undo_replacement(widget, "redo")
-            self._resync_ocr_checkbox_after_undo(key, widget)
-            logger.info(
-                "ctrl+shift+z pressed, redo applied",
-                extra=logging_config.extra(
-                    key=key,
-                    widget=str(widget),
-                    op_count_before=op_count_before,
-                    op_count_after=len(log.ops) if log is not None else None,
-                    **logging_config.text_fingerprint(widget.get("1.0", "end-1c")),
-                ),
-            )
-        finally:
-            if log is not None:
-                log.suppress = False
-            if key is not None:
-                self.after_idle(lambda k=key: self._suppress_ocr_auto_check.discard(k))
-        return "break"
+        """Redo one step in the event's box. See _step_history."""
+        return self._step_history(event.widget, redo=True)
 
-    def _resync_ocr_checkbox_after_undo(self, key: Optional[Tuple[int, str]], widget: tk.Text) -> None:
-        """After a successful undo/redo on an "ocr" box, re-derive its
-        checkbox's checked state by comparing the resulting text to the OCR
-        default - the same rule used to seed it at build time
-        (ReviewFrame.__init__) - rather than leaving it at whatever an
-        earlier edit or checkbox click last set it to. Undo/redo can land
-        the box back on exactly its OCR default (e.g. undoing a checkbox
-        toggle's own delete/insert, or undoing the only edit a box ever
-        had), and without this the checkbox would keep showing "edited"
-        for text that no longer is - or vice versa for a redo that lands
-        back on edited text."""
-        if key is None or not key[1].startswith("ocr"):
-            return
-        index, role = key
-        image_index = int(role[len("ocr"):])
-        ocr_default = self._items[index].initial_ocr_texts[image_index]
-        current_text = widget.get("1.0", "end-1c")
-        checked = current_text != ocr_default
-        self._checkbox_checked[key] = checked
-        if checked:
-            self._user_edited_texts[key] = current_text
-        var = self._checkbox_vars.get(key)
-        if var is not None:
-            var.set(checked)
+    def _step_history(self, widget: tk.Text, redo: bool) -> str:
+        """Move one step back (undo) or forward (redo) in a box's history.
 
-    def _record_undo_replacement(self, widget: tk.Text, source: str) -> None:
-        """Record a successful Ctrl+Z/Ctrl+Shift+Z as a "replace" op -
-        `widget`'s exact resulting text, captured right after edit_undo()/
-        edit_redo() ran - appended directly to `widget`'s UndoLog (see
-        text_undo.py), so that if this box's row is later torn down and
-        rebuilt, replaying its log reproduces this undo/redo's result too -
-        not just the insert/delete calls either side of it.
+        Uses the box's EditHistory (edit_history.py), not Tk's own undo,
+        which is turned off on these widgets. The cursor lands at the
+        change, and an "ocr" box's checkbox is re-derived from the result
+        (see _resync_ocr_checkbox_after_undo).
 
-        This replaced an earlier design that recorded a bare "undo"/"redo"
-        marker and replayed it by calling text_widget.edit_undo()/
-        .edit_redo() again on the rebuilt widget - which silently produced
-        the *wrong* result whenever the rebuilt widget's own native undo
-        stack happened to group the replayed insert/delete calls
-        differently than the live widget's stack was grouped at the moment
-        of the original Ctrl+Z (e.g. because of edit_separator() calls -
-        such as row_building.py's _on_ocr_checkbox_toggle makes - that
-        never appear in `ops` at all, so replay can't reproduce their
-        effect on grouping). Recording the *result* directly instead makes
-        replay of this step deterministic and content-correct regardless
-        of how replay's own native stack ends up grouped - see
-        text_undo.py's module docstring and
-        INVESTIGATION_undo_redo_replay_divergence.md for the full story.
+        Args:
+            widget: The Text widget the key press came from.
+            redo: True to redo, False to undo.
 
-        Also traces this exact moment to scroll_trace.log (via
-        self._log_event, the same "box_op_recorded" event row_building.py's
-        attach_undo_recording on_op hook emits for ordinary insert/delete
-        ops) - unlike those, this was previously invisible in
-        scroll_trace.log entirely: it's appended directly to log.ops here,
-        never through attach_undo_recording's proxy, so nothing logged the
-        fact that a Ctrl+Z/Ctrl+Shift+Z happened until this box's *next*
-        rebuild replayed it."""
+        Returns:
+            "break", so Tk's own Text bindings don't also handle the key.
+        """
+        action = "redo" if redo else "undo"
         key = self._key_for_widget(widget)
         if key is None:
-            return
-        log = self._undo_logs.get(key)
-        if log is None:
-            return
-        after_text = widget.get("1.0", "end-1c")
-        log.ops.append(("replace", (after_text,)))
-        self._log_event(
-            "box_op_recorded",
-            key=key,
-            op="replace",
-            source=source,
-            args=repr((after_text,))[:200],
-            args_full_len=len(repr((after_text,))),
-            total_ops=len(log.ops),
-            **logging_config.text_fingerprint(after_text),
+            return "break"
+        self._sync_slot_from_widget(key, widget)
+        state = self._slot_states[key]
+        before = state.text
+        target = state.history.redo(before) if redo else state.history.undo(before)
+        if target is None:
+            logger.info(
+                f"{action} pressed, nothing to {action}",
+                extra=logging_config.extra(key=key),
+            )
+            return "break"
+        self._set_box_text(key, target, cursor=f"1.0+{cursor_after_change(before, target)}c")
+        self._touched_slots.add(key)
+        self._resync_ocr_checkbox_after_undo(key)
+        logger.info(
+            f"{action} applied",
+            extra=logging_config.extra(
+                key=key,
+                undo_depth=state.history.undo_depth,
+                redo_depth=state.history.redo_depth,
+                **logging_config.text_fingerprint(target),
+            ),
         )
+        return "break"
+
+    def _resync_ocr_checkbox_after_undo(self, key: Tuple[int, str]) -> None:
+        """Re-derive an "ocr" box's checkbox after an undo/redo.
+
+        Checked exactly when the resulting text differs from the OCR
+        default - the same rule used to seed it when the screen is built -
+        rather than the "any change checks the box" rule typing uses. So
+        undoing back to the OCR default (e.g. undoing the box's only edit)
+        unticks it, and undoing an untick brings back both the edit and the
+        tick.
+
+        Args:
+            key: The box's (item_index, role). Non-"ocr" roles are ignored.
+        """
+        if not key[1].startswith("ocr"):
+            return
+        state = self._slot_states[key]
+        state.checked = state.text != state.default
+        if state.checked:
+            state.user_edit = state.text
+        var = self._checkbox_vars.get(key)
+        if var is not None:
+            var.set(state.checked)
 
     def _on_page_up(self, event: Optional[tk.Event] = None) -> str:
         if self._scroll_frozen:

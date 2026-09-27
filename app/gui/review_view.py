@@ -76,11 +76,12 @@ scrollregion is likewise set explicitly from self._row_heights (the full
 document height), not derived from this frame's own bbox (which would
 only ever reflect the small materialized subset).
 
-Edits made in a row are preserved in self._saved_texts before that row is
-torn down, and restored if the row is rebuilt later. The currently focused
-text box keeps focus across a reconcile if it's still in the new
-materialized range; otherwise focus is simply lost, same as scrolling a
-focused widget off-screen.
+Every editable box's text lives in its SlotState (self._slot_states - see
+slot_state.py), kept in step with the live widget on every change, so a row
+can be torn down and rebuilt without losing anything: a rebuilt box is just
+filled from its SlotState. The currently focused text box keeps focus
+across a reconcile if it's still in the new materialized range; if not, its
+focus and cursor are restored once its row is rebuilt.
 
 Images are loaded/decoded lazily within the materialized window, only for
 rows within (or near) the visible viewport, and unloaded again once
@@ -94,10 +95,9 @@ via _ensure_materialized if it isn't already, landing on the Finalize
 button once there's no text box left to advance to; Page Up/Down scroll the
 whole window rather than (Tk's default) scrolling within whichever Text
 widget has focus; Ctrl+Z/Ctrl+Shift+Z undo/redo within a single text box,
-using Tk's built-in per-widget undo stack - kept alive across that box's
-row being torn down and rebuilt by replaying its recorded edit history onto
-the fresh widget (see text_undo.py), though not across the app being
-restarted.
+using the box's own EditHistory (edit_history.py) rather than Tk's, so the
+history survives the row being torn down and rebuilt, though not the app
+being restarted.
 
 _reconcile is debounced (see DEBOUNCE_MS): fast scrolling fires many
 wheel/scrollbar events in quick succession, and running it synchronously
@@ -110,6 +110,7 @@ _reconcile is idempotent, so coalescing several scroll events into one
 pass changes only timing, never the result.
 """
 
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
@@ -123,7 +124,7 @@ from .image_loading import ImageLoader
 from .keyboard_nav import KeyboardNavMixin
 from .layout_constants import ROW_PACK_PADY_PX
 from .row_building import RowBuildingMixin
-from .text_undo import UndoLog
+from .slot_state import SlotState
 from .virtualization import compute_visible_range, estimate_row_height
 from .wheel import WHEEL_EVENT_SEQUENCES, wheel_delta
 
@@ -207,30 +208,20 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         self._text_widgets: Dict[Tuple[int, str], tk.Text] = {}
         self._text_containers: Dict[Tuple[int, str], tk.Widget] = {}
         self._images = ImageLoader()
-        # Text captured from a box just before its row is torn down, so
-        # edits survive a row being paged out and back in. Absence means
-        # "never edited/visited" - fall back to the item's initial_*_text.
-        # Seeded from a saved session's edits when resuming, rather than
-        # starting blank.
-        self._saved_texts: Dict[Tuple[int, str], str] = {}
-        if initial_saved_texts is not None and len(initial_saved_texts) == len(items):
-            for idx, edited in enumerate(initial_saved_texts):
-                for role, text in edited.items():
-                    if text is not None:
-                        self._saved_texts[(idx, role)] = text
-        # Finalized edits from a prior completed run - used as fallback for
-        # slots not already covered by a session resume above. Session takes
-        # priority (already in _saved_texts); finalized edits fill the rest,
-        # so a fresh run pre-populates with the previously-finalized text
-        # rather than raw OCR.
-        if initial_finalized_texts is not None and len(initial_finalized_texts) == len(items):
-            for idx, edited in enumerate(initial_finalized_texts):
-                for role, text in edited.items():
-                    if text is not None and (idx, role) not in self._saved_texts:
-                        self._saved_texts[(idx, role)] = text
+        # The model for every editable box: text, default, undo history,
+        # cursor, and an "ocr" box's checkbox state - see slot_state.py.
+        # Built eagerly for every slot, not when a row is first built, since
+        # collect_edited_texts/autosave report every box whether or not its
+        # row has ever been materialized this session.
+        self._slot_states: Dict[Tuple[int, str], SlotState] = self._initial_slot_states(
+            items, initial_saved_texts, initial_finalized_texts
+        )
+        # Time source for EditHistory's pause rule. An attribute so tests
+        # can freeze it.
+        self._clock: Callable[[], float] = time.monotonic
         # Slots the user has deliberately acted on this session - typed/
         # pasted/undone in, or clicked the OCR checkbox of (see
-        # row_building.py's _on_text_modified/_on_ocr_checkbox_toggle).
+        # row_building.py's _sync_slot_from_widget/_on_ocr_checkbox_toggle).
         # Finalize only removes a box's stored finalized edit if its slot is
         # in here: a box that merely *looks* reverted, with no recorded
         # action behind it, keeps its stored edit - so a logic bug that
@@ -238,62 +229,10 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         # Persisted with the session (seeded from initial_touched_slots on
         # resume), since an untick made before closing the app still counts.
         self._touched_slots: Set[Tuple[int, str]] = set(initial_touched_slots or ())
-        # Cursor ("insert" mark) position captured alongside self._saved_texts
-        # when a box's row is torn down, so paging a focused box's row out and
-        # back in (e.g. a fast Page Up/Down burst that outruns the
-        # virtualization buffer - see _destroy_row) restores the cursor to
-        # where it was rather than resetting it to the box's start. Not
-        # persisted across a session save/resume - only self._saved_texts is -
-        # so a resumed box's cursor still starts at "1.0", same as before.
-        self._saved_cursor: Dict[Tuple[int, str], str] = {}
-        # Per-OCR-box "edited vs. not" checkbox state (see row_building.py's
-        # _build_editable_text_box/_on_ocr_checkbox_toggle) - keyed the same
-        # way as every other per-box dict here, and never cleared by
-        # _destroy_row, so it survives a row being torn down and rebuilt
-        # with no extra teardown/rebuild plumbing. self._user_edited_texts
-        # holds the last user-edited version of a box's text, kept distinct
-        # from whatever it currently *displays* (the OCR default, while
-        # unchecked). Seeded eagerly below - not lazily the first time a row
-        # is built - since collect_edited_texts/autosave need every item's
-        # checked-state regardless of whether its row has ever been
-        # materialized this session.
-        self._checkbox_checked: Dict[Tuple[int, str], bool] = {}
-        self._user_edited_texts: Dict[Tuple[int, str], str] = {}
-        for idx, item in enumerate(items):
-            for image_index in range(len(item.image_paths)):
-                key = (idx, f"ocr{image_index}")
-                saved = self._saved_texts.get(key)
-                default = item.initial_ocr_texts[image_index]
-                checked = saved is not None and saved != default
-                self._checkbox_checked[key] = checked
-                if checked:
-                    self._user_edited_texts[key] = saved
         # tk.BooleanVar backing each currently-built OCR box's checkbox -
         # only exists while that box's row is materialized, same as
         # self._text_widgets.
         self._checkbox_vars: Dict[Tuple[int, str], tk.BooleanVar] = {}
-        # Keys whose next deferred <<Modified>> event(s) should NOT be
-        # treated as "the user edited this OCR box" - set around a box's
-        # own build-time insert/replay and around the checkbox's own
-        # programmatic content swap, both of which fire <<Modified>> just
-        # like a real edit (see row_building.py's _populate_text_box and
-        # docs/ARCHITECTURE_REVIEW_SCREEN.md's "<<Modified>> fires on a
-        # box's initial population" entry for why that event can't be trusted at face
-        # value).
-        self._suppress_ocr_auto_check: set = set()
-        # One UndoLog per box, recording every insert/delete/undo/redo it's
-        # had since first built this session (see text_undo.py) - replayed
-        # onto a fresh widget when that box's row is rebuilt after being
-        # paged out, so Ctrl+Z keeps reaching back through edits made before
-        # the teardown rather than starting blank. Never seeded from a
-        # resumed session - only self._saved_texts is - so undo history
-        # genuinely doesn't persist across app launches, just within one.
-        self._undo_logs: Dict[Tuple[int, str], UndoLog] = {}
-        # detach() callback from text_undo.attach_undo_recording, one per
-        # currently-built box - called in _destroy_row just before that
-        # box's widget is destroyed, to release the Tcl command the
-        # recording proxy installed.
-        self._undo_detach: Dict[Tuple[int, str], Callable[[], None]] = {}
         # after()-id of a pending debounced spellcheck pass for a currently-
         # built content box (see row_building.py's _schedule_spellcheck) -
         # only ever set for "message"/"ocr{N}" boxes, never a spacer box.
@@ -460,6 +399,51 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
 
         self.after_idle(self._apply_initial_position)
 
+    @staticmethod
+    def _initial_slot_states(
+        items: List[ReviewItem],
+        initial_saved_texts: Optional[List[Dict[str, Optional[str]]]],
+        initial_finalized_texts: Optional[List[Dict[str, Optional[str]]]],
+    ) -> Dict[Tuple[int, str], SlotState]:
+        """Build one SlotState per editable box, seeded with any saved text.
+
+        A resumed session's edit wins over a previously-finalized one;
+        finalized edits fill in the boxes the session doesn't cover. An
+        "ocr" box starts checked exactly when its seeded text differs from
+        its OCR default.
+
+        Args:
+            items: The review items, in transcript order.
+            initial_saved_texts: A resumed session's per-item role->text
+                edits, or None. Ignored unless it has one entry per item.
+            initial_finalized_texts: Previously-finalized per-item
+                role->text edits, or None. Same length rule.
+
+        Returns:
+            A SlotState for every (item_index, role) slot.
+        """
+        seeded: Dict[Tuple[int, str], str] = {}
+        for source in (initial_saved_texts, initial_finalized_texts):
+            if source is None or len(source) != len(items):
+                continue
+            for idx, edited in enumerate(source):
+                for role, text in edited.items():
+                    if text is not None:
+                        seeded.setdefault((idx, role), text)
+
+        states: Dict[Tuple[int, str], SlotState] = {}
+        for idx, item in enumerate(items):
+            for role in item.slot_roles:
+                key = (idx, role)
+                default = item.initial_text_for_role(role)
+                text = seeded.get(key, default)
+                state = SlotState(default=default, text=text)
+                if role.startswith("ocr") and text != default:
+                    state.checked = True
+                    state.user_edit = text
+                states[key] = state
+        return states
+
     def _apply_initial_position(self) -> None:
         """First-layout hook, run once via after_idle in place of a plain
         _reconcile call: restores a resumed session's focus/scroll position
@@ -561,22 +545,29 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         )
 
     def _destroy_row(self, index: int) -> None:
-        """Tear down the row widget(s) for items[index], saving any edited
-        text first so it can be restored if the row is paged back in - and,
-        if one of its boxes currently has focus, its cursor position too
-        (self._saved_cursor) plus the slot itself (self._refocus_slot), so
-        _build_row can restore both once this row is rebuilt rather than
-        just silently dropping focus the way scrolling a focused widget
-        off-screen normally would."""
+        """Tear down the row widget(s) for items[index].
+
+        Each box's SlotState first catches up with any edit its widget
+        hasn't reported yet, and records the cursor position. If one of
+        the boxes has focus, its slot is kept in self._refocus_slot, so
+        _build_row can put focus back once this row is rebuilt rather than
+        silently dropping it the way scrolling a focused widget off-screen
+        normally would.
+
+        Args:
+            index: The item index whose row to tear down.
+        """
         row = self._row_frames.pop(index, None)
         if row is None:
             return
         focused = self.focus_get()
         for key in [k for k in self._text_widgets if k[0] == index]:
-            text_widget = self._text_widgets.pop(key)
-            text = text_widget.get("1.0", "end-1c")
-            self._saved_texts[key] = text
-            self._saved_cursor[key] = text_widget.index("insert")
+            text_widget = self._text_widgets[key]
+            self._sync_slot_from_widget(key, text_widget)
+            del self._text_widgets[key]
+            state = self._slot_states[key]
+            state.cursor = text_widget.index("insert")
+            text = state.text
             had_focus = text_widget is focused
             if had_focus:
                 self._refocus_slot = key
@@ -589,9 +580,6 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
             )
             self._text_containers.pop(key, None)
             self._checkbox_vars.pop(key, None)
-            detach = self._undo_detach.pop(key, None)
-            if detach is not None:
-                detach()
             pending_spellcheck = self._spellcheck_after_ids.pop(key, None)
             if pending_spellcheck is not None:
                 try:
@@ -634,15 +622,11 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
     def _try_build_row(self, index: int, before: Optional[tk.Widget] = None) -> Optional[tk.Widget]:
         """_build_row, but a single row's build failure doesn't propagate
         out of this Tk callback and abort the rest of _sync_materialized_
-        rows's batch. row_building.py's _populate_text_box already
-        recovers from the one concrete failure mode this hit in practice
-        (a UndoLog op that can't be replayed - see
-        INVESTIGATION_shift_tab_reconcile_lockup.md), but that recovery
-        can only run for the box it happens in - this is a backstop for
-        that fix missing something, or any other future per-row build
-        failure, not a substitute for fixing what's actually raising.
+        rows's batch - a backstop for any per-row build failure, not a
+        substitute for fixing what's actually raising (the one this hit in
+        practice is described in INVESTIGATION_shift_tab_reconcile_lockup.md).
 
-        Before that recovery existed, an uncaught exception here (a) left
+        Left uncaught, an exception here (a) left
         this row's index missing from self._text_widgets while still
         listed in the static self._slots nav list (later KeyError on
         Tab/Shift-Tab), (b) aborted the rest of this batch, so every row
@@ -656,9 +640,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         whole screen wedging.
 
         Tears down whatever this attempt did manage to build via
-        _destroy_row - which also captures into self._saved_texts/
-        self._saved_cursor anything that succeeded before the failure -
-        rather than leaving a half-built row Frame sitting in the packed
+        _destroy_row rather than leaving a half-built row Frame sitting in the packed
         order. Returns None on failure so callers can skip it: leave it
         out of newly_built, and (for the backward-growth loop) keep the
         existing anchor rather than advancing to a row that doesn't exist."""
@@ -1032,36 +1014,35 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         )
 
     def _get_box_text(self, index: int, role: str) -> Optional[str]:
-        """Current text for one box - the materialized widget's live
-        content if its row is currently built, else the last-saved text
-        from a row that was paged out, else None (meaning "never touched",
-        or this item has no box for this role at all - both are handled
-        identically by callers, which fall back to the item's matching
-        initial_*_text).
+        """The edit to report for one box, for Finalize and autosave.
 
-        An "ocr*" role is a special case: while its checkbox is unchecked,
-        this always reports None - even though the box's live content is
-        real text (the OCR default it's currently displaying) - since
-        unchecked literally means "use the default", and a real edit
-        sitting in self._user_edited_texts for if the box gets re-checked
-        isn't the thing that should be written out or persisted to the
-        session file while it's hidden behind that checkbox. This doesn't
-        change what Finalize ever writes (None already falls back to the
-        same default text in review_item.lines_for_item) - only what
-        collect_edited_texts reports, which is what autosave/the session
-        file's "edited_texts" field actually persist."""
+        An "ocr" box whose checkbox is unchecked reports None even though
+        it shows real text: unchecked means "use the OCR default", and an
+        edit hidden behind the checkbox (SlotState.user_edit) isn't written
+        out or saved. Finalize treats None as the default text (see
+        review_item.lines_for_item).
+
+        Args:
+            index: The item index.
+            role: The box's role within that item.
+
+        Returns:
+            The box's current text, or None if it equals the default (or
+            is an unchecked "ocr" box).
+        """
         key = (index, role)
-        if role.startswith("ocr") and not self._checkbox_checked.get(key, False):
-            return None
         widget = self._text_widgets.get(key)
-        text = widget.get("1.0", "end-1c") if widget is not None else self._saved_texts.get(key)
-        # Text identical to the default isn't an edit - reporting it as one
-        # (as every box used to be, once its row had been built even just
-        # by scrolling past) stored copies of defaults as finalized edits,
-        # which then pinned stale text over newer defaults on later runs.
-        if text is not None and text == self._items[index].initial_text_for_role(role):
+        if widget is not None:
+            self._sync_slot_from_widget(key, widget)
+        state = self._slot_states[key]
+        if role.startswith("ocr") and not state.checked:
             return None
-        return text
+        # Text identical to the default isn't an edit - reporting it as one
+        # would store copies of defaults as finalized edits, which then pin
+        # stale text over newer defaults on later runs.
+        if state.text == state.default:
+            return None
+        return state.text
 
     def get_touched_slots(self) -> Set[Tuple[int, str]]:
         """The (item_index, role) slots the user has deliberately acted on

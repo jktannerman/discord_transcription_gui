@@ -300,10 +300,13 @@ What's in scope for v1:
    with the bottom of the window (and **Up** the top edge with the top),
    rather than only the cursor's own line peeking into view;
    **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo within a single text box (Caps
-   Lock doesn't swap them) - history
-   is kept separately per box and survives that box's row being paged out
-   and back in, though (like everything else not written to the output
-   file) not a full app restart.
+   Lock doesn't swap them). Each undo step is roughly one word plus the
+   space after it; a pause of over a second, switching between typing and
+   deleting, or moving the cursor elsewhere also starts a new step, and a
+   paste, cut, Ctrl+Backspace or checkbox click is always a step of its
+   own. History is kept separately per box (the last 200 steps) and
+   survives that box's row being paged out and back in, though (like
+   everything else not written to the output file) not a full app restart.
 5. **Finalize** — a button that floats over the bottom of the review
    screen, but only once you've scrolled all the way to the end of the
    transcript (or the whole transcript fits on screen with nothing to
@@ -443,8 +446,10 @@ gui_transcription/
       wheel.py             # mouse wheel/touchpad events across platforms
                           # (<MouseWheel> vs X11's <Button-4>/<Button-5>;
                           # horizontal/Shift scrolls ignored)
-      text_undo.py          # per-box undo/redo history that survives a
-                          # row being paged out and rebuilt (in-memory only)
+      slot_state.py        # per-box model (text, cursor, undo history,
+                          # OCR checkbox) that widgets are filled from
+      edit_history.py      # per-box undo/redo snapshots and undo-step
+                          # grouping (in-memory only)
       theme.py             # dark theme colors/fonts + ttk Style setup
   app_tests/              # pytest unit tests for all the non-GUI logic
   requirements.txt

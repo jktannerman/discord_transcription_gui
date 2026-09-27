@@ -8,6 +8,7 @@ explicitly the most failure-prone part of the app (see ARCHITECTURE.md's
 account of the oscillation bug its current design replaced), so it's the
 highest-value gap to close.
 """
+import copy
 import random
 import time
 import tkinter as tk
@@ -233,8 +234,8 @@ def test_spellcheck_tag_is_reapplied_after_a_row_is_paged_out_and_back_in(root, 
     assert widget.tag_ranges("misspelled") != ()
 
     # Page far away (tears the row down, destroying that Text widget - tags
-    # live on the widget instance, not text_undo.py's UndoLog, so they don't
-    # survive this the way edited text/undo history do) and back to the top.
+    # live on the widget instance, not the SlotState, so they don't survive
+    # this the way edited text/undo history do) and back to the top.
     frame._ensure_materialized(len(items) - 1)
     frame._canvas.yview_moveto(0.0)
     frame._reconcile()
@@ -278,10 +279,9 @@ def test_edited_text_survives_a_row_being_paged_out_and_back_in(root, sample_ima
 
 
 def test_undo_history_survives_a_row_being_paged_out_and_back_in(root, sample_image):
-    """The whole point of text_undo.py: Tk's undo stack lives on the Text
-    widget instance, which is destroyed and rebuilt fresh on every page
-    out/in - without replaying the recorded ops back onto the new widget,
-    Ctrl+Z here would have nothing to undo."""
+    """Undo history lives in the box's SlotState, not the Text widget, which
+    is destroyed and rebuilt fresh on every page out/in - so Ctrl+Z on the
+    rebuilt widget still reaches the edit made before the teardown."""
     items = _items(sample_image)
     frame, _ = _build_frame(root, items)
     first_text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
@@ -328,12 +328,12 @@ def test_undo_after_unchecking_an_ocr_box_restores_the_edit_and_rechecks_it(root
     var.set(False)
     frame._on_ocr_checkbox_toggle(key)
     assert widget.get("1.0", "end-1c") == default_text
-    assert frame._checkbox_checked[key] is False
+    assert frame._slot_states[key].checked is False
 
     frame._undo_text(type("Event", (), {"widget": widget})())
 
     assert widget.get("1.0", "end-1c") == edited_text
-    assert frame._checkbox_checked[key] is True
+    assert frame._slot_states[key].checked is True
     assert frame._checkbox_vars[key].get() is True
 
 
@@ -400,7 +400,7 @@ def test_ocr_checkbox_starts_unchecked_for_an_untouched_box(root, sample_image):
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
 
-    assert frame._checkbox_checked[key] is False
+    assert frame._slot_states[key].checked is False
     assert frame._checkbox_vars[key].get() is False
     assert frame._text_widgets[key].get("1.0", "end-1c") == items[image_item].initial_ocr_texts[0]
 
@@ -414,7 +414,7 @@ def test_ocr_checkbox_starts_checked_for_a_resumed_edit_differing_from_default(r
     frame, _ = _build_frame(root, items, initial_saved_texts=saved_texts)
     key = (image_item, "ocr0")
 
-    assert frame._checkbox_checked[key] is True
+    assert frame._slot_states[key].checked is True
     assert frame._checkbox_vars[key].get() is True
     assert frame._text_widgets[key].get("1.0", "end-1c") == "a resumed ocr edit"
 
@@ -431,7 +431,7 @@ def test_typing_into_an_ocr_box_checks_its_checkbox(root, sample_image):
     widget.insert("end", " typed")
     root.update()  # let the queued <<Modified>> event fire
 
-    assert frame._checkbox_checked[key] is True
+    assert frame._slot_states[key].checked is True
     assert frame._checkbox_vars[key].get() is True
 
 
@@ -459,14 +459,14 @@ def test_unchecking_then_rechecking_an_ocr_box_round_trips_both_versions(root, s
     frame._on_ocr_checkbox_toggle(key)
 
     assert widget.get("1.0", "end-1c") == default_text
-    assert frame._checkbox_checked[key] is False
-    assert frame._user_edited_texts[key] == edited_text  # not discarded
+    assert frame._slot_states[key].checked is False
+    assert frame._slot_states[key].user_edit == edited_text  # not discarded
 
     var.set(True)
     frame._on_ocr_checkbox_toggle(key)
 
     assert widget.get("1.0", "end-1c") == edited_text
-    assert frame._checkbox_checked[key] is True
+    assert frame._slot_states[key].checked is True
 
 
 def test_collect_edited_texts_reports_none_for_an_unchecked_ocr_box(root, sample_image):
@@ -499,11 +499,12 @@ def test_rows_paged_out_and_back_in_still_report_no_edits(root, sample_image):
     counted as an edit - and was stored as a finalized edit at Finalize."""
     items = _items(sample_image, count=40)
     frame, _ = _build_frame(root, items)
+    first_row = frame._row_frames[0]
     frame._canvas.yview_moveto(1.0)
     frame._reconcile()
     frame._canvas.yview_moveto(0.0)
     frame._reconcile()
-    assert frame._saved_texts  # rows really were torn down and saved
+    assert frame._row_frames[0] is not first_row  # rows really were torn down and rebuilt
 
     collected = frame.collect_edited_texts()
 
@@ -586,10 +587,10 @@ def test_ocr_checkbox_state_and_both_versions_survive_paging_out_and_back_in(roo
     frame._reconcile()
 
     assert key in frame._text_widgets
-    assert frame._checkbox_checked[key] is False
+    assert frame._slot_states[key].checked is False
     assert frame._checkbox_vars[key].get() is False
     assert frame._text_widgets[key].get("1.0", "end-1c") == default_text
-    assert frame._user_edited_texts[key] == edited_text
+    assert frame._slot_states[key].user_edit == edited_text
 
 
 def test_finalize_button_visible_for_a_transcript_that_fits_on_screen(root, sample_image):
@@ -679,18 +680,14 @@ def test_resuming_session_restores_saved_edit_and_focus(root, sample_image):
 
 
 def test_resumed_edit_survives_being_paged_out_and_back_in_with_no_further_edits(root, sample_image):
-    """Regression test for a real data-loss bug: a resumed box's first
-    build correctly showed the saved edit (the case
-    test_resuming_session_restores_saved_edit_and_focus covers), but its
-    UndoLog was seeded empty with no record of *which* text it started
-    from. The next time that same box was torn down and rebuilt - here,
-    with zero further edits in between - _populate_text_box re-based on
-    the item's plain initial_message_text instead of the resumed edit and
-    replayed an empty op log on top, silently reverting to the unedited
-    default. Combines the two scenarios test_resuming_session_restores_
-    saved_edit_and_focus and test_edited_text_survives_a_row_being_paged_
-    out_and_back_in each cover separately - neither alone caught this,
-    since the bug only appears once both are true at once."""
+    """Regression test for a real data-loss bug (the old UndoLog.baseline
+    bug): a resumed box showed its saved edit on first build, but reverted
+    to the unedited default the next time its row was torn down and
+    rebuilt, with no further edits in between. Combines the two scenarios
+    test_resuming_session_restores_saved_edit_and_focus and test_edited_
+    text_survives_a_row_being_paged_out_and_back_in each cover separately -
+    neither alone caught this, since the bug only appeared once both were
+    true at once."""
     # count=40 (not the smaller count the resume-focus test above uses) -
     # with too few items, the whole transcript fits inside the
     # virtualization buffer and text_item's row is never actually torn
@@ -964,7 +961,7 @@ def test_destroying_a_focused_rows_box_then_rebuilding_restores_focus_and_cursor
 
     frame._destroy_row(text_item)
     assert frame._refocus_slot == key
-    assert frame._saved_cursor[key] == "1.3"
+    assert frame._slot_states[key].cursor == "1.3"
 
     frame._build_row(text_item)
     root.update()  # let the after_idle-scheduled refocus run
@@ -1097,10 +1094,10 @@ def test_ocr_checkbox_starts_checked_when_finalized_differs_from_ocr(root, sampl
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
     key = (image_item, "ocr0")
 
-    assert frame._checkbox_checked[key] is True
+    assert frame._slot_states[key].checked is True
     assert frame._checkbox_vars[key].get() is True
     assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized ocr different from default"
-    assert frame._user_edited_texts[key] == "finalized ocr different from default"
+    assert frame._slot_states[key].user_edit == "finalized ocr different from default"
 
 
 def test_ocr_checkbox_starts_unchecked_when_finalized_matches_ocr(root, sample_image):
@@ -1116,7 +1113,7 @@ def test_ocr_checkbox_starts_unchecked_when_finalized_matches_ocr(root, sample_i
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
     key = (image_item, "ocr0")
 
-    assert frame._checkbox_checked[key] is False
+    assert frame._slot_states[key].checked is False
     assert frame._checkbox_vars[key].get() is False
 
 
@@ -1124,8 +1121,8 @@ def test_finalized_edit_survives_page_out_and_back_in(root, sample_image):
     """Composition test (per ARCHITECTURE.md's "test where features compose"
     heuristic): a box pre-populated from a finalized edit must still show
     that edit after its row is paged out and rebuilt, with no further typing
-    in between - the same scenario that exposed the UndoLog.baseline
-    data-loss bug (see that section in ARCHITECTURE.md)."""
+    in between - the same scenario that exposed the old UndoLog.baseline
+    data-loss bug (see ARCHITECTURE.md)."""
     items = _items(sample_image, count=40)
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     assert items[text_item].initial_message_text != "finalized edit"
@@ -1172,8 +1169,8 @@ def test_multiple_image_message_finalized_edits_populate_each_ocr_box_independen
 
     assert frame._text_widgets[(0, "ocr0")].get("1.0", "end-1c") == "finalized first image"
     assert frame._text_widgets[(0, "ocr1")].get("1.0", "end-1c") == "finalized second image"
-    assert frame._checkbox_checked[(0, "ocr0")] is True
-    assert frame._checkbox_checked[(0, "ocr1")] is True
+    assert frame._slot_states[(0, "ocr0")].checked is True
+    assert frame._slot_states[(0, "ocr1")].checked is True
 
 
 def test_unchecking_then_rechecking_ocr_box_starting_from_finalized_edit(root, sample_image):
@@ -1197,14 +1194,14 @@ def test_unchecking_then_rechecking_ocr_box_starting_from_finalized_edit(root, s
     frame._on_ocr_checkbox_toggle(key)
 
     assert widget.get("1.0", "end-1c") == ocr_default
-    assert frame._checkbox_checked[key] is False
-    assert frame._user_edited_texts[key] == "finalized ocr text"  # not lost
+    assert frame._slot_states[key].checked is False
+    assert frame._slot_states[key].user_edit == "finalized ocr text"  # not lost
 
     frame._checkbox_vars[key].set(True)
     frame._on_ocr_checkbox_toggle(key)
 
     assert widget.get("1.0", "end-1c") == "finalized ocr text"
-    assert frame._checkbox_checked[key] is True
+    assert frame._slot_states[key].checked is True
 
 
 def test_collect_edited_texts_reports_finalized_text_for_checked_ocr_box(root, sample_image):
@@ -1247,7 +1244,7 @@ def test_finalized_ocr_edit_and_checkbox_survive_page_out_and_back_in(root, samp
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
     key = (image_item, "ocr0")
     assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized ocr text"
-    assert frame._checkbox_checked[key] is True
+    assert frame._slot_states[key].checked is True
 
     frame._ensure_materialized(len(items) - 1)
     frame._canvas.yview_moveto(0.0)
@@ -1255,7 +1252,7 @@ def test_finalized_ocr_edit_and_checkbox_survive_page_out_and_back_in(root, samp
 
     assert key in frame._text_widgets
     assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized ocr text"
-    assert frame._checkbox_checked[key] is True
+    assert frame._slot_states[key].checked is True
     assert frame._checkbox_vars[key].get() is True
 
 
@@ -1265,20 +1262,18 @@ def test_finalized_ocr_edit_and_checkbox_survive_page_out_and_back_in(root, samp
 # calls `delete sel.first sel.last` internally) used to get recorded
 # verbatim, then crash with an uncaught TclError the next time that box's
 # row was rebuilt on a fresh widget with nothing selected - wedging the
-# whole review screen's virtualization for the rest of the session. See
-# text_undo.py's docstring and app_tests/test_text_undo.py for the
-# lower-level mechanics; these tests exercise the same failure shape
-# end-to-end through the real ReviewFrame.
+# whole review screen's virtualization for the rest of the session. Undo no
+# longer records or replays widget calls at all, but these still exercise
+# the same user-facing shape end-to-end through the real ReviewFrame.
 
 
 def test_selecting_and_deleting_text_survives_a_row_being_paged_out_and_back_in(root, sample_image):
     """The end-to-end regression test for the shift-tab reconcile lockup:
     selecting text (as double-click/drag-select/Shift+Arrow would) and then
     deleting it goes through Tk's own sel.first/sel.last-based delete, the
-    same call a real Delete/Backspace keypress on a selection makes. Before
-    text_undo.py resolved symbolic indices to absolute positions at record
-    time, paging this row away and back in raised an uncaught TclError from
-    inside _reconcile and never got this far."""
+    same call a real Delete/Backspace keypress on a selection makes. Under
+    the old replay-based undo, paging this row away and back in raised an
+    uncaught TclError from inside _reconcile and never got this far."""
     items = _items(sample_image, count=40)
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (text_item, "message")
@@ -1291,8 +1286,7 @@ def test_selecting_and_deleting_text_survives_a_row_being_paged_out_and_back_in(
     expected_text = widget.get("1.0", "end-1c")
 
     # Page far away (tears the row down) and back to the top again - this
-    # is exactly where the crash used to happen, via _populate_text_box's
-    # replay_onto call.
+    # is exactly where the crash used to happen.
     frame._ensure_materialized(len(items) - 1)
     frame._canvas.yview_moveto(0.0)
     frame._reconcile()  # must not raise
@@ -1301,85 +1295,7 @@ def test_selecting_and_deleting_text_survives_a_row_being_paged_out_and_back_in(
     assert frame._text_widgets[key].get("1.0", "end-1c") == expected_text
 
 
-def test_unreplayable_op_recovers_last_saved_text_instead_of_crashing(root, sample_image):
-    """Last-resort guard in _populate_text_box: even if a UndoLog somehow
-    still ends up holding an op that can't be replayed (this test injects
-    one directly, bypassing the now-fixed recording proxy, to exercise the
-    guard in isolation), a rebuild must recover the box's actual
-    last-known-good text (self._saved_texts, captured at the box's last
-    teardown) rather than letting the exception propagate and wedge the
-    rest of the reconcile batch."""
-    items = _items(sample_image, count=5)
-    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
-    key = (text_item, "message")
-    frame, _ = _build_frame(root, items)
-
-    widget = frame._text_widgets[key]
-    widget.insert("end", " an edit")
-    edited_text = widget.get("1.0", "end-1c")
-
-    # Tear the row down normally first (captures edited_text into
-    # self._saved_texts, exactly as a real page-away would), then poison
-    # this box's UndoLog with an op that can never replay cleanly onto a
-    # fresh widget - simulating whatever residual failure mode the
-    # record-time fix might not cover.
-    frame._destroy_row(text_item)
-    assert frame._saved_texts[key] == edited_text
-    log = frame._undo_logs[key]
-    log.ops.append(("delete", ("sel.first", "sel.last")))
-
-    frame._build_row(text_item)  # must not raise
-
-    rebuilt = frame._text_widgets[key]
-    assert rebuilt.get("1.0", "end-1c") == edited_text
-    # Self-healed: the poisoned op must not still be sitting in the log,
-    # or this exact crash would recur on the box's very next rebuild.
-    assert frame._undo_logs[key].ops == []
-    assert frame._undo_logs[key].baseline == edited_text
-
-
-def test_replay_divergence_self_heals_onto_last_saved_text(root, sample_image, caplog):
-    """Regression test for INVESTIGATION_undo_redo_replay_divergence.md's
-    direction #2 (detection + recovery): if a rebuild's replay ever lands
-    on text that disagrees with self._saved_texts[key] - the box's own
-    content as of its last teardown, captured independently of replay -
-    _populate_text_box must log loudly and self-heal onto that saved text,
-    the same recovery already used for an unreplayable (TclError) op,
-    rather than leaving the wrong (but not necessarily default-looking)
-    text sitting in the box. Injects a "replace" op with mismatched text
-    directly, since the actual record-time fix (keyboard_nav.py's
-    _record_undo_replacement) makes a real divergence very hard to trigger
-    end-to-end anymore - this exercises the detection/recovery backstop in
-    isolation, the same way test_unreplayable_op_recovers_last_saved_text_
-    instead_of_crashing does for the TclError guard right above it."""
-    items = _items(sample_image, count=5)
-    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
-    key = (text_item, "message")
-    frame, _ = _build_frame(root, items)
-
-    widget = frame._text_widgets[key]
-    widget.insert("end", " an edit")
-    edited_text = widget.get("1.0", "end-1c")
-
-    frame._destroy_row(text_item)
-    assert frame._saved_texts[key] == edited_text
-    log = frame._undo_logs[key]
-    log.ops.append(("replace", ("this text was never actually seen live",)))
-
-    with caplog.at_level("ERROR"):
-        frame._build_row(text_item)
-
-    rebuilt = frame._text_widgets[key]
-    assert rebuilt.get("1.0", "end-1c") == edited_text
-    assert frame._undo_logs[key].ops == []
-    assert frame._undo_logs[key].baseline == edited_text
-    assert any(
-        "possible silent replay divergence" in record.getMessage()
-        for record in caplog.records
-    )
-
-
-def test_double_build_reclaims_the_orphaned_widgets_content_into_saved_texts(root, sample_image):
+def test_double_build_reclaims_the_orphaned_widgets_content(root, sample_image):
     """_build_row being called twice for the same index without an
     intervening _destroy_row should be impossible (see
     _reclaim_widget_if_present's docstring) - but a bookkeeping bug in the
@@ -1399,11 +1315,10 @@ def test_double_build_reclaims_the_orphaned_widgets_content_into_saved_texts(roo
     # Simulate the "should be impossible" double-build directly, without
     # going through _destroy_row first.
     right_column = live_widget.master.master  # text_container -> right column frame
-    frame._build_editable_text_box(
-        right_column, text_item, "message", items[text_item].initial_message_text, 20,
-    )
+    frame._build_editable_text_box(right_column, text_item, "message", 20)
 
-    assert frame._saved_texts[key] == live_text
+    assert frame._slot_states[key].text == live_text
+    assert frame._text_widgets[key].get("1.0", "end-1c") == live_text
     assert frame._text_widgets[key] is not live_widget
     # The orphaned widget's container must be torn down, not leaked.
     assert str(old_container) not in root.tk.call("info", "commands")
@@ -1442,17 +1357,11 @@ def test_one_row_build_failure_does_not_abort_the_rest_of_the_reconcile_batch(ro
 # --- Property-style composition tests ---------------------------------------
 #
 # ARCHITECTURE.md's "General heuristic: test where features compose, not just
-# each feature alone" section calls out that every dedicated regression test
-# above (the UndoLog.baseline bug, the sel.first/sel.last bug, the undo/redo
-# replay divergence bug) was only ever found by hand-writing a test for the
-# *exact* combination someone had already hit - and proposes, as the still-
-# missing structurally stronger complement, a property-style test that
-# applies a randomized sequence of this subsystem's interaction types to a
-# box, tears its row down, rebuilds it, and asserts the rebuilt content
-# matches whatever was live immediately before teardown - targeting "does
-# replay reproduce reality" as an invariant directly, rather than waiting to
-# discover the next specific combination that breaks it. The tests below are
-# that complement.
+# each feature alone" section: rather than one hand-written test per
+# combination someone has already hit, apply a randomized sequence of this
+# subsystem's interaction types to a box, tear its row down, rebuild it, and
+# assert that nothing a user could observe changed - the text, the cursor,
+# the checkbox, and the whole undo/redo history.
 
 _RANDOM_EDIT_SNIPPETS = [" x", " word", "\nnewline", " some more typed text", "!"]
 
@@ -1465,10 +1374,9 @@ def _random_edit_sequence(frame, root, key, rng, num_ops, allow_checkbox):
     (only for an "ocr" box, which is the only role with one) checkbox
     toggle - to whatever widget currently backs `key`. Each action is
     followed by a real event-loop pump (root.update()) so the deferred
-    <<Modified>> handling (checkbox auto-check, spellcheck scheduling) that
-    a live user's keystrokes would trigger actually runs before the next
-    action, the same as it would interleaved with real typing - not just
-    the ops recorded in text_undo.UndoLog."""
+    <<Modified>> handling (history recording, checkbox auto-check,
+    spellcheck scheduling) that a live user's keystrokes would trigger
+    actually runs before the next action."""
     actions = ["type", "select_delete", "undo", "redo", "paste"]
     if allow_checkbox:
         actions.append("checkbox_toggle")
@@ -1484,10 +1392,7 @@ def _random_edit_sequence(frame, root, key, rng, num_ops, allow_checkbox):
             start = rng.randrange(len(content))
             end = rng.randrange(start + 1, len(content) + 1)
             # Mirrors what a real Delete/Backspace-on-a-selection keypress
-            # does at the Tcl level (see text_undo.py's _resolve_index
-            # docstring) - not widget.delete(start, end) directly, since
-            # sel.first/sel.last is exactly the symbolic-mark case that
-            # bug was about.
+            # does at the Tcl level.
             widget.tag_add("sel", f"1.0+{start}c", f"1.0+{end}c")
             widget.delete("sel.first", "sel.last")
         elif action == "undo":
@@ -1512,37 +1417,51 @@ def _random_edit_sequence(frame, root, key, rng, num_ops, allow_checkbox):
         root.update()
 
 
-def _assert_no_replay_self_heal_logged(caplog):
-    """The dedicated regression tests above (test_unreplayable_op_recovers_
-    last_saved_text_instead_of_crashing, test_replay_divergence_self_heals_
-    onto_last_saved_text) already prove self-heal *works* by injecting a
-    poisoned op directly - but self-heal recovers onto self._saved_texts,
-    which is itself always kept correct independently of replay, so a
-    property test that only checks final content would pass even if replay
-    were badly broken and silently falling back to self-heal on every single
-    rebuild. Asserting these ERROR-level log lines never fired makes sure
-    replay actually reproduced the content on its own merits, not via the
-    safety net catching it."""
-    assert not any(
-        "replay divergence" in r.getMessage() or "raised a TclError" in r.getMessage()
-        for r in caplog.records
-    )
+def _expected_undo_walk(frame, key):
+    """The texts repeated Ctrl+Z would pass through from the box's current
+    state, worked out on a copy of its history so the real one is left
+    untouched."""
+    state = frame._slot_states[key]
+    history = copy.deepcopy(state.history)
+    texts = []
+    text = state.text
+    while (text := history.undo(text)) is not None:
+        texts.append(text)
+    return texts
+
+
+def _actual_undo_walk(frame, key):
+    """Press Ctrl+Z on the box's live widget until there's nothing left to
+    undo, collecting what the widget shows after each press."""
+    texts = []
+    while frame._slot_states[key].history.can_undo:
+        widget = frame._text_widgets[key]
+        frame._undo_text(type("Event", (), {"widget": widget})())
+        texts.append(widget.get("1.0", "end-1c"))
+    return texts
+
+
+def _freeze_clock(frame):
+    """Stop EditHistory's pause rule depending on how fast the test runs,
+    so a seed always produces the same undo steps."""
+    frame._clock = lambda: 0.0
 
 
 @pytest.mark.parametrize("seed", range(5))
 @pytest.mark.parametrize("role", ["message", "ocr0", "spacer_end"])
 def test_random_interaction_sequence_survives_a_row_teardown_and_rebuild(
-    root, sample_image, role, seed, caplog
+    root, sample_image, role, seed
 ):
     """For every role shape a box can have (a plain "message" box, an "ocr"
     box with its checkbox, and a checkbox-less spacer box), a randomized
     sequence of edits/undo/redo/paste/checkbox-toggle must survive that
-    box's row being torn down and rebuilt - reproducing not just the same
-    text, but the same cursor position and (for an "ocr" box) the same
-    checked state, with replay never needing its self-heal backstop."""
+    box's row being torn down and rebuilt - the same text, cursor position,
+    checked state, and a Ctrl+Z walk identical to the one the box would
+    have given without the rebuild."""
     rng = random.Random(seed)
     items = _items(sample_image, count=5)
     frame, _ = _build_frame(root, items)
+    _freeze_clock(frame)
     if role == "ocr0":
         index = next(i for i, item in enumerate(items) if item.image_paths)
     else:
@@ -1555,34 +1474,36 @@ def test_random_interaction_sequence_survives_a_row_teardown_and_rebuild(
     _random_edit_sequence(frame, root, key, rng, num_ops=12, allow_checkbox=(role == "ocr0"))
 
     live_widget = frame._text_widgets[key]
+    frame._sync_slot_from_widget(key, live_widget)
     live_text = live_widget.get("1.0", "end-1c")
     live_cursor = live_widget.index("insert")
-    live_checked = frame._checkbox_checked.get(key)
+    live_checked = frame._slot_states[key].checked
+    expected_walk = _expected_undo_walk(frame, key)
 
-    with caplog.at_level("ERROR"):
-        frame._destroy_row(index)
-        frame._build_row(index)
+    frame._destroy_row(index)
+    frame._build_row(index)
     root.update()
 
     rebuilt = frame._text_widgets[key]
+    assert rebuilt is not live_widget
     assert rebuilt.get("1.0", "end-1c") == live_text
     assert rebuilt.index("insert") == live_cursor
-    assert frame._checkbox_checked.get(key) == live_checked
-    _assert_no_replay_self_heal_logged(caplog)
+    assert frame._slot_states[key].checked == live_checked
+    assert _actual_undo_walk(frame, key) == expected_walk
 
 
 def test_random_interaction_sequence_survives_two_consecutive_teardown_rebuild_cycles(
-    root, sample_image, caplog
+    root, sample_image
 ):
     """Extends the single-cycle property test above to two consecutive
-    teardown/rebuild cycles with further random edits in between. The
-    UndoLog.baseline bug this whole section responds to specifically needed
-    a *second* rebuild - one whose starting point was itself a replay result,
-    not a fresh baseline - to surface at all (see ARCHITECTURE.md's account
-    of it); a single cycle can't exercise that compounding."""
+    teardown/rebuild cycles with further random edits in between. The old
+    UndoLog.baseline bug specifically needed a *second* rebuild - one whose
+    starting point was itself a rebuild - to surface at all (see
+    ARCHITECTURE.md); a single cycle can't exercise that compounding."""
     rng = random.Random(20260720)
     items = _items(sample_image, count=5)
     frame, _ = _build_frame(root, items)
+    _freeze_clock(frame)
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
     widget = frame._text_widgets[key]
@@ -1590,43 +1511,37 @@ def test_random_interaction_sequence_survives_two_consecutive_teardown_rebuild_c
     root.update_idletasks()
 
     _random_edit_sequence(frame, root, key, rng, num_ops=8, allow_checkbox=True)
-    with caplog.at_level("ERROR"):
-        frame._destroy_row(image_item)
-        frame._build_row(image_item)
+    frame._destroy_row(image_item)
+    frame._build_row(image_item)
     root.update()
     frame._text_widgets[key].focus_force()
     root.update_idletasks()
 
     _random_edit_sequence(frame, root, key, rng, num_ops=8, allow_checkbox=True)
     live_widget = frame._text_widgets[key]
+    frame._sync_slot_from_widget(key, live_widget)
     live_text = live_widget.get("1.0", "end-1c")
-    live_checked = frame._checkbox_checked.get(key)
+    live_checked = frame._slot_states[key].checked
+    expected_walk = _expected_undo_walk(frame, key)
 
-    with caplog.at_level("ERROR"):
-        frame._destroy_row(image_item)
-        frame._build_row(image_item)
+    frame._destroy_row(image_item)
+    frame._build_row(image_item)
     root.update()
 
     rebuilt = frame._text_widgets[key]
     assert rebuilt.get("1.0", "end-1c") == live_text
-    assert frame._checkbox_checked.get(key) == live_checked
-    _assert_no_replay_self_heal_logged(caplog)
+    assert frame._slot_states[key].checked == live_checked
+    assert _actual_undo_walk(frame, key) == expected_walk
 
 
 @pytest.mark.parametrize("seed_source", ["resumed_session", "finalized_edit"])
 def test_random_edits_after_a_seeded_baseline_survive_a_further_teardown_and_rebuild(
-    root, sample_image, seed_source, caplog
+    root, sample_image, seed_source
 ):
-    """Every existing resumed-edit/finalized-edit composition test (test_
-    resumed_edit_survives_being_paged_out_and_back_in_with_no_further_edits,
-    test_finalized_edit_survives_page_out_and_back_in) covers a box's first
-    rebuild with *zero* further edits after the resumed/finalized text
-    seeded it - exactly the gap the UndoLog.baseline bug lived in. This
-    closes the still-missing combination: real further edits (not just an
-    empty op log) on top of a resumed/finalized baseline, then a rebuild -
-    UndoLog.baseline must still be the seeded text, not the item's raw
-    initial_message_text, for the ops on top of it to replay onto the right
-    starting point."""
+    """Real further edits on top of a resumed/finalized text, then a
+    rebuild - the combination the old UndoLog.baseline bug lived in. Undoing
+    everything must also land back on the seeded text, never the item's raw
+    default: the seeded text is where this session's history starts."""
     rng = random.Random(42)
     items = _items(sample_image, count=40)
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
@@ -1639,6 +1554,7 @@ def test_random_edits_after_a_seeded_baseline_survive_a_further_teardown_and_reb
     )
 
     frame, _ = _build_frame(root, items, **kwargs)
+    _freeze_clock(frame)
     key = (text_item, "message")
     assert frame._text_widgets[key].get("1.0", "end-1c") == "seeded baseline text"
     widget = frame._text_widgets[key]
@@ -1650,15 +1566,45 @@ def test_random_edits_after_a_seeded_baseline_survive_a_further_teardown_and_reb
 
     # Page far enough away that this row is actually torn down (not just
     # kept alive by the virtualization buffer), then back.
-    with caplog.at_level("ERROR"):
-        frame._ensure_materialized(len(items) - 1)
-        frame._canvas.yview_moveto(0.0)
-        frame._reconcile()
+    frame._ensure_materialized(len(items) - 1)
+    assert key not in frame._text_widgets
+    frame._canvas.yview_moveto(0.0)
+    frame._reconcile()
     root.update()
 
     assert key in frame._text_widgets
     assert frame._text_widgets[key].get("1.0", "end-1c") == live_text
-    _assert_no_replay_self_heal_logged(caplog)
+    walk = _actual_undo_walk(frame, key)
+    final = walk[-1] if walk else live_text
+    assert final == "seeded baseline text"
+
+
+def test_undo_steps_are_words_and_survive_a_rebuild(root, sample_image):
+    """End-to-end check of the grouping rule through real <<Modified>>
+    events: typing two words one keystroke at a time gives two undo
+    steps, and a rebuild in between typing and undoing changes nothing."""
+    items = _items(sample_image, count=5)
+    frame, _ = _build_frame(root, items)
+    _freeze_clock(frame)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    key = (text_item, "message")
+    original = items[text_item].initial_message_text
+    widget = frame._text_widgets[key]
+    widget.focus_force()
+    widget.mark_set("insert", "end")
+    root.update()
+    for char in "two words":
+        widget.insert("insert", char)
+        root.update()
+
+    frame._destroy_row(text_item)
+    frame._build_row(text_item)
+    root.update()
+
+    assert _actual_undo_walk(frame, key) == [original + "two ", original]
+    rebuilt = frame._text_widgets[key]
+    frame._redo_text(type("Event", (), {"widget": rebuilt})())
+    assert rebuilt.get("1.0", "end-1c") == original + "two "
 
 
 # -- mouse wheel / keyboard events, sent as real Tk events ----------------------

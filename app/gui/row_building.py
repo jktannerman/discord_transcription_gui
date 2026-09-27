@@ -1,9 +1,9 @@
 """Row/text-box construction for the review screen.
 
 Mixed into ReviewFrame rather than taken as a standalone object, since
-every method here reaches into ReviewFrame's bookkeeping dicts
+every method here reaches into ReviewFrame's bookkeeping
 (self._row_frames, self._text_widgets, self._text_containers,
-self._saved_texts, self._images, self._canvas) and keyboard_nav.py's
+self._slot_states, self._images, self._canvas) and keyboard_nav.py's
 mixin methods (self._scroll_box_into_view, self._delete_word_backward, etc.)
 - threading all of that through as constructor args would just relocate
 the coupling, not remove it. This module owns *building* a row's widgets;
@@ -33,7 +33,6 @@ from .layout_constants import (
     SPACER_BOX_HEIGHT_PX,
     TEXT_BOX_MARGIN_PX,
 )
-from .text_undo import UndoLog, attach_undo_recording, replay_onto
 from .wheel import WHEEL_EVENT_SEQUENCES
 
 logger = logging_config.get_logger(__name__)
@@ -112,21 +111,15 @@ class RowBuildingMixin:
 
             if role == "message":
                 message_h = self._build_immutable_message_label(left, item, pady_bottom=gap)
-                self._build_editable_text_box(
-                    right, index, "message", item.initial_message_text, message_h, pady_bottom=gap,
-                )
+                self._build_editable_text_box(right, index, "message", message_h, pady_bottom=gap)
             elif role.startswith("ocr"):
                 image_index = int(role[len("ocr"):])
                 image_h = self._build_image_placeholder(
                     left, item.image_paths[image_index], index, image_index, pady_bottom=gap,
                 )
-                self._build_editable_text_box(
-                    right, index, role, item.initial_ocr_texts[image_index], image_h, pady_bottom=gap,
-                )
+                self._build_editable_text_box(right, index, role, image_h, pady_bottom=gap)
             else:
-                self._build_spacer_text_box(
-                    right, index, role, item.initial_spacer_texts[role], pady_bottom=gap,
-                )
+                self._build_spacer_text_box(right, index, role, pady_bottom=gap)
 
         if self._refocus_slot is not None and self._refocus_slot[0] == index:
             slot = self._refocus_slot
@@ -223,18 +216,18 @@ class RowBuildingMixin:
         return image_h
 
     def _reclaim_widget_if_present(self, key: Tuple[int, str]) -> None:
-        """If `key` already has a live widget registered (should be
-        impossible - _sync_materialized_rows only builds an index that
-        isn't already in self._row_frames - but a prior bug in the
-        virtualization core's own bookkeeping could get here anyway, see
-        INVESTIGATION_shift_tab_reconcile_lockup.md), capture its current
-        content/cursor into self._saved_texts/self._saved_cursor and tear
-        it down properly - the same rescue _destroy_row gives a row that's
-        being paged out normally - instead of just overwriting
-        self._text_widgets[key] and silently orphaning whatever was typed
-        into it since its last teardown. Also destroys the stale
-        container/detaches its undo recording so no widget or Tcl command
-        is leaked."""
+        """Tear down a live widget already registered for `key`, if any.
+
+        Should be impossible - _sync_materialized_rows only builds an index
+        that isn't already in self._row_frames - but a bug in the
+        virtualization core's own bookkeeping could get here anyway (see
+        INVESTIGATION_shift_tab_reconcile_lockup.md). Brings the SlotState
+        up to date with the old widget first, then destroys its container,
+        so nothing typed into it is lost and no widget is leaked.
+
+        Args:
+            key: The (item_index, role) about to get a new widget.
+        """
         old_widget = self._text_widgets.pop(key, None)
         if old_widget is None:
             return
@@ -245,9 +238,8 @@ class RowBuildingMixin:
             extra=logging_config.extra(key=key, old_widget=str(old_widget)),
         )
         try:
-            text = old_widget.get("1.0", "end-1c")
-            self._saved_texts[key] = text
-            self._saved_cursor[key] = old_widget.index("insert")
+            self._sync_slot_from_widget(key, old_widget)
+            self._slot_states[key].cursor = old_widget.index("insert")
         except tk.TclError:
             # The widget is in some unusable state - nothing more to
             # reclaim, but still worth cleaning up below.
@@ -258,9 +250,6 @@ class RowBuildingMixin:
                 extra=logging_config.extra(key=key),
             )
         self._checkbox_vars.pop(key, None)
-        detach = self._undo_detach.pop(key, None)
-        if detach is not None:
-            detach()
         pending_spellcheck = self._spellcheck_after_ids.pop(key, None)
         if pending_spellcheck is not None:
             try:
@@ -276,7 +265,6 @@ class RowBuildingMixin:
         parent: tk.Widget,
         index: int,
         role: str,
-        initial_text: str,
         paired_height: int,
         pady_bottom: int = 0,
     ) -> None:
@@ -303,7 +291,7 @@ class RowBuildingMixin:
 
         scrollbar = ttk.Scrollbar(text_container, orient="vertical")
         text_widget = tk.Text(
-            text_container, wrap="word", relief="flat", undo=True,
+            text_container, wrap="word", relief="flat", undo=False,
             **theme.dark_text_kwargs(),
             padx=TEXT_BOX_INNER_PADX, pady=4,
         )
@@ -332,7 +320,7 @@ class RowBuildingMixin:
             # there's no visible seam around the checkbox.
             checkbox_column = ttk.Frame(text_container, style="OcrCheckboxColumn.TFrame")
             checkbox_column.pack(side="right", fill="y")
-            checked_var = tk.BooleanVar(value=self._checkbox_checked.get(key, False))
+            checked_var = tk.BooleanVar(value=self._slot_states[key].checked)
             checkbox = ttk.Checkbutton(
                 checkbox_column, variable=checked_var, takefocus=0,
                 style="OcrCheckbox.TCheckbutton",
@@ -354,7 +342,7 @@ class RowBuildingMixin:
         # only while content actually overflows the box.
         text_widget.pack(side="left", fill="both", expand=True)
 
-        self._populate_text_box(key, text_widget, initial_text)
+        self._populate_text_box(key, text_widget)
         self._text_widgets[key] = text_widget
         self._text_containers[key] = text_container
         self._schedule_spellcheck(key, text_widget)
@@ -364,7 +352,6 @@ class RowBuildingMixin:
         parent: tk.Widget,
         index: int,
         role: str,
-        initial_text: str,
         pady_bottom: int = 0,
     ) -> None:
         """Build one spacer slot's text box - role is "spacer_msg_img"
@@ -387,262 +374,43 @@ class RowBuildingMixin:
         text_container.pack_propagate(False)
 
         text_widget = tk.Text(
-            text_container, height=1, wrap="none", relief="flat", undo=True,
+            text_container, height=1, wrap="none", relief="flat", undo=False,
             **theme.dark_text_kwargs(),
             padx=TEXT_BOX_INNER_PADX, pady=4,
         )
         text_widget.pack(side="left", fill="both", expand=True)
 
-        self._populate_text_box(key, text_widget, initial_text)
+        self._populate_text_box(key, text_widget)
         self._text_widgets[key] = text_widget
         self._text_containers[key] = text_container
 
-    def _populate_text_box(self, key: Tuple[int, str], text_widget: tk.Text, initial_text: str) -> None:
-        """Insert a box's starting text and undo/redo history, and wire up
-        the keyboard/undo/modified bindings shared by every editable box,
-        content or spacer alike.
+    def _populate_text_box(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
+        """Fill a freshly-built box from its SlotState and wire up the
+        keyboard/modified bindings shared by every editable box, content or
+        spacer alike.
 
-        self._undo_logs being empty for `key` means this box has never
-        been built before this session - the common case, and also what a
-        resumed session looks like, since undo history isn't persisted to
-        disk (see text_undo.py) - so it's seeded directly from
-        self._saved_texts (a saved edit, including one resumed from disk)
-        or `initial_text`, with no undo history of its own yet; whichever
-        one was used is recorded as log.baseline. Otherwise this box's row
-        was torn down and is being rebuilt after being paged back in: the
-        widget starts from log.baseline - NOT initial_text directly, see
-        UndoLog's docstring for why that distinction is exactly what a
-        real data-loss bug turned on - and replays every op recorded
-        against it so far, which both reproduces the edited text and
-        rebuilds an equivalent native undo/redo stack - see
-        text_undo.replay_onto."""
-        log = self._undo_logs.get(key)
-        if log is None:
-            log = UndoLog()
-            self._undo_logs[key] = log
-            saved = self._saved_texts.get(key)
-            source = "saved_texts" if saved is not None else "initial_text"
-            text_to_insert = saved if saved is not None else initial_text
-            log.baseline = text_to_insert
-            text_widget.insert("1.0", text_to_insert)
-            text_widget.edit_reset()  # don't let the initial insert be undoable
-            self._log_event(
-                "box_build_fresh",
-                key=key,
-                widget=str(text_widget),
-                source=source,
-                **logging_config.text_fingerprint(text_to_insert),
-            )
-        else:
-            # Replay onto log.baseline (what this box actually started from
-            # the first time it was built this session - a resumed edit, or
-            # initial_text if there was none) rather than onto initial_text
-            # directly - log.ops are deltas relative to whichever baseline
-            # was actually used, and re-basing onto initial_text instead
-            # would silently discard a resumed edit on this box's very next
-            # rebuild whenever there were zero further ops to replay on top
-            # of it (see UndoLog's docstring).
-            if log.baseline is None:
-                # Should be impossible - log.baseline is always set in the
-                # branch above, the only place a log is ever created - but
-                # inserting "None" itself (str(None)) into the box would be
-                # a worse failure than falling back to initial_text, so
-                # this degrades instead of corrupting the box's content.
-                logger.error(
-                    "existing UndoLog has no recorded baseline - falling "
-                    "back to initial_text, which may discard a resumed edit",
-                    extra=logging_config.extra(key=key),
-                )
-            baseline = log.baseline if log.baseline is not None else initial_text
-            text_widget.insert("1.0", baseline)
-            text_widget.edit_reset()  # don't let this insert be undoable either
-            self._log_event(
-                "box_build_replay_start",
-                key=key,
-                widget=str(text_widget),
-                op_count=len(log.ops),
-                **logging_config.text_fingerprint(baseline),
-            )
-            try:
-                replay_onto(
-                    text_widget,
-                    log,
-                    # Fingerprint the widget's content after *every* replayed
-                    # op (not just once at the end, via box_build_replay_done)
-                    # - this is what lets a future divergence between live
-                    # and replayed execution be pinned to the exact op index
-                    # where they first disagree, by diffing this op-by-op
-                    # against attach_undo_recording's own on_op below (which
-                    # logs the equivalent live-side fingerprint at record
-                    # time), rather than only knowing the *final* results
-                    # differed.
-                    on_op=lambda name, args, k=key, t=text_widget: self._log_event(
-                        "box_replay_op",
-                        key=k,
-                        op=name,
-                        args=repr(args)[:200],
-                        # repr(args) can be far longer than the 200-char
-                        # slice above (e.g. a pasted paragraph) - this makes
-                        # it unambiguous from the log line alone whether
-                        # `args` was actually truncated, rather than leaving
-                        # a reader to guess whether a short `args` value
-                        # means the real op was short too.
-                        args_full_len=len(repr(args)),
-                        **logging_config.text_fingerprint(t.get("1.0", "end-1c")),
-                    ),
-                )
-            except tk.TclError:
-                # Last-resort guard, not the primary fix - text_undo.py's
-                # recording proxy now resolves symbolic indices (sel.first,
-                # insert, end, ...) to absolute positions at record time
-                # specifically so a recorded op can't fail to replay like
-                # this in the first place. If it still does (an op recorded
-                # before that fix shipped, still sitting in a UndoLog from
-                # earlier this session, or some other replay failure this
-                # doesn't anticipate), a bad delete/insert call here used to
-                # propagate all the way out of this Tk callback uncaught -
-                # wedging the whole review screen's virtualization for the
-                # rest of the session (see
-                # INVESTIGATION_shift_tab_reconcile_lockup.md): the crash
-                # happens before self._text_widgets[key] is ever set, so
-                # every later row in the same reconcile's build batch is
-                # left silently missing, self._materialized_range is never
-                # updated, and every future rebuild of this exact box hits
-                # the exact same crash forever (the poisoned op is a
-                # permanent part of log.ops).
-                #
-                # Recover onto self._saved_texts[key] - the box's actual
-                # last-known-good content, captured independently of the
-                # (evidently unreliable) op replay by _destroy_row/
-                # _reclaim_widget_if_present every time this box's widget
-                # was last torn down - never onto `baseline` or
-                # `initial_text`, either of which could be staler than what
-                # the user actually left in this box. Then *self-heal*: wipe
-                # the poisoned ops and re-baseline the log on the recovered
-                # text, so this box's next rebuild starts clean instead of
-                # replaying the same broken op again.
-                recovered_text = self._saved_texts.get(key)
-                if recovered_text is None:
-                    recovered_text = baseline
-                logger.error(
-                    "replaying this box's undo history raised a TclError - "
-                    "recovering its last-known-good text instead of leaving "
-                    "the row (and the rest of this reconcile batch) broken",
-                    exc_info=True,
-                    extra=logging_config.extra(
-                        key=key,
-                        op_count=len(log.ops),
-                        recovered_from="saved_texts" if key in self._saved_texts else "baseline",
-                        **logging_config.text_fingerprint(recovered_text),
-                    ),
-                )
-                text_widget.delete("1.0", "end")
-                text_widget.insert("1.0", recovered_text)
-                text_widget.edit_reset()
-                log.ops = []
-                log.baseline = recovered_text
-            result_text = text_widget.get("1.0", "end-1c")
-            self._log_event(
-                "box_build_replay_done",
-                key=key,
-                **logging_config.text_fingerprint(result_text),
-            )
-            saved = self._saved_texts.get(key)
-            # Broader regression alarm, self-healing: self._saved_texts[key]
-            # is this box's own content as of its last teardown
-            # (ReviewFrame._destroy_row), captured independently of
-            # whatever replay just produced - so any disagreement between
-            # them is unambiguous evidence that replay landed on the wrong
-            # text, regardless of what that wrong text happens to look like
-            # (the older check right below only ever caught the narrower
-            # case of landing back on the item's bare default). See
-            # INVESTIGATION_undo_redo_replay_divergence.md - a replay that
-            # diverges like this produces no exception and no other log
-            # line, so this box would otherwise get autosaved (and
-            # eventually Finalized) with silently wrong content.
-            if saved is not None and result_text != saved:
-                logger.error(
-                    "replay result doesn't match this box's content as of "
-                    "its last teardown - possible silent replay divergence",
-                    extra=logging_config.extra(
-                        key=key,
-                        result=logging_config.text_fingerprint(result_text),
-                        saved_texts_on_record=logging_config.text_fingerprint(saved),
-                        log_baseline=logging_config.text_fingerprint(log.baseline),
-                        op_count=len(log.ops),
-                    ),
-                )
-                # Self-heal the same way the TclError guard above does:
-                # overwrite onto the last-known-good text and re-baseline,
-                # so the box shows (and next autosaves/finalizes) the
-                # correct content, and its next rebuild starts clean
-                # instead of replaying the same divergent ops again.
-                text_widget.delete("1.0", "end")
-                text_widget.insert("1.0", saved)
-                text_widget.edit_reset()
-                log.ops = []
-                log.baseline = saved
-                result_text = saved
-            # Regression alarm, not a test: if this rebuild landed back on
-            # the item's bare default while self._saved_texts disagrees -
-            # the box had a different edit recorded as recently as its
-            # last teardown - something upstream has silently discarded
-            # that edit, the exact failure this method's baseline-tracking
-            # exists to prevent. Heuristic (a coincidental match is
-            # possible in principle) but cheap and loud, so a future
-            # regression of this shape surfaces in app.log immediately
-            # instead of requiring the kind of multi-hour forensic
-            # reconstruction this bug originally took to diagnose. Left
-            # unchanged (including its exact message text) so
-            # archive/INVESTIGATION_shift_tab_reconcile_lockup.md's grep
-            # instructions still work - the divergence self-heal above
-            # already means this condition can basically only still fire
-            # when self-heal itself wasn't reached (saved is None).
-            if result_text == initial_text and saved is not None and saved != initial_text:
-                logger.error(
-                    "box rebuilt back to its bare default despite a different "
-                    "saved edit on record - possible silent data loss",
-                    extra=logging_config.extra(
-                        key=key,
-                        result=logging_config.text_fingerprint(result_text),
-                        saved_texts_on_record=logging_config.text_fingerprint(saved),
-                        log_baseline=logging_config.text_fingerprint(log.baseline),
-                        op_count=len(log.ops),
-                    ),
-                )
+        The SlotState already holds everything that must survive the row
+        being torn down (text, cursor, undo history), so a rebuild is the
+        same as a first build.
 
-        # The "insert" mark has right gravity, so inserting at "1.0" (where
-        # it already sits on a fresh widget) leaves it at the *end* of the
-        # new text rather than the start - then Tab-focusing this box later
-        # would put the cursor (and the box's own auto-scroll-to-cursor) at
-        # the bottom, with the start of the text scrolled out of view. Reset
-        # to wherever the cursor was when this row was last torn down
-        # (self._saved_cursor, see _destroy_row), falling back to "1.0" for
-        # a box that's never been visited (or whose row was never destroyed
-        # while focused) - Tk clamps an index past the end of shorter text
-        # rather than raising, so a stale saved index from longer text is
-        # harmless.
-        text_widget.mark_set("insert", self._saved_cursor.get(key, "1.0"))
+        Args:
+            key: The box's (item_index, role).
+            text_widget: The new, empty Text widget for it.
+        """
+        state = self._slot_states[key]
+        text_widget.insert("1.0", state.text)
+        # The "insert" mark has right gravity, so the insert above left it at
+        # the end of the text; put it back where it was when the row was
+        # torn down ("1.0" for a box never visited). Tk clamps an index past
+        # the end rather than raising.
+        text_widget.mark_set("insert", state.cursor)
         text_widget.see("insert")
-        text_widget.edit_modified(False)  # don't count any of the above as a user edit
-        self._undo_detach[key] = attach_undo_recording(
-            text_widget,
-            log,
-            # Fingerprint the widget's content after every live-recorded op
-            # too, mirroring _populate_text_box's replay-side on_op above -
-            # the pair lets a future rebuild's box_replay_op sequence be
-            # diffed op-by-op against this box's original, live
-            # box_op_recorded sequence, to find exactly where they first
-            # disagree instead of only being able to compare final results.
-            on_op=lambda name, args, k=key, t=text_widget: self._log_event(
-                "box_op_recorded",
-                key=k,
-                op=name,
-                args=repr(args)[:200],
-                args_full_len=len(repr(args)),
-                total_ops=len(log.ops),
-                **logging_config.text_fingerprint(t.get("1.0", "end-1c")),
-            ),
+        text_widget.edit_modified(False)
+        self._log_event(
+            "box_build",
+            key=key,
+            widget=str(text_widget),
+            **logging_config.text_fingerprint(state.text),
         )
 
         text_widget.bind("<Control-BackSpace>", self._delete_word_backward)
@@ -762,8 +530,7 @@ class RowBuildingMixin:
         from now. Called on every keystroke (_on_text_modified) as well as
         right after a box is (re)built (_build_editable_text_box) - the
         latter so a rebuilt row's tags (which don't survive the old widget
-        being destroyed - see text_undo.py's note that tag_add/tag_remove
-        aren't recorded/replayed) are always recomputed rather than left
+        being destroyed) are always recomputed rather than left
         blank until the user's next keystroke in that specific box."""
         pending = self._spellcheck_after_ids.pop(key, None)
         if pending is not None:
@@ -800,135 +567,138 @@ class RowBuildingMixin:
                 extra=logging_config.extra(key=key),
             )
 
-    def _on_text_modified(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
-        """Bound to a text box's <<Modified>> event. The box's own height is
-        now fixed at build time (see _fixed_text_box_height) and never
-        changes as the user types - overflow is handled entirely by the
-        box's internal scrollbar (_set_text_scrollbar) - so there's nothing
-        left to resize or remeasure here, just the modified-flag reset and
-        keeping the edited row on screen.
+    def _sync_slot_from_widget(self, key: Tuple[int, str], text_widget: tk.Text) -> bool:
+        """Bring a box's SlotState up to date with its live widget.
 
-        Scrolling the row back into view matters because focus alone
-        doesn't keep a box on screen: the mouse wheel/scrollbar can move the
-        viewport without touching focus at all, and Tk happily keeps
-        delivering keystrokes to a focused-but-off-screen widget - typing is
-        the easiest visible signal that the user is "at" this box and would
-        want to see it, without needing a separate scroll-position watcher
-        for an otherwise-rare case. Gated on the widget actually having
-        focus, since <<Modified>> also fires for a freshly-built row's own
-        initial text insert (see _build_editable_text_box) - that insert's
-        own edit_modified(False) reset doesn't suppress it, because Tk
-        queues <<Modified>> for the next idle tick rather than firing it
-        synchronously, by which point this binding already exists. Without
-        this guard, a row built only because it entered the virtualization
-        buffer (not because the user scrolled it into view) would yank the
-        canvas to reveal it anyway."""
+        Called on every <<Modified>> event, and before anything reads or
+        replaces the box's text, since <<Modified>> arrives on a later idle
+        tick than the edit itself. Any difference found here is an edit
+        made in the widget (typing, paste, Ctrl+Backspace, a middle-click
+        paste, or a test's direct insert): the app's own writes (building
+        the box, undo/redo, the OCR checkbox) set SlotState.text first, so
+        they never show up as a difference.
+
+        A difference is recorded in the box's undo history, marks the slot
+        as touched, and ticks an "ocr" box's checkbox.
+
+        Args:
+            key: The box's (item_index, role).
+            text_widget: The live widget currently backing that box.
+
+        Returns:
+            True if the widget held an edit the SlotState didn't have yet.
+        """
+        state = self._slot_states[key]
+        text = text_widget.get("1.0", "end-1c")
+        if text == state.text:
+            return False
+        state.history.record(state.text, text, self._clock())
+        state.text = text
+        self._touched_slots.add(key)
+        if key[1].startswith("ocr"):
+            self._on_ocr_box_user_edit(key, text)
+        return True
+
+    def _set_box_text(self, key: Tuple[int, str], text: str, cursor: str = "1.0") -> None:
+        """Replace a box's text as the app, not as a user edit.
+
+        Updates the SlotState first, so the <<Modified>> event this write
+        causes isn't taken for a user edit, then the widget if the box's
+        row is built. Callers record the change in the undo history
+        themselves, if it belongs there.
+
+        Args:
+            key: The box's (item_index, role).
+            text: The new text.
+            cursor: Tk index to put the cursor at afterwards.
+        """
+        state = self._slot_states[key]
+        state.text = text
+        state.cursor = cursor
+        text_widget = self._text_widgets.get(key)
+        if text_widget is None:
+            return
+        text_widget.delete("1.0", "end")
+        text_widget.insert("1.0", text)
+        text_widget.mark_set("insert", cursor)
+        text_widget.see("insert")
+
+    def _on_text_modified(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
+        """Bound to a text box's <<Modified>> event.
+
+        Records any user edit (see _sync_slot_from_widget), re-runs the
+        spellcheck, and - if the box has focus - scrolls it back into view.
+        That matters because focus alone doesn't keep a box on screen: the
+        mouse wheel/scrollbar can move the viewport without touching focus,
+        and Tk keeps delivering keystrokes to a focused-but-off-screen box.
+        The focus check also keeps a freshly-built box from yanking the
+        canvas to itself: its build-time insert fires this event too, on a
+        later idle tick, while nothing has focused it yet.
+
+        Args:
+            key: The box's (item_index, role).
+            text_widget: The widget the event came from.
+        """
         had_focus = text_widget is self.focus_get()
+        changed = self._sync_slot_from_widget(key, text_widget)
         self._log_event(
             "box_modified",
             key=key,
             had_focus=had_focus,
-            **logging_config.text_fingerprint(text_widget.get("1.0", "end-1c")),
+            changed=changed,
+            **logging_config.text_fingerprint(self._slot_states[key].text),
         )
         text_widget.edit_modified(False)
-        # Re-run spellcheck on any real content change, regardless of focus -
-        # unlike the had_focus-gated logic below, a box's underline should
-        # reflect its actual current text whether or not the user is looking
-        # at it right now (e.g. an undo/redo, or a checkbox toggle swapping
-        # the box's content). Never scheduled for a spacer box - those never
-        # get the "misspelled" tag configured in the first place (see
-        # _build_spacer_text_box), and hold nothing but "\n" tokens anyway.
+        # A spacer box never gets the "misspelled" tag configured (see
+        # _build_spacer_text_box), and holds nothing but "\n" tokens anyway.
         if not key[1].startswith("spacer"):
             self._schedule_spellcheck(key, text_widget)
-        # Gated on had_focus for the same reason _scroll_box_into_view below
-        # already is: a build-time insert/replay (see _populate_text_box)
-        # fires this same deferred <<Modified>> event, but the widget is
-        # never focused yet at that point (a refocus-on-rebuild, if any, is
-        # itself deferred via after_idle until after this box's whole row
-        # finishes building - see _build_row) - so this can't mistake "box
-        # was just (re)built" for "the user changed something". Undo/redo
-        # (keyboard_nav.py's _undo_text/_redo_text) *does* run with the
-        # widget focused, so it additionally suppresses via
-        # self._suppress_ocr_auto_check - it re-derives checked/unchecked
-        # itself, via a different (compare-to-default) rule than this
-        # method's unconditional one.
-        if key[1].startswith("ocr") and had_focus and key not in self._suppress_ocr_auto_check:
-            self._on_ocr_box_user_edit(key, text_widget)
         if had_focus:
-            # The same "focused means the user did it" signal as above -
-            # covers typing, paste, Ctrl+Backspace and undo/redo alike.
-            self._touched_slots.add(key)
             self._scroll_box_into_view(key)
 
-    def _on_ocr_box_user_edit(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
-        """An "ocr" box's content changed for a real reason - typing,
-        paste, Ctrl+Backspace, or an undo/redo that wasn't itself routed
-        through the compare-to-default resync in keyboard_nav.py's
-        _undo_text/_redo_text (which adds its own suppression around the
-        call, so this never double-handles those) - so its checkbox checks
-        itself, unconditionally, per the project owner's "any change checks
-        the box" rule: unlike the checked-state derivation used at build
-        time/after undo (compare the text to the OCR default), this doesn't
-        un-check itself even if the new text happens to coincidentally
-        match the default again."""
-        current_text = text_widget.get("1.0", "end-1c")
-        self._checkbox_checked[key] = True
-        self._user_edited_texts[key] = current_text
+    def _on_ocr_box_user_edit(self, key: Tuple[int, str], text: str) -> None:
+        """An "ocr" box was edited by the user, so its checkbox ticks itself.
+
+        This is the "any change checks the box" rule: unlike undo/redo
+        (which compare the result to the OCR default), it doesn't untick
+        even if the new text happens to match the default again.
+
+        Args:
+            key: The box's (item_index, role).
+            text: The box's new text.
+        """
+        state = self._slot_states[key]
+        state.checked = True
+        state.user_edit = text
         var = self._checkbox_vars.get(key)
         if var is not None and not var.get():
             var.set(True)
 
     def _on_ocr_checkbox_toggle(self, key: Tuple[int, str]) -> None:
-        """Command callback for an "ocr" box's checkbox - by the time this
-        runs, Tk has already flipped self._checkbox_vars[key] to the new
-        state. Unchecking swaps the box's content back to the OCR default
-        (without losing the edited version, kept in
-        self._user_edited_texts); checking swaps back to that last edited
-        version, or leaves the default in place if there was never one
-        (e.g. the box was checked by hand with nothing typed into it yet).
+        """Command callback for an "ocr" box's checkbox.
 
-        The delete/insert below still goes through the box's normal
-        undo-recording proxy (text_undo.attach_undo_recording) - so it's
-        itself undoable, and a row torn down and rebuilt right after still
-        replays correctly. Wrapped in self._suppress_ocr_auto_check as a
-        defensive measure in case the click ever leaves the text widget
-        focused (clicking the checkbox normally moves focus to it instead,
-        which already makes _on_text_modified's had_focus check skip this
-        on its own) - either way, this must never masquerade as a user edit
-        and immediately re-check (or re-uncheck) itself via
-        _on_ocr_box_user_edit."""
-        index, role = key
-        text_widget = self._text_widgets[key]
-        checked = self._checkbox_vars[key].get()
-        self._checkbox_checked[key] = checked
+        By the time this runs, Tk has already flipped the checkbox's
+        variable. Unchecking shows the OCR default without discarding the
+        edit (kept in SlotState.user_edit); checking shows that edit again,
+        or leaves the default in place if there never was one. The swap is
+        one undo step of its own.
+
+        Args:
+            key: The box's (item_index, role).
+        """
+        var = self._checkbox_vars[key]
+        checked = var.get()
+        # Read before syncing: an edit not yet synced would tick the box
+        # again via _on_ocr_box_user_edit, undoing the click.
+        self._sync_slot_from_widget(key, self._text_widgets[key])
+        var.set(checked)
+        state = self._slot_states[key]
+        state.checked = checked
         self._touched_slots.add(key)
-        image_index = int(role[len("ocr"):])
-        ocr_default = self._items[index].initial_ocr_texts[image_index]
-        text_to_show = self._user_edited_texts.get(key, ocr_default) if checked else ocr_default
+        text_to_show = state.user_edit if checked and state.user_edit is not None else state.default
 
-        self._suppress_ocr_auto_check.add(key)
-        # Tk's autoseparator logic (on by default for an undo=True widget)
-        # inserts a separator on every insert<->delete type transition, which
-        # would otherwise split this delete-then-insert pair into two
-        # separate undo groups - a single Ctrl+Z would then only reverse the
-        # insert half, landing on the empty post-delete/pre-reinsert text
-        # rather than back on whatever this toggle just swapped away from.
-        # Marking a boundary *before* turning autoseparators off (not just
-        # after) matters just as much: without it, disabling autoseparators
-        # before the delete leaves no separator between whatever edit came
-        # right before this toggle and the toggle's own delete - merging the
-        # two into one group, so a single Ctrl+Z would undo *both* instead
-        # of just the toggle.
-        text_widget.edit_separator()
-        text_widget.configure(autoseparators=False)
-        text_widget.delete("1.0", "end")
-        text_widget.insert("1.0", text_to_show)
-        text_widget.edit_separator()
-        text_widget.configure(autoseparators=True)
-        text_widget.mark_set("insert", "1.0")
-        text_widget.see("insert")
-        text_widget.edit_modified(False)
-        self.after_idle(lambda k=key: self._suppress_ocr_auto_check.discard(k))
+        state.history.record(state.text, text_to_show, self._clock(), standalone=True)
+        self._set_box_text(key, text_to_show)
 
         self._log_event(
             "ocr_checkbox_toggled",

@@ -119,7 +119,7 @@ How sure each finding is:
 
 ## B. Structural / design risks
 
-- [ ] **B1. The undo-history replay (`app/gui/text_undo.py`) is the biggest liability**
+- [x] **B1. The undo-history replay (`app/gui/text_undo.py`) is the biggest liability** - fixed with option (a): `text_undo.py` removed; `edit_history.py` keeps full-text snapshots per box (word/pause/insert-delete/cursor-jump grouping, paste/cut/checkbox as own steps, capped at 200), Tk undo off (`undo=False`), rebuild just refills from the model. Self-heal and per-op replay logging removed
   All of this exists only so Tk's built-in undo survives a row being rebuilt.
   It works like this:
   - It renames each Text widget's Tcl command and records every insert and
@@ -142,7 +142,7 @@ How sure each finding is:
   Either one removes replay, the self-heal step, and most of the forensic
   logging.
 
-- [ ] **B2. Per-box state is spread across about 12 parallel dicts on one class split over several files**
+- [ ] **B2. Per-box state is spread across about 12 parallel dicts on one class split over several files** - partly done (with B1): `SlotState` (`app/gui/slot_state.py`) replaces `_saved_texts`, `_saved_cursor`, `_checkbox_checked`, `_user_edited_texts`, `_undo_logs`, `_undo_detach`; `_suppress_ocr_auto_check` no longer needed. Still to do: a view object for the widget dicts, fold in `_touched_slots`, stop `App` reading `_materialized_range`
   `ReviewFrame` plus 3 mixins (`RowBuildingMixin`, `KeyboardNavMixin`,
   `ImageContextMenuMixin`) all share state keyed by `(idx, role)`:
   `_saved_texts`, `_saved_cursor`, `_checkbox_checked`, `_user_edited_texts`,
@@ -331,7 +331,7 @@ How sure each finding is:
 
 ## F. Minor / polish
 
-- [ ] **F1. Logging defaults** - partly done: level is `config.LOG_LEVEL` or the `DISCORD_TRANSCRIPTION_LOG_LEVEL` env var; scroll-trace size/on-off are `config.SCROLL_TRACE_*`. Defaults deliberately unchanged until B1
+- [ ] **F1. Logging defaults** - partly done: level is `config.LOG_LEVEL` or the `DISCORD_TRANSCRIPTION_LOG_LEVEL` env var; scroll-trace size/on-off are `config.SCROLL_TRACE_*`. Defaults deliberately unchanged until B1 (now done, so this can go ahead)
   Logging is hardcoded to `DEBUG`, and JSON goes to stdout. The scroll-trace
   log can reach 40MB x 7, about 280MB. Make the level configurable and
   shrink the defaults once B1 removes the need for forensic logging.
