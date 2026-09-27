@@ -41,12 +41,12 @@ def _prepare(run: RunContext):
 def test_malformed_chatlog_raises_run_error_with_its_message(tmp_path):
     with patch.object(
         main_window.chatlog, "parse_message_groups",
-        side_effect=ValueError("Could not parse export timezone from 'bogus'."),
+        side_effect=ValueError("Message ID 'bogus' isn't a Discord snowflake ID."),
     ):
         with pytest.raises(main_window._RunError) as exc_info:
             _prepare(_run_context(tmp_path))
 
-    assert str(exc_info.value) == "Could not parse export timezone from 'bogus'."
+    assert str(exc_info.value) == "Message ID 'bogus' isn't a Discord snowflake ID."
 
 
 def test_unreadable_html_file_raises_run_error(tmp_path):

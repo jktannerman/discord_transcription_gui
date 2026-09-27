@@ -252,8 +252,8 @@ def _prepare_run(
         )
     except ValueError as exc:
         # parse_message_groups raises a clear ValueError for a malformed
-        # export (missing/unparseable timezone postamble, missing
-        # per-message data-message-id).
+        # export (a missing or non-snowflake per-message
+        # data-message-id).
         logger.exception("chatlog parsing failed")
         raise _RunError(str(exc)) from exc
     except Exception as exc:

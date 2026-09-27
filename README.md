@@ -98,14 +98,16 @@ What's in scope for v1:
    screen opens, and its OCR box starts empty.
 3. **HTML parsing** — parses the export, keeping only messages after the
    start date from the approved users entered on the setup screen (or every
-   user, if "all users" was checked). DiscordChatExporter timestamps every
-   message in the *exporting device's* local timezone by default, not UTC -
-   but it also records exactly which offset that was as a "Timezone:
-   UTC+H[:MM]" line in the export's postamble, which is read and used to
-   convert every message's timestamp to a true UTC epoch (matching how the
-   start date and the next run's recorded start date are both handled in
-   UTC too). A chatlog export missing that postamble line raises a clear
-   error rather than silently guessing a timezone. A message's images are
+   user, if "all users" was checked). Each message's send time is read
+   from its Discord message ID (a "snowflake", which encodes the exact UTC
+   time in milliseconds), not from the export's visible timestamps. Those
+   are rounded to the minute, shown only once per group of consecutive
+   messages by the same author, and written in the exporting device's
+   local time with a declared offset that leaves out daylight saving time.
+   The cutoff is checked per message, so a group that was still going
+   when the previous export was made is split at the cutoff, not kept or
+   dropped whole. The start date and the next run's recorded start date
+   (the chatlog file's modification time) are both UTC too. A message's images are
    read from every `chatlog__attachment` block it has (an uploaded file)
    *and* every `chatlog__embed` block (a pasted image URL/link that Discord
    unfurled, marked up as `chatlog__embed-generic-image` rather than
@@ -115,11 +117,11 @@ What's in scope for v1:
    they appear in the export.
    Each kept message also keeps Discord's own per-message ID (the export's
    `data-message-id`,
-   read from its `chatlog__message-container` wrapper) - not used for
-   filtering, only as the stable key resumed sessions match saved edits
-   against (see "Setup screen" above). A message whose container is
-   missing the ID raises a clear error rather than silently falling back
-   to a less stable identity. Either error is caught where parsing runs
+   read from its `chatlog__message-container` wrapper) - its send time, and
+   the stable key resumed sessions match saved edits against (see "Setup
+   screen" above). A message whose container is missing the ID, or whose
+   ID isn't a number, raises a clear error rather than silently falling
+   back to a less stable identity. That error is caught where parsing runs
    (on the worker thread, before any OCR starts) and shown in the same
    error dialog OCR failures use, rather than leaving the app stuck on the
    progress screen with no indication anything went wrong.

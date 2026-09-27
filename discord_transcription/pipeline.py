@@ -68,12 +68,10 @@ def parse_start_date(date_str: str) -> int:
 
     The components are interpreted as UTC, not the local machine's
     timezone - matching how finalize_run records the date this field is
-    normally pre-filled from (datetime.fromtimestamp(..., tz=utc)) and how
-    chatlog.parse_message_groups now converts each message's own timestamp
-    to a true UTC epoch via the export's declared timezone. Comparing two
-    epoch seconds computed the same well-defined way is what makes the
-    comparison correct regardless of what timezone either the exporting
-    device or this machine happens to be in.
+    normally pre-filled from (datetime.fromtimestamp(..., tz=utc)) and with
+    the UTC send time chatlog.parse_message_groups reads from each message's
+    ID - so the comparison is correct whatever timezone the exporting device
+    or this machine is in.
 
     Raises ValueError with a readable message on bad input, rather than the
     original script's unguarded ``int(x)`` crash.

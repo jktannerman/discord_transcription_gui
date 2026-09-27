@@ -134,11 +134,13 @@ deepest coverage:
 
 ## HTML parsing / OCR pipeline
 
-- HTML parsing/filtering - the export postamble's declared timezone applied
-  to every message timestamp, the clear error raised when that timezone is
-  missing or unparseable, the per-message Discord ID extracted from each
-  `chatlog__message-container`'s `data-message-id`, the clear error raised
-  when that container is missing, and - run against a real
+- HTML parsing/filtering - each message's send time decoded from its
+  snowflake ID, the start-date cutoff applied per message (splitting a
+  message group that straddles it, and ignoring the export's visible
+  timestamps and postamble timezone), the per-message Discord ID extracted
+  from each `chatlog__message-container`'s `data-message-id`, the clear
+  error raised when that container is missing or the ID isn't a snowflake,
+  and - run against a real
   DiscordChatExporter export fixture,
   `example_inputs/short_test_input.html` - every image attachment a message
   has being picked up rather than just the first.

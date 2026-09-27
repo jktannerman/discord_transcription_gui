@@ -133,8 +133,6 @@ MAX_RECENT_PATHS = 8
 # app mid-review.
 AUTOSAVE_INTERVAL_MS = 5000
 
-TIMESTAMP_FORMAT = "%d/%m/%Y %H:%M"
-
 # A message matching this is a die-roll command (e.g. "%roll 2d6",
 # "%draw 1 20") - its result is assumed to be the very next approved
 # message, so spacer defaults treat the pair as one continuous block
