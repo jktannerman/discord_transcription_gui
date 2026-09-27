@@ -1,10 +1,9 @@
 """Persistent state for the transcription tool.
 
-Replaces the original script's two external files
-(``trans_v3_run_dates.txt`` and the pickled ``unedited_trans_file.txt``)
-with JSON equivalents under ``config.APP_DATA_DIR``, so the cached OCR data
-can be inspected/edited as plain text and isn't tied to pickle's
-compatibility constraints.
+Every state file is JSON under ``config.APP_DATA_DIR``, written atomically
+with the previous version kept as a .bak, and read back from that .bak if
+the file itself is missing or corrupt. Per-chatlog and per-folder entries
+are keyed by path_key.
 """
 
 import json
@@ -159,8 +158,8 @@ def _read_json_with_backup(path: Path) -> Any:
 def _run_dates_by_chatlog() -> dict[str, list[str]]:
     """The run-date log, as {path_key(html_path): [end dates, oldest first]}.
 
-    The log used to be one list shared by every chatlog. Such a file is
-    converted once, on first read: its dates are assigned to the most
+    A file in the older format, one list shared by every chatlog, is
+    converted on first read: its dates are assigned to the most
     recently used chatlog (the setup screen's first recent HTML path), the
     one they almost certainly came from, and the result is written back. If
     there's no recent chatlog to assign them to, they're dropped (the
@@ -255,9 +254,7 @@ def add_recent_path(field: str, value: str) -> None:
 
 def read_approved_users_state() -> Optional[dict]:
     """Return {"text": str, "use_all_users": bool} as last saved from the
-    setup screen, or None if it has never been saved (first run) - callers
-    distinguish that from an intentionally-emptied field by checking for
-    None rather than treating an empty/falsy result as "never saved"."""
+    setup screen, or None if never saved (unlike a saved empty list)."""
     data = _read_json_with_backup(config.APPROVED_USERS_STATE_FILE)
     if data is None:
         return None
@@ -322,9 +319,7 @@ def _pop_matching(mapping: dict, path: StrPath, default: Any = None) -> Any:
 
 def load_session(html_path: str) -> Optional[dict]:
     """Return the saved in-progress review session for html_path, or None if
-    there isn't one for that specific chatlog (no prior run for it, or its
-    last run finished/was finalized normally). Sessions saved for other
-    chatlogs, if any, are unaffected either way."""
+    that chatlog has none (never reviewed, or its last run was finalized)."""
     sessions = _read_json_with_backup(config.SESSIONS_FILE)
     if not isinstance(sessions, dict):
         logger.info("no sessions file found")
@@ -343,19 +338,12 @@ def load_session(html_path: str) -> Optional[dict]:
 
 
 def save_session(html_path: str, session: dict) -> None:
-    """Persist the in-progress review session (run inputs, per-item edits,
-    focus/scroll position) for html_path, overwriting only that chatlog's
-    previously saved session - sessions saved for other chatlogs are kept
-    alongside it indefinitely, so two different chatlogs can each be
-    partially transcribed and resumed independently. This is the highest-
-    value target for crash safety in the whole app: it's autosaved every
-    few seconds while reviewing a transcript that may represent hours of
-    OCR + correction work, and the app can be closed (or crash) at any
-    instant mid-write. _atomic_write_json's fsync + rename means that never
-    corrupts the file in place, and the .bak rotation means even a write
-    that completes but encodes a bad/incomplete in-memory session still
-    leaves the previous-known-good sessions recoverable on the next
-    resume-prompt rather than discarding all progress outright."""
+    """Save html_path's in-progress review session (see
+    session.SavedSession), replacing only that chatlog's previous one.
+
+    Called on every autosave, so it relies on _atomic_write_json: a crash
+    mid-write can't corrupt the file, and the .bak keeps the previous
+    save."""
     sessions = _read_json_with_backup(config.SESSIONS_FILE)
     if not isinstance(sessions, dict):
         sessions = {}
@@ -374,13 +362,9 @@ def save_session(html_path: str, session: dict) -> None:
 
 
 def clear_session(html_path: str) -> None:
-    """Remove the saved in-progress session for html_path only - called
-    once that chatlog's run is finalized, since there's nothing left to
-    resume for it. Sessions saved for other chatlogs are left in place.
-    The just-removed session is archived first (see
-    archive_session_backup) - finalizing (or declining to resume a pending
-    one) is itself the end of a session, the same as the cases handled at
-    the load_session call site in main_window.py."""
+    """Remove html_path's saved session (its run was finalized, or the user
+    declined to resume it), archiving it first (see
+    archive_session_backup)."""
     sessions = _read_json_with_backup(config.SESSIONS_FILE)
     if not isinstance(sessions, dict):
         return
@@ -395,20 +379,14 @@ def clear_session(html_path: str) -> None:
 
 
 def archive_session_backup(html_path: str, session: dict) -> None:
-    """Record `session` (html_path's saved session, as it looked right
-    before it stopped being the live in-progress one) into its rotating
-    end-of-session backup history - kept separately from SESSIONS_FILE so
-    these survive being overwritten by whatever the *next* session
-    autosaves. Keeps only the config.SESSION_BACKUP_COUNT most recent
-    entries per html_path, most-recent-first.
+    """Add `session` to html_path's end-of-session backups
+    (config.SESSION_BACKUPS_FILE), keeping the config.SESSION_BACKUP_COUNT
+    most recent, most-recent-first.
 
-    Deliberately a no-op if `session` is identical to the most recently
-    archived entry for this html_path: load_session's caller and
-    clear_session can both end up archiving the exact same still-unedited
-    session for the same chatlog in a single call sequence (e.g. a pending
-    session that's loaded then immediately declined) - without this check
-    that would burn a backup slot on a duplicate instead of an actually
-    distinct prior session."""
+    Called when a session stops being the live one: resumed (autosaves will
+    overwrite it), declined or finalized. A session identical to the newest
+    backup isn't added again - declining a resume archives the same session
+    twice (on load, then in clear_session)."""
     backups = _read_json_with_backup(config.SESSION_BACKUPS_FILE)
     if not isinstance(backups, dict):
         backups = {}
@@ -431,10 +409,8 @@ def archive_session_backup(html_path: str, session: dict) -> None:
 
 
 def load_session_backups(html_path: str) -> list:
-    """Return html_path's end-of-session backup history, most-recent-first
-    (up to config.SESSION_BACKUP_COUNT entries) - empty list if none have
-    ever been archived for it. Backups for other chatlogs, if any, don't
-    affect this lookup either way."""
+    """Return html_path's end-of-session backups, most-recent-first (empty
+    if there are none)."""
     backups = _read_json_with_backup(config.SESSION_BACKUPS_FILE)
     if not isinstance(backups, dict):
         return []

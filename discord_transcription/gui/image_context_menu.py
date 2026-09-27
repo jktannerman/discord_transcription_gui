@@ -1,24 +1,13 @@
 """Right-click context menu on a review row's image: Open Image, Open Image
-in Browser, Open Image Location, Open Chatlog at Message, and Copy Image
-(see the README's "Review screen" section for the exact five actions and
-their expected behavior).
+in Browser, Open Image Location, Open Chatlog at Message, and Copy Image.
 
-Built with a plain tk.Menu popped up via tk_popup(event.x_root, event.y_root)
-- screen-absolute coordinates, not widget-relative event.x/event.y - rather
-than a hand-rolled Toplevel/Canvas-drawn menu. tk_popup is what Tk's own
-native menus use internally for their grab and hit-testing, so there's no
-separate "where is the menu, really" bookkeeping this app has to keep in
-sync with what's on screen: a sibling project's earlier attempt at this
-exact feature shipped with a "clicks land on nothing" bug, traced to that
-class of drift (the click handler's own idea of the menu's position/size
-disagreeing with where Tk actually drew and hit-tested it - the classic
-version of this mistake is popping up at event.x/event.y, which are
-relative to the clicked widget, not the screen tk_popup expects). Native
-tk_popup also means clicking elsewhere or pressing Escape already dismiss
-the menu for free (Tk's own grab/keybindings) - unlike *noticing* that
-dismissal to unfreeze scrolling again, which does need explicit handling;
-see the comment in show() for why that can't lean on
-Tk's usual widget-unmap event the way it first tried to.
+A plain tk.Menu shown with tk_popup at the event's screen coordinates
+(x_root/y_root, not the widget-relative x/y), so Tk does all the
+positioning, hit-testing and dismissal (Escape, a click elsewhere) itself.
+Scrolling is frozen while the menu is open; see show() for how its closing
+is detected.
+
+The Windows actions are here; the Linux ones are in desktop_linux.py.
 """
 
 import os
@@ -65,14 +54,19 @@ class ImageContextMenu:
         )
 
     def show(self, event: tk.Event, image_path: Path, message_id: str) -> None:
+        """Pop up the menu for one image, freezing scrolling until it closes.
+
+        Args:
+            event: The right-click event.
+            image_path: The clicked image.
+            message_id: Its message's Discord ID.
+        """
         logger.info(
             "image context menu opened",
             extra=logging_config.extra(image_path=str(image_path), message_id=message_id),
         )
         self._set_scroll_frozen(True)
 
-        # Sized and hit-tested entirely by tk_popup itself (see the module
-        # docstring).
         menu = tk.Menu(
             self._parent,
             tearoff=0,
@@ -115,26 +109,12 @@ class ImageContextMenu:
         )
 
         try:
-            # On Windows, tk.Menu's popup is backed by the native
-            # TrackPopupMenu API, which blocks this call - running its own
-            # message loop - until a person actually dismisses the menu
-            # (a command clicked, a click outside it, or Escape); confirmed
-            # by hand, not just inferred, since it's also what made an
-            # earlier, unattended version of this feature's own test suite
-            # hang until force-closed (see test_image_context_menu.py).
-            # That blocking is what makes unfreezing in `finally` below
-            # deterministic: by the time tk_popup returns, the menu is
-            # already gone, however it closed.
-            #
-            # This was originally done via a menu.bind("<Unmap>", ...)
-            # instead, on the assumption that Tk would fire its usual
-            # widget-unmap event when a popup closes the way it does for
-            # an ordinary window - it doesn't, for this same native-menu
-            # reason: TrackPopupMenu's popup isn't a regular Tk-managed
-            # window, so Tk never sees (and can't report) it unmapping.
-            # That silently left this app frozen after every real close
-            # (Escape or an outside click, not just selecting a command),
-            # since nothing else ever called _on_image_context_menu_closed.
+            # On Windows the popup is the native TrackPopupMenu, which
+            # blocks here until the menu is dismissed, however that happens,
+            # so the `finally` below runs exactly when it closes. An <Unmap>
+            # binding can't be used instead: Tk never sees that native popup
+            # unmap. (Tests mock tk_popup, since the real one would block
+            # until a person closes it.)
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
@@ -167,10 +147,8 @@ class ImageContextMenu:
             )
 
     def _open_image(self, image_path: Path) -> None:
-        # The registered default *file* handler for this extension (e.g.
-        # Photos), same as double-clicking the file in Explorer - unlike
-        # _open_image_in_browser below, this is exactly what os.startfile
-        # (xdg-open on Linux) already does, no browser lookup needed.
+        # The default program for this file type, as a double-click in the
+        # file manager would use.
         resolved = str(Path(image_path).resolve())
         if sys.platform == "win32":
             os.startfile(resolved)
@@ -178,39 +156,18 @@ class ImageContextMenu:
             subprocess.Popen(["xdg-open", resolved])
 
     def _open_image_in_browser(self, image_path: Path) -> None:
-        # Neither webbrowser.open() nor a plain os.startfile() on a
-        # file:// URI actually opens the *browser* here - both resolve a
-        # local file through its file-type association (Photos, same as
-        # _open_image above), since that association - not "what's the
-        # default browser" - is what Windows consults for a local path/
-        # file:// URI regardless of which API asks. Confirmed by hand:
-        # this action opened Photos, not Firefox/Chrome/Edge, until fixed
-        # to look up and launch the default *browser* directly instead.
-        #
-        # The default browser is a separate piece of registry state
-        # entirely (the "UserChoice" registered for the http protocol,
-        # not for this file's extension) - _default_browser_command below
-        # reads that and returns its command line, which this substitutes
-        # the image's file:// URI into and launches directly, bypassing
-        # file-type association altogether.
+        # webbrowser.open() and os.startfile() on a file:// URI both follow
+        # the file type's association (e.g. Photos for .png), not the
+        # default browser, so the browser is looked up and launched
+        # directly.
         _launch_url_in_default_browser(Path(image_path).resolve().as_uri())
 
     def _open_chatlog_at_message(self, message_id: str) -> None:
-        # The export's own DiscordChatExporter markup gives every message's
-        # chatlog__message-container div both a data-message-id attribute
-        # (what chatlog.py already reads to key edits/sessions by) *and* an
-        # id="chatlog__message-container-<that same id>" attribute on the
-        # very same element - confirmed by hand against a real export (see
-        # example_inputs/short_test_input.html). That id is exactly what an
-        # HTML fragment (#...) anchor needs, so this needs no HTML parsing
-        # of its own at open time - just string-formatting the id chatlog.py
-        # already guarantees every kept message has.
-        #
-        # Routed through the same default-browser lookup as
-        # _open_image_in_browser (not os.startfile/webbrowser.open) for
-        # consistency - an .html file's own default-open association isn't
-        # guaranteed to be a browser either, the same gap that action's
-        # docstring explains for images.
+        # DiscordChatExporter gives each message's container element
+        # id="chatlog__message-container-<message id>", so a URL fragment
+        # can jump straight to it. The default browser is looked up as for
+        # _open_image_in_browser, since an .html file's association isn't
+        # necessarily a browser either.
         uri = self._html_path.resolve().as_uri()
         anchor = f"chatlog__message-container-{message_id}"
         _launch_url_in_default_browser(f"{uri}#{anchor}")
@@ -255,11 +212,14 @@ class ImageContextMenu:
 
 
 def _launch_url_in_default_browser(url: str) -> None:
-    """Launch `url` (a file:// URI, with or without a #fragment) in the
-    user's actual default *browser*, looked up via _default_browser_command
-    - shared by _open_image_in_browser and _open_chatlog_at_message, which
-    otherwise differ only in what URI they build. On Linux the browser comes
-    from xdg-settings and its .desktop entry instead (desktop_linux.py)."""
+    """Launch `url` (a file:// URI, possibly with a #fragment) in the
+    default browser: from the registry on Windows
+    (_default_browser_command), from xdg-settings and its .desktop entry on
+    Linux (desktop_linux.py).
+
+    Raises:
+        RuntimeError: If the default browser can't be determined.
+    """
     if sys.platform == "win32":
         command_template = _default_browser_command()
         if command_template is None:
@@ -277,26 +237,17 @@ def _launch_url_in_default_browser(url: str) -> None:
 
 
 def _default_browser_command() -> Optional[str]:
-    """The current user's default browser's raw command line, e.g.
-    '"C:\\Program Files\\Mozilla Firefox\\firefox.exe" -osint -url "%1"' -
-    read from the same two-step registry lookup Windows Explorer itself
-    uses to resolve "open with default browser": the http protocol's
-    UserChoice ProgId, then that ProgId's own shell\\open\\command. This is
-    deliberately unrelated to a file's *extension* association (what
-    os.startfile/webbrowser.open actually follow for a local path or
-    file:// URI - see _open_image_in_browser above) - the two can name
-    different programs entirely (e.g. Photos as the .png handler, Firefox
-    as the http handler), and it's the second one this action needs.
+    """The Windows default browser's command line, e.g.
+    '"C:\\Program Files\\Mozilla Firefox\\firefox.exe" -osint -url "%1"'.
 
-    None if any step of the lookup fails (no UserChoice set, an installed-
-    but-since-uninstalled browser's stale ProgId, ...) - the caller raises
-    on that, which _run_image_menu_action logs as a failure rather than
-    silently falling back to a file-association open that wouldn't
-    actually satisfy "open in browser"."""
-    # Local import: winreg is Windows-only, like win32clipboard below - a
-    # top-level import here used to make this whole module (and therefore
-    # every action in this menu, not just this lookup) fail to import on
-    # any other platform.
+    Read the way Explorer resolves it: the http protocol's UserChoice
+    ProgId, then that ProgId's shell\\open\\command.
+
+    Returns:
+        The command line, or None if either lookup step fails (no
+        UserChoice set, or a ProgId left by an uninstalled browser).
+    """
+    # Local import: winreg exists only on Windows.
     import winreg
 
     try:

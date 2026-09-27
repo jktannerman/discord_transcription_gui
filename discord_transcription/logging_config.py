@@ -1,9 +1,8 @@
 """Centralized logging setup.
 
-Logs are emitted as single-line JSON (per CLAUDE.md's logging convention) to
-a rotating file under ``config.APP_DATA_DIR``, so a run can be replayed/
-grepped afterwards without re-running the GUI. Warnings and errors also go
-to the console.
+Logs are single-line JSON records in a rotating file under
+``config.APP_DATA_DIR``. Warnings and errors also go to the console. The
+review screen's trace goes to a separate file (see get_trace_logger).
 """
 
 import hashlib
@@ -21,17 +20,12 @@ from . import config
 # "discord_transcription.something", so this is always their common
 # ancestor logger.
 LOGGER_NAME = "discord_transcription"
-# Deliberately NOT a child of LOGGER_NAME (e.g. "discord_transcription.scroll_trace") - it gets
-# its own handlers/file (see setup_logging) and must not also propagate up
-# into LOGGER_NAME's handlers, which would defeat the point of splitting it
-# out from app.log in the first place.
+# Not a child of LOGGER_NAME, so trace records don't also reach app.log.
 TRACE_LOGGER_NAME = "scroll_trace"
 
 _configured = False
-# Stamped onto every log line (see JsonFormatter) so a multi-run log file -
-# or LOG_FILE and SCROLL_TRACE_LOG_FILE side by side - can be filtered down
-# to one run without having to re-derive line offsets by grepping for
-# "application starting" each time.
+# Stamped onto every log line (see JsonFormatter), so either log file can be
+# filtered down to one run.
 _run_id = ""
 
 
@@ -88,14 +82,9 @@ def setup_logging(level: int = logging.INFO) -> None:
     logger.addHandler(console_handler)
     logger.propagate = False
 
-    # Much higher-frequency than LOG_FILE (a single scroll gesture can fire
-    # dozens of these), so it gets its own file/rotation budget rather than
-    # competing with - and potentially evicting - LOG_FILE's lower-volume
-    # lifecycle events. Not attached to the console handler: this volume of
-    # output would drown out everything else printed there.
-    #
-    # The rotation budget and an on/off switch live in config
-    # (SCROLL_TRACE_*).
+    # A single scroll gesture can log dozens of trace events, so the trace
+    # gets its own file and rotation budget (config.SCROLL_TRACE_*), and
+    # never reaches the console.
     trace_logger = logging.getLogger(TRACE_LOGGER_NAME)
     trace_logger.propagate = False
     if not config.SCROLL_TRACE_ENABLED:
@@ -126,30 +115,25 @@ def resolve_log_level() -> int:
 
 
 def get_trace_logger() -> logging.Logger:
-    """The review screen's dedicated logger for high-frequency per-scroll-
-    tick tracing (reconcile/debounce/remeasure/image-load/box-resize
-    events) - routed to SCROLL_TRACE_LOG_FILE instead of LOG_FILE, see
-    setup_logging."""
+    """The review screen's logger for high-frequency tracing (reconcile,
+    debounce, remeasure, image load and text-box events), written to
+    SCROLL_TRACE_LOG_FILE instead of LOG_FILE."""
     return logging.getLogger(TRACE_LOGGER_NAME)
 
 
 def get_logger(name: str) -> logging.Logger:
     """Return a logger for a module under the discord_transcription package.
 
-    Pass the module's ``__name__`` - since every module already lives under
-    the ``discord_transcription`` package, its dotted name is already a child of the
-    ``LOGGER_NAME`` logger configured in setup_logging(), so no extra
-    prefixing is needed (and would double it up).
+    Pass the module's ``__name__``, which is already a child of
+    LOGGER_NAME. The exception is ``"__main__"`` (main.py run with
+    ``python -m``), which would be outside the configured logger tree, so
+    it gets LOGGER_NAME itself.
 
-    The one exception is main.py: if it's run directly with
-    `python -m discord_transcription.main` (rather than via the installed console-script entry
-    point, which imports it as a normal module), Python sets *that* one
-    module's ``__name__`` to ``"__main__"`` rather than ``"discord_transcription.main"`` - a
-    logger built from it would have no relation to the package's logger tree
-    that setup_logging() attaches handlers to, and its records would
-    silently vanish into the unconfigured root logger instead of reaching
-    the file/console handlers. Fall back to LOGGER_NAME so it's still a
-    child of the configured logger.
+    Args:
+        name: The calling module's ``__name__``.
+
+    Returns:
+        The logger to use.
     """
     if name == "__main__":
         return logging.getLogger(LOGGER_NAME)
@@ -163,13 +147,9 @@ def extra(**fields: Any) -> dict[str, dict[str, Any]]:
 
 
 def text_fingerprint(text: Optional[str]) -> dict[str, Any]:
-    """Compact, log-friendly stand-in for a text box's full content: its
-    length plus a short hash, so two log lines can be compared for exact
-    equality (e.g. "is this box's content the same before and after a row
-    rebuild?") without dumping - and potentially truncating - the full text
-    into every line. None is reported as ``{"len": None, "hash": None}``,
-    distinct from an empty string (``{"len": 0, "hash": <hash of "">}``) -
-    the two mean different things (never touched vs. cleared)."""
+    """A text's length plus a short hash, so log lines can show whether a
+    box's content changed without logging the text itself. None gives
+    ``{"len": None, "hash": None}``, distinct from an empty string."""
     if text is None:
         return {"len": None, "hash": None}
     return {"len": len(text), "hash": hashlib.md5(text.encode("utf8")).hexdigest()[:8]}

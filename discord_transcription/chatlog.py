@@ -1,18 +1,13 @@
 """Parsing of the DiscordChatExporter HTML export.
 
-Mirrors the filtering logic in the original script: only messages from an
-approved set of author IDs (entered on the setup screen, not hardcoded -
-see pipeline.parse_approved_user_ids), sent at or after ``start_time``, are
-kept. Each accepted message is reduced to its Discord message ID, plain
-text lines, and the filenames of any attached images (a message can have
-more than one, each either an uploaded ``chatlog__attachment`` or a
-Discord-unfurled ``chatlog__embed`` image link) - OCR and the interactive
-correction step are handled separately in pipeline.py. The message ID is
-Discord's own stable per-message identifier (read from the export's
-``data-message-id`` attribute), kept so a resumed review session can match
-its saved edits back onto the right message even if a later re-export of
-the same chatlog appends or inserts messages and shifts every list
-position.
+Only messages from the approved author IDs (see
+pipeline.parse_approved_user_ids), sent at or after ``start_time``, are
+kept. Each is reduced to its Discord message ID, plain text lines, and the
+filenames of its images (a message can have several, each either an
+uploaded ``chatlog__attachment`` or a Discord-unfurled ``chatlog__embed``
+image link). The message ID (the export's ``data-message-id``) is Discord's
+own stable identifier, so saved edits can be matched back to their message
+even after a re-export adds messages anywhere.
 
 Each message's time also comes from its ID: a Discord ID is a "snowflake"
 whose top bits are the creation time in milliseconds since the Discord

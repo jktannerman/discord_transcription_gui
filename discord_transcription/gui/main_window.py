@@ -6,23 +6,17 @@ then shows the full review screen (every approved message, images paired
 with editable OCR text) and writes everything out once Finalize is clicked,
 finishing with a summary screen.
 
-Also decides when sessions are saved and resumed (what a session holds,
-and how it maps back onto a re-parsed chatlog, is session.py's job): while
-the review screen is up, the current edits/focus/scroll position are
-autosaved every config.AUTOSAVE_INTERVAL_MS (see _start_autosave/
-_run_autosave) so closing the app mid-review doesn't lose progress. The
-parsing/OCR itself is pipeline.prepare_run, run on a worker thread.
-Sessions are saved per HTML
-chatlog file (see state.save_session/load_session/clear_session), not as
-one global slot, so two different chatlogs can each be partially
-transcribed and resumed independently - one isn't evicted by starting the
-other. Rather than a launch-time global prompt, the check happens in
-_on_start once a specific HTML file has been chosen: if a saved session
-exists for that exact file, _on_start offers to resume it
-(_resume_session), rebuilding the same run from its saved inputs and
-re-applying the saved edits/position once OCR/parsing finish
-(_show_review). That chatlog's saved session is cleared once its run is
-actually finalized, or if the user declines to resume it.
+The parsing and OCR itself is pipeline.prepare_run, run on a worker thread.
+
+Also decides when sessions are saved and resumed (what a session holds, and
+how it maps back onto a re-parsed chatlog, is session.py's job). While the
+review screen is up, its edits, focus and scroll position are autosaved
+every config.AUTOSAVE_INTERVAL_MS, and once more when the window closes.
+Sessions are kept per chatlog. When Start is clicked for a chatlog with a
+saved session, _on_start offers to resume it: _resume_session re-runs the
+session's saved inputs, and _show_review re-applies its edits and position.
+A chatlog's session is cleared when its run is finalized, or when the user
+declines to resume it.
 """
 
 import dataclasses
@@ -82,9 +76,7 @@ class App:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         # Stay hidden until everything (including the dark title bar) is
-        # set up, then show it all in one shot - see theme.enable_dark_title_bar's
-        # docstring for why showing the window before that is set is what
-        # caused the title bar to start out light.
+        # set up - see theme.enable_dark_title_bar.
         self.root.withdraw()
         self.root.title("Discord Transcription Tool")
         self.root.geometry("700x500")
@@ -107,10 +99,9 @@ class App:
         self._run: Optional[RunContext] = None
         self._autosave_job: Optional[str] = None
         self._resume_payload: Optional[SavedSession] = None
-        # Set just before a resumed session's OCR/parse begins, so a failed
-        # resume that falls back to show_setup() displays the session's
-        # actual image folder rather than whatever's otherwise most-recent
-        # on disk - consumed (reset to None) the next time show_setup() runs.
+        # A resumed session's image folder, so that if the resume fails and
+        # falls back to show_setup(), the setup screen shows that folder.
+        # Cleared by the next show_setup().
         self._resume_image_folder_override: Optional[str] = None
         # The edits as of the most recent save - diagnostic only, so each
         # save can log exactly which edits changed (session.log_edit_changes).
@@ -124,12 +115,9 @@ class App:
         self.root.deiconify()
 
     def _on_close(self) -> None:
-        """Logs a final snapshot of whatever's currently in memory, then
-        flushes it to disk via one last _snapshot_and_save() call before the
-        window actually closes - closing used to just leave whatever the
-        last *periodic* tick happened to catch as the on-disk state, with
-        up to AUTOSAVE_INTERVAL_MS worth of edits/scrolling never making it
-        to disk at all if the window closed in between."""
+        """Window-close handler: save the review session one last time (so
+        nothing since the last autosave is lost), then close. If that save
+        fails, ask before closing anyway."""
         frame = getattr(self, "_review_frame", None)
         if frame is not None and frame.winfo_exists():
             logger.info(
@@ -191,13 +179,8 @@ class App:
 
         pending_session = state.load_session(html_path)
         if pending_session is not None:
-            # Either branch below ends this pending session's life as the
-            # live, in-progress one for html_path - accepting moves it into
-            # a new session that will progressively overwrite it via
-            # autosave, declining clears it outright (which separately
-            # archives it too - see state.clear_session) - so archive it
-            # here first, covering the accepted case clear_session never
-            # runs for.
+            # Resuming overwrites this session with autosaves, and declining
+            # clears it, so archive it first either way.
             state.archive_session_backup(html_path, pending_session)
             start_time = pending_session.get("start_time")
             if start_time is not None:
@@ -377,11 +360,9 @@ class App:
         self._run_autosave()
 
     def _run_autosave(self) -> None:
-        """Snapshot the review screen's current edits/focus/scroll position
-        to disk, then reschedule itself - runs continuously while the
-        review screen is up (see _start_autosave/_cancel_autosave), every
-        config.AUTOSAVE_INTERVAL_MS, so closing the app at any point during
-        review leaves a resumable session behind."""
+        """Save the review session, then reschedule itself for
+        config.AUTOSAVE_INTERVAL_MS later. Runs while the review screen is
+        up (see _start_autosave/_cancel_autosave)."""
         try:
             frame = getattr(self, "_review_frame", None)
             if frame is not None and frame.winfo_exists():

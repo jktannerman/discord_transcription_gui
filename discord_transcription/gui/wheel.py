@@ -4,8 +4,7 @@ import tkinter as tk
 
 # Every event a mouse wheel/touchpad scroll can arrive as: <MouseWheel> on
 # Windows/macOS (and X11 from Tk 8.7), <Button-4>/<Button-5> (up/down) on
-# X11 with Tk 8.6 - which never sends <MouseWheel> at all, so binding only
-# that left the review window unscrollable by wheel on Linux.
+# X11 with Tk 8.6, which never sends <MouseWheel>.
 WHEEL_EVENT_SEQUENCES = ("<MouseWheel>", "<Button-4>", "<Button-5>")
 
 

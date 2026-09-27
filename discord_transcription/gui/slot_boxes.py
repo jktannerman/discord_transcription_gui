@@ -336,10 +336,9 @@ class SlotBoxes:
         """Tear down a live widget already registered for `key`, if any.
 
         Should be impossible - a row is only built when it isn't already -
-        but a bookkeeping bug could get here anyway (see
-        archive/INVESTIGATION_shift_tab_reconcile_lockup.md). Brings the
-        SlotState up to date first, so nothing typed is lost, then destroys
-        the old container so no widget is leaked.
+        but a bookkeeping bug could get here anyway. Brings the SlotState up
+        to date first, so nothing typed is lost, then destroys the old
+        container so no widget is leaked.
         """
         if key not in self.views:
             return
@@ -534,8 +533,8 @@ class SlotBoxes:
 
     def _resync_ocr_checkbox_after_undo(self, key: Slot) -> None:
         """Re-derive an "ocr" box's checkbox after an undo/redo: checked
-        exactly when the text differs from the OCR default (the rule used to
-        seed it), rather than typing's "any change checks the box". So
+        exactly when the text differs from the OCR default (the same rule
+        initial_slot_states seeds it with), rather than typing's "any change checks the box". So
         undoing a box's only edit unticks it, and undoing an untick brings
         back both the edit and the tick."""
         if not key[1].startswith("ocr"):

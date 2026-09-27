@@ -1,9 +1,8 @@
 """OCR backend for image transcription.
 
-Tesseract is the only active backend, but the call is routed through
-``transcribe_image`` and the ``_BACKENDS`` dict so an EasyOCR implementation
-(abandoned in the original script, but possibly revived later) could be
-added as a second entry without changing any calling code.
+Tesseract is the only backend, but calls go through ``transcribe_image``
+and the ``_BACKENDS`` dict, so another (e.g. EasyOCR) could be added
+without changing any calling code.
 """
 
 import re

@@ -1,23 +1,14 @@
-"""Orchestration glue tying OCR, HTML parsing, and output writing together.
+"""Orchestration glue tying HTML parsing, OCR and output writing together.
 
-Split into pieces the GUI can drive explicitly:
-
-- ``parse_start_date`` / ``prepare_run`` run before any user interaction
-  (the latter on a background thread, reporting progress via callback):
-  ``prepare_run`` parses the chatlog, then ``run_ocr_batch`` OCRs the images
-  its kept messages reference (``referenced_image_names``), not everything
-  in the image folder. ``RunContext`` holds a run's inputs.
-- ``review_item.build_review_items`` turns the approved messages + OCR'd
-  paragraphs into the flat list the review screen displays all at once -
-  see that module for the ``ReviewItem``/spacer-slot domain model this glue
-  hands off to and back from. Nothing is written to disk until the user
-  reviews everything and clicks Finalize.
+- ``prepare_run`` (on a background thread, reporting progress through a
+  callback) parses the chatlog, then ``run_ocr_batch`` OCRs the images the
+  kept messages reference. ``RunContext`` holds a run's inputs.
+- ``review_item.build_review_items`` turns the messages and OCR text into
+  the review screen's items.
 - ``finalize_run`` renders every message's final text (via
-  ``review_item.lines_for_item``, using whatever the user edited, or the
-  original message/OCR text if they left it alone), runs the regex cleanup
-  pass, bookmarks the result with a fresh BREAK marker, and writes the
-  output file in a single atomic replace - then records the new run date
-  and copies the added text to the clipboard.
+  ``review_item.lines_for_item``), runs the cleanup pass, adds a fresh
+  BREAK marker, and writes the output file in one atomic replace, then
+  records the run date and copies the added text to the clipboard.
 """
 
 import datetime
@@ -46,8 +37,15 @@ def parse_approved_user_ids(text: str) -> set[str]:
     per line, e.g. "123456789 - Alice") into the set of Discord user IDs to
     filter the chatlog by.
 
-    Raises ValueError naming the offending line if a non-blank line doesn't
-    start with a numeric user ID, rather than silently dropping it.
+    Args:
+        text: The field's contents.
+
+    Returns:
+        The user IDs.
+
+    Raises:
+        ValueError: Naming the first non-blank line that doesn't start with
+            a numeric user ID.
     """
     ids: set[str] = set()
     for line in text.splitlines():
@@ -67,15 +65,18 @@ def parse_approved_user_ids(text: str) -> set[str]:
 def parse_start_date(date_str: str) -> int:
     """Parse a 'YYYY-MM-DD[-HH-MM-SS]' string into a unix timestamp.
 
-    The components are interpreted as UTC, not the local machine's
-    timezone - matching how finalize_run records the date this field is
-    normally pre-filled from (datetime.fromtimestamp(..., tz=utc)) and with
-    the UTC send time chatlog.parse_message_groups reads from each message's
-    ID - so the comparison is correct whatever timezone the exporting device
-    or this machine is in.
+    The components are read as UTC, like the run dates finalize_run
+    records and the message times chatlog.parse_message_groups reads, so
+    neither this machine's nor the exporting device's timezone matters.
 
-    Raises ValueError with a readable message on bad input, rather than the
-    original script's unguarded ``int(x)`` crash.
+    Args:
+        date_str: The setup screen's start date field.
+
+    Returns:
+        The unix timestamp.
+
+    Raises:
+        ValueError: With a readable message, if the date can't be parsed.
     """
     parts = date_str.strip().split("-")
     try:

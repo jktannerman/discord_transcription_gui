@@ -8,10 +8,8 @@ each row's height (estimated until a row is built and measured, then its
 real height - see `heights`), via virtualization.compute_visible_range, and
 builds/destroys rows to match. That recomputation is idempotent: calling
 reconcile() twice with no scroll movement in between yields the same range
-and is a no-op the second time. (An earlier design stepped a stored window
-forward/backward incrementally and could fall into a self-sustaining
-oscillation near either end of the list; recomputing from scratch makes
-that impossible.)
+and is a no-op the second time, so there is no stored window state that
+could drift or oscillate.
 
 The built rows are packed into one child frame, which is repositioned with
 canvas.coords() to sit at its first row's true offset within the full
@@ -290,14 +288,15 @@ class VirtualRows:
 
     def _try_build_row(self, index: int, before: Optional[tk.Widget] = None) -> Optional[tk.Widget]:
         """build_row, but one row's failure doesn't abort the rest of a
-        reconcile's batch (a backstop, not a substitute for fixing what
-        raised - see archive/INVESTIGATION_shift_tab_reconcile_lockup.md).
+        reconcile's batch.
 
         Left uncaught, a failure would leave the rest of the batch unbuilt
-        and materialized_range stale relative to row_frames, corrupting
-        every later reconcile. Instead whatever was built is torn down, the
-        row is skipped (and retried by any later reconcile that wants it),
-        and None is returned.
+        and materialized_range out of step with row_frames. Instead whatever
+        was built is torn down and the row is skipped (a later reconcile
+        retries it). A backstop: the logged error still needs fixing.
+
+        Returns:
+            The row's frame, or None if building it raised.
         """
         try:
             return self.build_row(index, before=before)

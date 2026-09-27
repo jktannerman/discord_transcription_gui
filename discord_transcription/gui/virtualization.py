@@ -1,7 +1,8 @@
-"""Pure layout math for the review screen's virtualized row window - no Tk
-dependency, so this is testable without a display. See virtual_rows.py's
-module docstring for why the windowing design (idempotent recomputation
-from scratch, rather than incremental step-forward/step-backward) matters.
+"""Pure layout math for the review screen's virtualized rows.
+
+No Tk dependency, so it's testable without a display. VirtualRows uses it
+to estimate row heights before a row is built and to work out which rows
+are near the viewport.
 """
 
 import bisect
@@ -24,10 +25,11 @@ from .layout_constants import (
 
 @dataclass(frozen=True)
 class TextMetrics:
-    """Pixel sizes of the review screen's text, measured from the real
-    font and widgets on the running display (see
-    row_building.measure_text_metrics) rather than hardcoded, since they
-    vary with the font Tk actually resolves and the display's DPI scaling.
+    """Pixel sizes of the review screen's text.
+
+    Measured from the real font and widgets on the running display (see
+    row_building.measure_text_metrics), since they vary with the font Tk
+    resolves and the display's DPI scaling.
 
     Attributes:
         char_width_px: Advance width of one character of the (monospace)
@@ -51,25 +53,10 @@ DEFAULT_TEXT_METRICS = TextMetrics(
     char_width_px=10, line_height_px=22, label_padding_px=4, spacer_box_height_px=34,
 )
 
-# An editable box's height is its paired immutable element's own on-screen
-# height (the label's estimate below, for a "message" box; the image's, for
-# an "ocr" box) plus TEXT_BOX_MARGIN_PX - mirrors
-# RowBuilder.fixed_text_box_height's rule exactly, via the
-# shared layout_constants module (review_view.py can't be imported from here
-# - it's the one that imports this Tk-free module). Getting this estimate
-# close to the real eventual height matters more than usual now that a box's
-# height is no longer just a floor under a content-driven size - it's the
-# dominant term in a row's total height, so a wrong constant here
-# overestimates or underestimates every such row by the same large, constant
-# amount, which is exactly the kind of error that turns into a visible
-# scroll jump once VirtualRows._remeasure_built_rows corrects it away after
-# the row is actually built.
-
 
 def wrapped_line_count(text: str, chars_per_line: int) -> int:
     """Number of soft-wrapped display lines `text` would occupy at
-    `chars_per_line` - shared by estimate_row_height below and the
-    editable text box's auto-sizing in review_view.py."""
+    `chars_per_line`."""
     line_count = 0
     for line in text.splitlines() or [""]:
         line_count += len(textwrap.wrap(line, chars_per_line)) or 1
@@ -123,63 +110,37 @@ def estimate_row_height(
     metrics: TextMetrics = DEFAULT_TEXT_METRICS,
     image_column_width_px: int = DEFAULT_IMAGE_COLUMN_WIDTH_PX,
 ) -> int:
-    """Cheap, approximate height (px) for an item's row before it's ever
-    been built as real widgets - good enough for scrollbar proportion and
-    decoding which rows are near the viewport, not for actual layout. Once
-    a row is materialized, ReviewFrame replaces this estimate with the
-    row's real winfo_height().
+    """Estimate the height (px) of an item's row before it's built.
 
-    This hand-mirrors RowBuilder.fill_row's per-role
-    sizing (same gap placement, same "content height + margin, capped at
-    max_text_box_height_px" rule) rather than calling into it, since this
-    module has to stay Tk-free to be unit-testable - so the two can't share
-    code, only the ordering (item.slot_roles). If you change how a role's
-    height/gap is computed in one of these, change it in the other too:
-    drift between them is exactly what previously surfaced as a scroll-
-    position jump once VirtualRows._remeasure_built_rows corrected the
-    estimate away after the row was actually built (see
-    docs/ARCHITECTURE_REVIEW_SCREEN.md).
+    Used for the scrollbar and for deciding which rows are near the
+    viewport; VirtualRows replaces it with the real height once the row is
+    built. A wrong estimate shows up as a scroll jump at that point, and
+    one for a row that is never built shifts every later row's offset.
 
-    Walks item.slot_roles - the same ordering RowBuilder.fill_row uses - estimating
-    both of the row's columns (the immutable left column: label and/or
-    images; the editable right column: one box per slot, content or
-    spacer) independently and takes the taller of the two, then adds
-    ROW_FRAME_OVERHEAD_PX for the row's own padding/border, plus
-    2*ROW_PACK_PADY_PX for the vertical pack() gap *outside* the row's own
-    Frame (see that constant's docstring - winfo_height() can't see it,
-    so it has to be added back by hand here and in
-    VirtualRows._remeasure_built_rows, or the document-space model this
-    feeds drifts away from the real screen position one row at a time).
-    Each stacked
-    element but the last gets GAP_BETWEEN_STACKED_PX added to whichever
-    column total includes it, same as the real layout. A spacer role has
-    no left-column counterpart at all (only the right column gets
-    metrics.spacer_box_height_px), unlike a content role whose right-column box is
-    always its left counterpart plus TEXT_BOX_MARGIN_PX - the max() is kept
-    anyway so this stays correct regardless of how those two compare for
-    any given item.
+    This mirrors RowBuilder.fill_row's sizing by hand, since this module
+    has to stay Tk-free; the two share only the role order
+    (item.slot_roles) and layout_constants. Change both together.
 
-    `max_text_box_height_px` mirrors RowBuilder.fixed_text_box_height's
-    own cap on a content box's right-column height (TEXT_BOX_MAX_HEIGHT_
-    FRACTION of the canvas) - omitted (None) means "don't cap," for callers
-    that don't have a real viewport height to cap against yet. A long
-    message/OCR text's real box stops growing past that cap (it gets an
-    internal scrollbar instead), but its *left*-column counterpart (the
-    label/image) doesn't shrink to match - so capping has to apply to the
-    right column's running total alone, not to whichever of left/right
-    happens to be larger overall. Skipping this cap left long-message rows
-    overestimated by however far past the cap their uncapped guess ran -
-    not a one-off glitch, since a never-built row (skipped by a far
-    Tab/resume-focus jump or a scrollbar drag) keeps that overestimate
-    baked into every later row's document-space offset until it's actually
-    built and remeasured.
+    Each column (left: label and images; right: one box per slot) is
+    summed separately, with GAP_BETWEEN_STACKED_PX after every element
+    but the last, and the taller one is used. On top of that come the
+    row's own chrome (ROW_FRAME_OVERHEAD_PX) and the pack gap outside it
+    (2 * ROW_PACK_PADY_PX; see docs/ARCHITECTURE_ROW_GEOMETRY.md).
 
-    `metrics` is the text font's measured pixel sizes (TextMetrics) -
-    ReviewFrame passes ones measured on the running display; the default
-    is only a rough stand-in for display-free unit tests.
+    Args:
+        item: The row's item.
+        max_text_box_height_px: The cap on a content box's height, as in
+            RowBuilder.fixed_text_box_height; None for no cap. It applies
+            to the right column only - the label or image beside a capped
+            box keeps its full height.
+        metrics: Measured text sizes; the default is a rough stand-in for
+            unit tests without a display.
+        image_column_width_px: The left column's width, which the label
+            wraps at and images are fitted to.
 
-    `image_column_width_px` is the left column's width: the original-text
-    label wraps at it, and images are fitted to it (image_bounding_box)."""
+    Returns:
+        The estimated height in px.
+    """
     roles = item.slot_roles
     left = 0
     right = 0
@@ -212,16 +173,21 @@ def estimate_row_height(
 def compute_visible_range(
     heights: List[int], scroll_top: float, viewport_height: float, buffer: float
 ) -> Tuple[int, int]:
-    """Pure function: given each item's row height (estimated or real) and
-    the viewport's current position, return the inclusive [first_idx,
-    last_idx] item-index range overlapping the viewport expanded by
-    `buffer` on each side, clamped to the valid index range.
+    """Rows overlapping the viewport, widened by `buffer` on each side.
 
-    Deliberately pure and independent of what's currently materialized -
-    calling this twice with the same arguments always returns the same
-    range. That idempotency is what makes VirtualRows.reconcile immune to
-    the oscillation bug a previous, stateful step-forward/step-backward
-    design suffered from - see virtual_rows.py's module docstring."""
+    Depends only on its arguments, not on which rows are built, which is
+    what keeps VirtualRows.reconcile idempotent.
+
+    Args:
+        heights: Each row's height (estimated or real).
+        scroll_top: The viewport's top, in document coordinates.
+        viewport_height: The viewport's height.
+        buffer: Extra distance to include above and below.
+
+    Returns:
+        The inclusive (first_idx, last_idx) range, clamped to valid
+        indexes; (0, -1) when there are no rows.
+    """
     n = len(heights)
     if n == 0:
         return (0, -1)

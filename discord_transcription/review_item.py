@@ -1,13 +1,6 @@
-"""The review screen's central domain model: one ``ReviewItem`` per approved
-message, plus the slot-role ordering and spacer-token parsing every other
-review-screen module (row building, height estimation, keyboard navigation)
-and finalize-time output writing all share.
-
-Split out of ``pipeline.py`` - unlike that module's OCR-batch/output-writing
-glue, this is the one shared concept several other modules depend on
-directly (``ReviewItem.slot_roles`` in particular - see its own docstring),
-the same way ``chatlog.py``/``ocr_corrections.py`` each got their own module
-for *their* shared concepts.
+"""The review screen's domain model: one ``ReviewItem`` per approved
+message, plus the slot-role order and spacer-token parsing shared by row
+building, height estimation, keyboard navigation and output writing.
 """
 
 import re

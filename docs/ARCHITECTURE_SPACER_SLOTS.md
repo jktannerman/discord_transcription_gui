@@ -2,46 +2,36 @@
 
 Part of [ARCHITECTURE.md](ARCHITECTURE.md).
 
-Blank-line spacing between/within review items used to be produced by a
-post-run regex pass (`cleanup.py`) that collapsed excess newlines to a fixed
-cap and special-cased die-roll commands - it couldn't express anything finer
-than its hardcoded rules, and silently clobbered a deliberately larger gap
-back down to its cap. Spacing is now fully owned by dedicated "spacer" text
-boxes on the review screen: one-line-tall, right-column-only editable boxes
-between every adjacent pair of transcription elements, holding literal `\n`
-*tokens* (the two characters `\` and `n`, not real newlines) that the user
-can freely edit. Nothing else in a spacer box has any effect - see
-"Finalize-time parsing" below.
+Blank-line spacing in the output is set entirely by "spacer" text boxes on
+the review screen: one-line-tall, right-column-only editable boxes between
+every adjacent pair of transcript elements, holding literal `\n` *tokens*
+(the two characters `\` and `n`, not real newlines) that the user can
+freely edit. Nothing else in a spacer box has any effect - see
+"Finalize-time parsing" below. Nothing after the review screen changes the
+spacing, so a deliberately large gap is written as is.
 
 ## Slot ordering (`review_item.ReviewItem.slot_roles`)
 
-Four different places used to each independently re-derive "message, then
-ocr0, ocr1, ..." from `item.initial_message_text`/`item.image_paths` - row
-building, height estimation, the keyboard-navigable slot list, and output
-writing. Adding spacer slots meant inserting new roles into that sequence,
-so `ReviewItem.slot_roles` now computes the full ordered list once and every
-one of those four places (`RowBuilder.fill_row`,
-`virtualization.estimate_row_height`, `FocusNavigator.slots` (built in
-`ReviewFrame.__init__`), `review_item.lines_for_item`) just walks it, rather than each
-re-deriving its own copy that could drift out of sync with the others.
+`ReviewItem.slot_roles` is the one place the order of an item's boxes is
+defined. Row building (`RowBuilder.fill_row`), height estimation
+(`virtualization.estimate_row_height`), keyboard navigation
+(`FocusNavigator.slots`, built in `ReviewFrame.__init__`) and output
+writing (`review_item.lines_for_item`) all walk it, so they can't disagree.
 
 For an item with a message and N images, `slot_roles` is: `["message",
 "spacer_msg_img", "ocr0", "spacer_img0", "ocr1", ..., "ocr{N-1}",
 "spacer_end"]` - `"spacer_msg_img"` only appears when the item has both a
 message and at least one image; `"spacer_img{i}"` appears between every pair
-of images (omitted after the last one); `"spacer_end"` (the gap before the
-next message) always appears, even for an item with no images at all. A
-spacer role has no left-column counterpart - row building puts nothing in
-the left column for it, and it's sized to exactly one Tk text line
+of images (not after the last one); `"spacer_end"` (the gap before the next
+message) always appears, even for an item with no images at all. A spacer
+role has no left-column counterpart, and it's exactly one Tk text line tall
 (the height a `height=1` Text widget requests on this display, measured
 once as `TextMetrics.spacer_box_height_px` - see
-`row_building.measure_text_metrics` and
-`SlotBoxes.build_spacer_box`) rather than via
-`RowBuilder.fixed_text_box_height`'s paired-height rule.
+`row_building.measure_text_metrics` and `SlotBoxes.build_spacer_box`)
+rather than following `RowBuilder.fixed_text_box_height`'s paired-height
+rule.
 
-Tab/Shift-Tab visit spacer slots the same as any content slot (per the
-project owner's decision) - `self._slots` already generalizes to any role
-string, so `keyboard_nav.py`'s `FocusNavigator.move_focus` needed no changes at all.
+Tab/Shift-Tab visit spacer slots the same as any content slot.
 
 ## Default newline counts
 
@@ -66,9 +56,9 @@ Die-roll messages are assumed to never have images, so they only ever get a
 `"message"` slot plus a single trailing `"spacer_end"` slot. The token count
 written into a spacer box's default content (`review_item._spacer_default`)
 is always the empty-line count plus one, since the gap also includes the
-newline that terminates the line right before it - see "Finalize-time
-parsing" below for why that one extra newline isn't *also* added by the
-preceding content box.
+newline that ends the line right before it - see "Finalize-time parsing"
+below for why that one extra newline isn't *also* added by the preceding
+content box.
 
 ## Finalize-time parsing (`review_item.lines_for_item`)
 
@@ -87,25 +77,18 @@ preceding content box.
   are written. Any other stray character typed into a spacer box is
   ignored, never written - nothing but backslash/`n` characters has any
   effect there.
-- `pipeline.render_items` doesn't add any fixed padding
-  around an item's chunks (the old unconditional `"\n\n\n\n"` prefix/`"\n\n"`
-  suffix was exactly the behavior spacer slots replace) - each item's own
-  `"spacer_end"` chunk now supplies the entire gap before the next item. The
-  gap before the very first item of a run is already provided by the
+- `pipeline.render_items` adds no padding around an item's chunks: each
+  item's own `"spacer_end"` chunk supplies the entire gap before the next
+  item. The gap before the very first item of a run comes from the
   previous run's trailing `\n\n\n{BREAK_MARKER}\n\n\n` (written by
   `finalize_run`), so no leading padding is needed there either.
 
 ## Session format
 
-`ReviewFrame.collect_edited_texts`/the autosaved `edited_texts` session
-field changed shape from a fixed per-item `(message_text, ocr_texts)` tuple
-to a per-item `{role: text}` dict (covering every role in that item's
-`slot_roles`, content and spacer alike) - the old shape had no way to
-address a spacer slot at all. `_show_review` discarded a saved session in
-the old shape (detected structurally, via a saved per-message edit dict
-containing the literal key `"ocr"`) for a transition period after this
-change shipped; that detection has since been removed now that no
-pre-spacer-slot session is expected to still be on disk.
+`ReviewFrame.collect_edited_texts` and the autosaved session's
+`edited_texts` field hold one `{role: text}` dict per item, covering every
+role in that item's `slot_roles`, content and spacer alike (see
+`session.SavedSession`).
 
 ## Finalized edit persistence
 
@@ -113,7 +96,7 @@ When the user clicks Finalize and the output file has been written,
 `_on_finalize_clicked` saves the changes worked out by
 `session.build_finalized_updates` to `finalized_edits.json` (via
 `state.save_finalized_edits`), keyed by the HTML path and each message's
-Discord `message_id`. On a subsequent fresh run of the same chatlog,
+Discord `message_id`. On a later fresh run of the same chatlog,
 `_show_review` loads these via `state.load_finalized_edits` and passes them
 to `ReviewFrame` as `initial_finalized_texts`.
 
@@ -145,7 +128,7 @@ which is written first and never trimmed.
 **Matching** (`session.match_finalized_edits`): stored `{message_id: {role: text}}`
 data is aligned to the current item list by Discord `message_id` (not by
 position) using the same approach as `session.match_saved_edits` for session
-resume - orphaned message IDs are dropped silently, and roles that no
-longer appear in an item's `slot_roles` (e.g. because the chatlog was
-re-exported with fewer images) are also dropped. All `slot_roles` including
-`spacer_*` are eligible for storage and pre-population.
+resume - message IDs no longer in the transcript are dropped silently, and
+so are roles an item no longer has (e.g. because the chatlog was
+re-exported with fewer images). All `slot_roles`, `spacer_*` included, can
+be stored and pre-populated.

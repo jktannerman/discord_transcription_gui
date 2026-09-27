@@ -1,15 +1,10 @@
-"""User-editable regex find/replace rules for common Tesseract misreads -
-the actual rules live in ``ocr_corrections.txt`` next to this module, not
-in code, so they can be tuned without touching Python. Applied exactly
-once, in ``review_item.build_review_items``, to each image's freshly-joined
-OCR text before it becomes a review item's *initial* OCR-box content - by
-that point in the pipeline there's no such thing yet as "the user's edit",
-so nothing here needs to know or care which boxes a session has touched:
-once a box has a saved edit, ``ReviewItem.initial_ocr_texts`` (this
-module's only output) is never consulted again for it (see
-``slot_boxes.initial_slot_states``) - corrections are seen by the user once, as a normal part of
-that box's starting text, not silently reapplied over their own typing on
-a later run.
+"""User-editable regex find/replace rules for common Tesseract misreads.
+
+The rules live in ``ocr_corrections.txt`` next to this module, so they can
+be tuned without touching Python. They're applied once, in
+``review_item.build_review_items``, to each image's OCR text as it becomes
+that OCR box's default text - never to a user's edit, which replaces the
+default (see ``slot_boxes.initial_slot_states``).
 
 File format (``ocr_corrections.txt``): entries separated by one or more
 blank lines, each:

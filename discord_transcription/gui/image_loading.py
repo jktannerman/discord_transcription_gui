@@ -1,8 +1,8 @@
-"""Lazy load/unload of review-row image previews. Images within the
-virtualized window's materialized rows are decoded only once their row is
-near the visible viewport, and unloaded again once scrolled away - see
-virtual_rows.py's module docstring for why rows themselves are virtualized
-the same way.
+"""Image previews on the review screen: sizing, and lazy loading.
+
+A built row's images are decoded only while the row is near the viewport,
+and unloaded again once it's scrolled away. Their on-screen size is known
+before that from the file header alone (fitted_image_size).
 """
 
 import functools
@@ -16,10 +16,9 @@ from .. import logging_config
 
 logger = logging_config.get_logger(__name__)
 
-# Default width (px) of the review screen's image column - roughly two-thirds
-# of a 1200px-wide review window, per the project owner's request that images
-# be large enough to actually read while transcribing. The user can drag the
-# column divider to change it (see column_divider.py).
+# Default width (px) of the review screen's image column - large enough to
+# read screenshots while transcribing. The column divider changes it (see
+# column_divider.py).
 DEFAULT_IMAGE_COLUMN_WIDTH_PX = 760
 # Tallest an image preview is ever shown, whatever the column width.
 MAX_IMAGE_HEIGHT_PX = 950
@@ -137,17 +136,20 @@ def _natural_size(image_path: str) -> Optional[Tuple[int, int]]:
 
 
 def fitted_image_size(image_path: ImagePath, bounding_box: Tuple[int, int] = THUMBNAIL_SIZE) -> Tuple[int, int]:
-    """The on-screen size review rows actually display image_path at -
-    the same fit_to_box rule load_display_image decodes it with, but
-    reading only the file's header (Image.open() doesn't decode pixel
-    data) so it's cheap enough to call for every row up front, not just
-    once an image is scrolled near.
+    """The size an image is shown at on the review screen.
 
-    Used to size a row's image placeholder/floor to the image's real
-    displayed height instead of the full bounding box - most images here
-    are landscape (wider than tall), so sizing the placeholder to the full
-    box would letterbox them, leaving large empty bands above and below
-    the actual photo."""
+    Uses the same fit_to_box rule as load_display_image, but reads only the
+    file header, so it's cheap enough to size every row's placeholder (and
+    height estimate) before any image is decoded.
+
+    Args:
+        image_path: The image file.
+        bounding_box: The (width, height) to fit within.
+
+    Returns:
+        The fitted (width, height), or `bounding_box` itself if the file
+        can't be read.
+    """
     original_size = _natural_size(str(image_path))
     if original_size is None:
         return bounding_box
@@ -156,11 +158,11 @@ def fitted_image_size(image_path: ImagePath, bounding_box: Tuple[int, int] = THU
 
 
 class ImageSlot:
-    """Tracks one image's load state. Row position/height for the
-    visibility check comes from ReviewFrame's row-height table (keyed by
-    item index), not from this slot, since widget geometry is relative to
-    the repositioned scroll frame block rather than the canvas's coordinate
-    space."""
+    """One built image placeholder and its load state.
+
+    Its position comes from its row's document offset (see
+    ImageLoader.update_visible), not from widget geometry.
+    """
 
     __slots__ = ("image_path", "label", "bounding_box", "loaded", "photo")
 
@@ -175,14 +177,12 @@ class ImageSlot:
 
 
 class ImageLoader:
-    """Owns the set of materialized images and their load state, keyed by
-    (item index, image index within that item) since a row can now have
-    more than one image. ReviewFrame registers a slot per image when a row
-    is built and unregisters every slot for a row (unregister_row) when
-    it's torn down; update_visible() loads/unloads each slot based on its
-    *row's* offset against the (buffered) viewport - the whole row is
-    loaded/unloaded as a unit, not image-by-image, the same as before
-    multiple images per row were possible."""
+    """The built rows' images, keyed by (item index, image index).
+
+    RowBuilder registers each image as its row is built, and the row's
+    images are unregistered when it's torn down. update_visible() loads or
+    unloads a row's images together, by the row's position.
+    """
 
     def __init__(self) -> None:
         self._slots: Dict[Tuple[int, int], ImageSlot] = {}
@@ -211,16 +211,17 @@ class ImageLoader:
         visible_bottom: float,
         log_event: Optional[Callable[..., None]] = None,
     ) -> None:
-        """offset_of(index) and row_heights are the same authoritative
-        layout source ReviewFrame uses for the canvas's scrollregion -
-        absolute coordinates within the full virtual document, not widget-
-        relative geometry.
+        """Load the images of rows overlapping [visible_top, visible_bottom]
+        and unload the rest.
 
-        log_event, if given, is VirtualRows.log_event - routing every
-        load/unload through it (rather than logging directly here) stamps
-        each one with the same seq/scroll-state context as every other
-        scroll-trace event, so an image load can be correlated against the
-        reconcile that triggered it without falling back to timestamps."""
+        Args:
+            offset_of: A row's document offset (VirtualRows.offset_of).
+            row_heights: Every row's height (VirtualRows.heights).
+            visible_top: Top of the range to load, in document coordinates.
+            visible_bottom: Bottom of that range.
+            log_event: VirtualRows.log_event, so loads and unloads appear in
+                the scroll trace alongside the reconcile that caused them.
+        """
         for (idx, image_idx), slot in self._slots.items():
             row_top = offset_of(idx)
             row_bottom = row_top + row_heights[idx]

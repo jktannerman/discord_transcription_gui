@@ -2,14 +2,15 @@
 
 Part of [ARCHITECTURE.md](ARCHITECTURE.md).
 
-317 tests total: 218 run by default, plus 99 marked `gui` (build a real,
-withdrawn Tk window - see the README's "Testing" section) that are skipped
-unless run with `-m gui` or `-m ""`.
+528 tests in all (as of 2026-09-27): 384 run by default, plus 144 marked
+`gui` (they build a real Tk window - see the README's "Testing" section)
+that only run with `-m gui` or `-m ""`. Of the default ones, 11 test
+Windows-only code and are skipped elsewhere. `python -m pytest --co -q
+-m ""` gives the current count.
 
 ## Review screen
 
-The most architecturally involved and historically bug-prone part of the
-app (see [ARCHITECTURE_REVIEW_SCREEN.md](ARCHITECTURE_REVIEW_SCREEN.md) and
+The most architecturally involved and bug-prone part of the app (see [ARCHITECTURE_REVIEW_SCREEN.md](ARCHITECTURE_REVIEW_SCREEN.md) and
 [ARCHITECTURE_ROW_GEOMETRY.md](ARCHITECTURE_ROW_GEOMETRY.md)), so it has the
 deepest coverage:
 
@@ -34,8 +35,7 @@ deepest coverage:
   general heuristic.
 - Selecting and deleting text, then paging that row out and back in, must
   not raise and must land on the correct final text
-  (`app_tests/test_review_view.py`) - the end-to-end shape of
-  `archive/INVESTIGATION_shift_tab_reconcile_lockup.md`.
+  (`app_tests/test_review_view.py`).
 - Two backstops in the virtualization core: rebuilding an already-live box
   (a "should be impossible" double-build) syncs its content into its
   SlotState instead of orphaning it, and one row's build exception doesn't
@@ -43,8 +43,8 @@ deepest coverage:
   on later Tab/Shift-Tab navigation to a row that failed to build.
 - A focused box always scrolling fully into view, not just its row, and a
   far-away Tab/resume target landing fully within the *real* canvas
-  viewport rather than just the document-space model's own idea of where it
-  is (a since-fixed row-height accounting bug could get this wrong).
+  viewport, not just where the row-height model puts it (see
+  [ARCHITECTURE_ROW_GEOMETRY.md](ARCHITECTURE_ROW_GEOMETRY.md)).
 - Each OCR box's checkbox (see "Per-OCR-box edited/checkbox state" in
   [ARCHITECTURE_REVIEW_SCREEN.md](ARCHITECTURE_REVIEW_SCREEN.md)): starting
   checked/unchecked correctly for an untouched vs. a
@@ -55,8 +55,8 @@ deepest coverage:
   cached, both the checkbox state and both text versions surviving a row
   being paged out and back in, and Ctrl+Z re-deriving the right checked
   state after undoing a toggle.
-- The editable text box height rule (`RowBuilder.fixed_text_box_height`'s capping
-  logic).
+- The editable text box height rule (`RowBuilder.fixed_text_box_height`
+  and its cap, `test_row_building.py`).
 - Spellcheck tagging (`test_spellcheck.py`, pure logic - flagged/not-flagged
   words, short-word and ALL-CAPS skipping, whitelist loading/caching - plus
   `test_review_view.py`'s GUI tests for the real `tk.Text` tag behavior: a
@@ -88,14 +88,13 @@ deepest coverage:
   Explorer window, or touching the real clipboard);
   `_default_browser_command`'s two-step registry lookup (mocked
   `winreg.OpenKey`/`QueryValueEx`) succeeding, and returning `None` when
-  either step fails (an unset `UserChoice`, or a `ProgId` left over from a
-  since-uninstalled browser); scrolling (mousewheel, Page Up/Down, the
+  either step fails (an unset `UserChoice`, or a `ProgId` left by an
+  uninstalled browser); scrolling (mousewheel, Page Up/Down, the
   scrollbar) freezing while the menu is open and unfreezing once it closes.
-  The real `tk.Menu.tk_popup()` call is never made in any of these - see
-  [ARCHITECTURE_REVIEW_SCREEN.md](ARCHITECTURE_REVIEW_SCREEN.md)'s "A popup
-  `tk.Menu`'s close can't be detected via `<Unmap>` on Windows" for why it
-  blocks until a person dismisses it, which hangs an unattended
-  test - `tk_popup` is mocked out instead, so these test what
+  The real `tk.Menu.tk_popup()` call is never made in any of these: on
+  Windows it blocks until a person dismisses the menu (see
+  [ARCHITECTURE_REVIEW_SCREEN.md](ARCHITECTURE_REVIEW_SCREEN.md)'s "Image
+  context menu"), so it's mocked, and these test what
   `ImageContextMenu.show` itself controls (state before/after the call)
   rather than the real OS-level popup/dismissal. The tests of Windows-only
   code (the real `winreg` lookup, Explorer's `/select`, the Win32
@@ -110,8 +109,9 @@ deepest coverage:
   selection; plus the Linux branch of each menu action
   (`test_image_context_menu.py`, marked `not_windows`).
 - Ctrl+Z/Ctrl+Shift+Z dispatch depending on Shift, not Caps Lock
-  (`test_keyboard_nav.py`), and EXIF-rotated images being sized and
-  decoded the right way up (`test_image_loading.py`).
+  (`test_keyboard_nav.py`), EXIF-rotated images being sized and decoded the
+  right way up (`test_image_loading.py`), and Ctrl+A selecting all in every
+  kind of text field (`test_select_all.py`).
 
 ## Session resume
 
@@ -126,6 +126,9 @@ deepest coverage:
   messages being dropped, a saved message's per-image OCR edits being
   aligned back onto its current images by position, and a stale focus slot
   falling back to no restore.
+- Autosave rescheduling after a failed save, warning once per run of
+  failures, and the close prompt after a failed final save
+  (`test_main_window_autosave.py`).
 - `App._on_start`'s validation branches (missing fields, an invalid start
   date, an empty approved-users list) and its pending-session resume
   prompt, including `_resume_session` always forcing `use_cache=True`
@@ -176,7 +179,8 @@ deepest coverage:
 
 ## Persistence
 
-- JSON state persistence - run dates, OCR cache (including reading the
+- JSON state persistence - run dates per chatlog (including converting the
+  older shared list), OCR cache (including reading the
   version 1 format), the `format_version` wrapper on every other state file
   (and reading files written before it), path-key normalisation (the same
   chatlog/folder reached through different spellings or a symlink, and
@@ -186,19 +190,20 @@ deepest coverage:
   global slot, and recent-path history.
 - The atomic-write-plus-backup-rotation/recovery behavior of every state
   file (`discord_transcription/state.py`).
-- The JSON log formatter.
-- Start-date validation.
+- The JSON log formatter, and uncaught Tk callback exceptions reaching the
+  log (`test_main.py`).
+- Start-date and approved-users parsing (`test_pipeline.py`).
 
 ## What's not covered
 
 - No automated test drives real Tk button *clicks* - only direct method
   calls standing in for them - or a live Tesseract install.
-- Nothing checks for repaints of the review screen mid-reconcile (the
-  cause of the scroll-down flicker); the trace log doesn't record paints,
-  so that fix was verified by hand.
-- `setup_view.py`'s widget wiring is still only covered by manual
-  smoke-testing, apart from the "Known users → Add" newline handling
-  (`test_setup_view.py`): window construction, the review screen with synthetic
-  text-only/image-only/image-with-caption/multiple-images-on-one-message
-  items, an edit-then-finalize pass against a temp output file, and a
-  resumed session's saved edits/focus restoring correctly.
+- Nothing checks for repaints of the review screen mid-reconcile (see
+  "Nothing may repaint while the built block is out of place" in
+  [ARCHITECTURE_REVIEW_SCREEN.md](ARCHITECTURE_REVIEW_SCREEN.md)); the
+  trace log doesn't record paints, so this was verified by hand.
+- `setup_view.py` is tested only for the "Known users" Add newline handling
+  and the start date following the chosen chatlog (`test_setup_view.py`).
+  The rest of its widget wiring, and the end-to-end flow (setup, OCR,
+  review, an edit, Finalize against a real output file, and resuming), are
+  smoke-tested by hand.

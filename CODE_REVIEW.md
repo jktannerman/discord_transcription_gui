@@ -151,7 +151,7 @@ State at the time of the review: the default test suite passed (335 passed,
   key) on every autosave to find legacy un-normalised keys. A one-time
   migration at startup would let that code go. Reader validation is also
   inconsistent (`read_last_run_date`/`load_recent_paths` trust the shape).
-- [ ] **C5. Comments and docstrings are mostly history** (earlier E6).
+- [x] **C5. Comments and docstrings are mostly history** (earlier E6) - fixed: history and bug narratives trimmed from source docstrings/comments (now ~2,100 docstring + ~400 comment lines against ~4,000 code lines, from ~2,230 + ~500), `ARCHITECTURE_REVIEW_SCREEN.md` rewritten as a description of the current design, and the other topic docs trimmed the same way. Test docstrings weren't touched.
   ~2,300 docstring + ~700 comment lines against ~3,700 code lines;
   `review_view.py` has more doc than code; 24 "used to / previously /
   replaced an earlier design" passages. `ARCHITECTURE_REVIEW_SCREEN.md`
@@ -161,27 +161,29 @@ State at the time of the review: the default test suite passed (335 passed,
 
 ## D. Docs vs code
 
-- [ ] **D1.** README "The `gui` marker": says `test_main_window_ocr_error.py`
+- [x] **D1.** (fixed) README "The `gui` marker": says `test_main_window_ocr_error.py`
   is `gui` in full (only 1 test is), omits `test_setup_view.py` and
   `test_select_all.py` (fully `gui`) and 3 tests in
   `test_image_context_menu.py`.
-- [ ] **D2.** `ARCHITECTURE_TESTING.md`: "317 tests (218 default, 99 gui)";
+- [x] **D2.** (fixed; now 528 / 384 / 144) `ARCHITECTURE_TESTING.md`: "317 tests (218 default, 99 gui)";
   actually 489 / 346 / 143.
 - [x] **D3.** (fixed with B1) `ARCHITECTURE_REVIEW_SCREEN.md` (spellcheck section) names
   `_whitelist_loaded`/`_blacklist_loaded`, which no longer exist (now the
   mtime-keyed `_wordlists` cache).
-- [ ] **D4.** `ARCHITECTURE_LOGGING.md`, `config.py` and
+- [x] **D4.** (fixed) `ARCHITECTURE_LOGGING.md`, `config.py` and
   `logging_config.get_trace_logger` mention "box-resize" events, removed
   with fixed-height boxes.
-- [ ] **D5.** `virtualization.wrapped_line_count`'s docstring cites text-box
+- [x] **D5.** (fixed) `virtualization.wrapped_line_count`'s docstring cites text-box
   auto-sizing that no longer exists; an orphan comment block in the same
   file and `layout_constants.py` still point at `review_view.py` for code
   now in `row_building.py`.
-- [ ] **D6.** README project layout lists `original_transcription_program/`
+- [x] **D6.** README project layout lists `original_transcription_program/`
   "kept as reference", but it's gitignored, so a checkout lacks it.
   `sketch_improvement_ideas.txt` is gitignored but tracked (the rule has no
-  effect).
-- [ ] **D7.** README says previously typed users are remembered; the list is
+  effect). Fixed: the original program is no longer relevant, so the README
+  no longer mentions it; the ideas file is untracked (`git rm --cached`,
+  still on disk).
+- [x] **D7.** (fixed) README says previously typed users are remembered; the list is
   capped at `MAX_RECENT_PATHS` (8). It never says the run-end date is the
   chatlog file's modification time.
 
@@ -214,6 +216,6 @@ State at the time of the review: the default test suite passed (335 passed,
 1. ~~A1 + A2~~ (done).
 2. ~~A3 and A6~~ (done).
 3. ~~A7~~ (done); A4 deferred.
-4. Section D (A5 deferred).
-5. Longer jobs: C5 (trim history from comments), E1 (CI, ruff, a type
-   checker). ~~B1~~ and ~~B2~~ done.
+4. ~~Section D~~ (done; A5 deferred).
+5. Longer jobs: ~~C5~~ (done), E1 (CI, ruff, a type checker). ~~B1~~ and
+   ~~B2~~ done.

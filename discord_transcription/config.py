@@ -1,18 +1,8 @@
 """Configuration constants for the GUI transcription tool.
 
-These mirror the hardcoded values in the original
-``discord_tesseract_transcription_v3.py`` script. File paths stay as plain
-constants for now (not exposed in the GUI) per the agreed v1 scope; they are
-isolated here so a future settings screen only needs to change this one
-module. The approved-author allow-list is no longer one of these constants -
-it's entered and cached from the setup screen instead (see
-state.read_approved_users_state/save_approved_users_state).
-DEFAULT_APPROVED_USERS below is its fallback for a genuinely first-ever
-run, before anything has been cached yet - empty by default, since this is
-shared, version-controlled code and shouldn't ship with anyone's real
-Discord user IDs baked in; the project owner can fill in their own
-go-to IDs (e.g. the GM and the dice-roller bot) locally if they want the
-approved-users box pre-filled on a fresh install.
+Not exposed in the GUI yet; kept in this one module so a future settings
+screen only needs to change it. The approved-users list is entered on the
+setup screen instead (see state.read_approved_users_state).
 """
 
 import re
@@ -33,32 +23,25 @@ TESSERACT_CMD = (
 # crashing mid-batch loses at most this many images' worth of OCR.
 OCR_CACHE_SAVE_EVERY = 10
 
+# Pre-fills the approved-users box on a first run, before any list has been
+# saved. Empty so no real Discord IDs are committed; fill in locally if wanted.
 DEFAULT_APPROVED_USERS: tuple[str, ...] = tuple()
 
 BREAK_MARKER = "[BREAK]"
 
 # User-editable regex find/replace rules for common OCR misreads (see
-# ocr_corrections.py) - kept next to the source rather than in
-# APP_DATA_DIR, since it's app config the project owner seeds and tunes
-# over time (and is sensible to keep under version control), not per-user
-# runtime state.
+# ocr_corrections.py). Kept next to the source, under version control,
+# rather than in APP_DATA_DIR, as are the two spellcheck word lists below.
 OCR_CORRECTIONS_FILE = Path(__file__).resolve().parent / "ocr_corrections.txt"
 
-# User-editable list of words the review screen's spellcheck (see
-# spellcheck.py) should never flag - one word per line, blank lines and
-# lines starting with "#" ignored - for Discord usernames/slang/jargon that
-# would otherwise be (mis)flagged on every box that contains them. Kept next
-# to the source for the same reason OCR_CORRECTIONS_FILE is.
+# Words the review screen's spellcheck (see spellcheck.py) never flags, for
+# Discord usernames and slang: one word per line, blank lines and lines
+# starting with "#" ignored.
 SPELLCHECK_WHITELIST_FILE = Path(__file__).resolve().parent / "spellcheck_whitelist.txt"
 
-# User-editable list of words the review screen's spellcheck should always
-# flag - one word per line, same file format as SPELLCHECK_WHITELIST_FILE -
-# for words the dictionary treats as real (so they'd never be flagged
-# otherwise) but that are usually OCR misreads/typos in this transcript
-# context (e.g. a common word that's frequently confused with a
-# similar-looking Discord username). Kept next to the source for the same
-# reason OCR_CORRECTIONS_FILE is. If a word appears in both files, the
-# whitelist wins - it stays unflagged.
+# Words the spellcheck always flags, although the dictionary knows them,
+# because here they're usually OCR misreads or typos. Same format as the
+# whitelist; a word in both files is not flagged.
 SPELLCHECK_BLACKLIST_FILE = Path(__file__).resolve().parent / "spellcheck_blacklist.txt"
 
 APP_DATA_DIR = Path.home() / ".discord_transcription_gui"
@@ -66,32 +49,24 @@ APP_DATA_DIR = Path.home() / ".discord_transcription_gui"
 # oldest first; the last one pre-fills that chatlog's next start date.
 RUN_DATE_FILE = APP_DATA_DIR / "run_dates.json"
 # {"version": 2, "folders": {image_folder: {image_name: entry}}} - see
-# state.load_cache for the entry shape. One entry per image folder, kept
-# indefinitely so OCR'ing one chatlog's images never evicts another
-# chatlog's already-OCR'd cache.
+# state.load_cache for the entry shape. Kept indefinitely for every image
+# folder.
 OCR_CACHE_FILE = APP_DATA_DIR / "ocr_cache.json"
 RECENT_PATHS_FILE = APP_DATA_DIR / "recent_paths.json"
 APPROVED_USERS_STATE_FILE = APP_DATA_DIR / "approved_users.json"
 # {html_path: session_dict} - one in-progress review session per chatlog,
-# kept indefinitely until that specific chatlog's run is finalized, so two
-# different chatlogs can each be partially transcribed and resumed
-# independently of one another.
+# kept until that chatlog's run is finalized.
 SESSIONS_FILE = APP_DATA_DIR / "sessions.json"
 # {html_path: [session_dict, ...]} - up to SESSION_BACKUP_COUNT end-of-
 # session snapshots per chatlog, most-recent-first (see
-# state.archive_session_backup). Separate from SESSIONS_FILE's own
-# write-time .bak (which only ever holds the single immediately-previous
-# write and is itself overwritten by the very next autosave tick) - this
-# file instead preserves whatever a session actually looked like the last
-# few times it stopped being the live, in-progress one.
+# state.archive_session_backup). SESSIONS_FILE's own .bak holds only the
+# previous autosave, so it can't do this.
 SESSION_BACKUPS_FILE = APP_DATA_DIR / "session_backups.json"
 SESSION_BACKUP_COUNT = 3
 # {html_path: {message_id: {role: text}}} - user-edited transcriptions written
-# at Finalize, kept indefinitely per message (keyed by Discord message_id so
-# they survive a re-export with new messages inserted anywhere). Only non-None
-# role values are stored; spacer edits and content edits are both included.
-# Merged on each Finalize (never deleted) so unchecked/untouched boxes at
-# finalize time leave prior stored edits intact.
+# at Finalize, spacer boxes included, and merged into on each later Finalize
+# (see session.build_finalized_updates). Keyed by Discord message_id so they
+# survive a re-export with messages inserted anywhere.
 FINALIZED_EDITS_FILE = APP_DATA_DIR / "finalized_edits.json"
 # [{html_path, message_id, role, old_text, new_text, replaced_at}, ...] -
 # append-only record of every stored finalized edit that a later Finalize
@@ -103,15 +78,12 @@ FINALIZED_EDITS_HISTORY_FILE = APP_DATA_DIR / "finalized_edits_history.json"
 # gui/column_divider.py).
 IMAGE_COLUMN_WIDTHS_FILE = APP_DATA_DIR / "image_column_widths.json"
 LOG_FILE = APP_DATA_DIR / "app.log"
-# Separate, much higher-frequency stream for the review screen's per-scroll-
-# tick tracing (reconcile/debounce/remeasure/image-load events) - kept out of
-# LOG_FILE so lifecycle events (session save/load, OCR batch, errors) stay
-# readable on their own, and so this stream can rotate independently without
-# evicting those - see logging_config.setup_logging.
+# The review screen's high-frequency scroll and text-box tracing, kept out
+# of LOG_FILE so it can't crowd out or rotate away the lifecycle events
+# there - see logging_config.setup_logging.
 SCROLL_TRACE_LOG_FILE = APP_DATA_DIR / "scroll_trace.log"
-# Rotation budget for SCROLL_TRACE_LOG_FILE (10MB x 3 backups, about 40MB
-# in all - several busy review sessions), and a switch to turn it off
-# entirely.
+# Rotation budget for SCROLL_TRACE_LOG_FILE (10MB x 3 backups), and a
+# switch to turn it off.
 SCROLL_TRACE_ENABLED = True
 SCROLL_TRACE_MAX_BYTES = 10_000_000
 SCROLL_TRACE_BACKUP_COUNT = 3
@@ -136,17 +108,14 @@ MAX_RECENT_PATHS = 8
 AUTOSAVE_INTERVAL_MS = 5000
 
 # A message matching this is a die-roll command (e.g. "%roll 2d6",
-# "%draw 1 20") - its result is assumed to be the very next approved
-# message, so spacer defaults treat the pair as one continuous block
-# rather than separating them like a normal message - see
-# review_item.build_review_items and docs/ARCHITECTURE_SPACER_SLOTS.md.
+# "%draw 1 20"). Its result is taken to be the next approved message, and
+# the spacer defaults keep the pair together - see
+# docs/ARCHITECTURE_SPACER_SLOTS.md.
 DICE_COMMAND_RE = re.compile(r"^%roll \d*(d|l|h)\d+|^%draw \d+ \d+")
 
-# Default blank-line counts a spacer slot is pre-filled with (see
-# docs/ARCHITECTURE_SPACER_SLOTS.md for the full table this
-# implements) - the literal "\n" token count written into a spacer box is
-# always one more than the empty-line count, since the gap also includes
-# the newline that terminates the line right before it.
+# Default empty-line counts for spacer boxes (see
+# docs/ARCHITECTURE_SPACER_SLOTS.md). A spacer box holds one more "\n"
+# token than this, for the newline ending the line before the gap.
 EMPTY_LINES_NORMAL = 3
 EMPTY_LINES_TEXT_TO_IMAGE = 1
 EMPTY_LINES_BETWEEN_IMAGES = 2

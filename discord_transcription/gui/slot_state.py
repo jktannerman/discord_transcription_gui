@@ -3,9 +3,9 @@
 One SlotState exists for every editable box in the transcript, keyed by
 (item_index, role) like everything else on the review screen, from the
 moment the screen is built - whether or not that box's row has ever been
-materialized as widgets. It is the source of truth for the box's text:
-widgets come and go as rows scroll in and out of range (see review_view.py),
-and a rebuilt box is simply filled from here.
+built as widgets. It is the source of truth for the box's text: widgets come
+and go as rows scroll in and out of range (see virtual_rows.py), and a
+rebuilt box is simply filled from here.
 
 No Tk here, so this is unit-testable without a display.
 """
@@ -39,8 +39,8 @@ class SlotState:
         touched: Whether the user deliberately acted on this box this
             session (edited it, undid/redid in it, or clicked its OCR
             checkbox). Finalize only removes a stored finalized edit for a
-            touched box, so a box that merely *looks* reverted - e.g. from
-            a logic bug - keeps its stored edit. Saved with the session.
+            touched box, so a box reverted by a bug rather than by the user
+            keeps its stored edit. Saved with the session.
     """
 
     default: str

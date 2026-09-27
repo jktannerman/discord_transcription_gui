@@ -1,22 +1,17 @@
 # Discord Transcription GUI Tool
 
-A Tkinter rewrite of the CLI transcription script in
-`original_transcription_program/`. It turns a DiscordChatExporter HTML
-export + media folder into a corrected plain-text transcript, OCR'ing
-attached images with Tesseract and letting you fix mistakes with real GUI
-widgets instead of memorizing terminal text codes.
+A Tkinter app that turns a DiscordChatExporter HTML export + media folder
+into a corrected plain-text transcript, OCR'ing attached images with
+Tesseract and letting you check and fix every message before it's written.
 
-See `docs/original_transcription_notes.md` for the full analysis of the
-original script this was rebuilt from, including the design decisions and
-improvement scope agreed on for this rewrite. See `docs/ARCHITECTURE.md` and
-the topic docs it links to for the review screen's internals (the most
-architecturally involved part of the app), spacer/geometry design, test
-coverage, and logging conventions - this README sticks to what it does and
-how to run it.
+See `docs/ARCHITECTURE.md` and the topic docs it links to for the review
+screen's internals (the most architecturally involved part of the app),
+spacer/geometry design, test coverage, and logging conventions - this
+README sticks to what it does and how to run it.
 
 ## Status
 
-v1 is implemented, unit-tested, and has now been exercised end-to-end
+v1 is implemented, unit-tested, and has been exercised end-to-end
 against a real Discord export (OCR pass, review screen, finalize).
 
 What's in scope for v1:
@@ -36,7 +31,7 @@ What's in scope for v1:
 
 1. **Setup screen** — pick the chatlog HTML file, the exported image folder,
    and the output `.txt` file, each a combo box pre-filled with the most
-   recently used value and offering your last several picks as a dropdown
+   recently used value and offering your last 8 picks as a dropdown
    (cached to disk per field, most-recent-first). The start date field is
    pre-filled with the chosen chatlog's last run-end date (the chatlog
    file's modification time when that run was finalized), updating as you
@@ -49,9 +44,10 @@ What's in scope for v1:
    Discord users' messages get kept, one per line in the form
    `123456789012345678 - Alice`. Only the leading digits (the actual
    Discord user ID) are used for filtering; the rest is just a
-   human-readable label. It's pre-filled with whatever was used last run; individual entries you've typed before are also
-   remembered and can be re-added via the "Known users" dropdown next to it
-   without retyping the ID. A "Transcribe messages from all users" checkbox
+   human-readable label. It's pre-filled with whatever was used last run.
+   The 8 most recently used entries are also remembered individually and
+   can be re-added via the "Known users" dropdown next to it without
+   retyping the ID. A "Transcribe messages from all users" checkbox
    bypasses the filter entirely (and greys out the users box, since it's
    moot while checked). The window launches maximized.
 
@@ -194,12 +190,10 @@ What's in scope for v1:
    roughly half a second, about the same as jumping far through the
    transcript with the scrollbar.
 
-   The immutable original-text label uses
-   the same font/size as the editable boxes (it used to be smaller, before
-   every message got an editable copy of its own text) — its background is
-   left at the plain default, matching the image column's own background,
-   so it still reads as visually distinct from the editable copy beside
-   it. Each editable text box's height is fixed up front rather than
+   The immutable original-text label uses the same font/size as the
+   editable boxes, but its background is left at the plain default,
+   matching the image column's own background, so it reads as visually
+   distinct from the editable copy beside it. Each editable text box's height is fixed up front rather than
    resized to fit its content as you type: it matches its paired immutable
    element's own on-screen height — the label's, for the "message" box (a
    copy of the message's own text), or that image's, for one of the "ocr"
@@ -268,7 +262,7 @@ What's in scope for v1:
    open, so re-checking can bring it back within a session, but it isn't
    saved - after closing and resuming, that box is just the OCR text.
    Tab/Shift-Tab never land on the checkbox itself - only on the
-   text boxes, same as before this existed.
+   text boxes.
 
    When a box is pre-populated from a previously-finalized edit (see
    "Setup screen" above), its checkbox starts **checked** if that finalized
@@ -304,9 +298,9 @@ What's in scope for v1:
    **spacer box**: a one-line-tall, editable box holding nothing but
    literal `\n` characters (typed as backslash-n, not real line breaks),
    pre-filled with a default count that you can freely add to, remove
-   from, or otherwise edit. Anything else typed into one is ignored. This replaces the original
-   script's fixed regex-based spacing, which couldn't express anything
-   finer than its own hardcoded rules. See `docs/ARCHITECTURE_SPACER_SLOTS.md`
+   from, or otherwise edit. Anything else typed into one is ignored.
+   Nothing later adjusts the spacing, so the output has exactly the gaps
+   you leave. See `docs/ARCHITECTURE_SPACER_SLOTS.md`
    for the full default-spacing table and exactly how a spacer's content is
    parsed at Finalize.
 
@@ -345,12 +339,10 @@ What's in scope for v1:
    memory: the existing file, plus every message's final lines (edited
    text if you changed it, original OCR/message text otherwise, with each
    spacer box's blank-line count written out as real newlines in between),
-   run through the remaining post-run cleanup (leftover literal `\n`s and
-   trailing `[BREAK]` markers - blank-line spacing is no longer touched
-   here, since spacer boxes already wrote exactly what you left in them;
-   common OCR misreads are now fixed earlier, before you ever see the
-   text; see "OCR corrections" below), plus a fresh `[BREAK]` marker as a
-   bookmark for the next run. The previous version of the output file is
+   run through a small cleanup (removing leftover literal `\n`s and
+   trailing `[BREAK]` markers; common OCR misreads were already fixed
+   before you saw the text - see "OCR corrections" below), plus a fresh
+   `[BREAK]` marker as a bookmark for the next run. The previous version of the output file is
    first copied to `<output name>.bak` beside it (e.g. `transcript.txt.bak`),
    then the new output is written in one atomic replace, so a failure never
    leaves it half-written. Only this run's new text is cleaned up; text
@@ -495,9 +487,8 @@ gui_transcription/
       theme.py             # dark theme colors/fonts + ttk Style setup
   app_tests/              # pytest unit tests for all the non-GUI logic
   pyproject.toml          # dependencies (the only list of them), entry point, pytest/ruff config
-  original_transcription_program/   # the original CLI script, kept as reference
   docs/
-    original_transcription_notes.md   # analysis + decisions behind this rewrite
+    original_transcription_notes.md   # design decisions behind the app's first version
     ARCHITECTURE.md         # architecture doc index + general testing heuristic
     ARCHITECTURE_REVIEW_SCREEN.md   # review screen internals (most involved part of the app)
     ARCHITECTURE_ROW_GEOMETRY.md    # document-space row spacing/offset accounting
@@ -613,30 +604,30 @@ python -m pytest -v
 
 The tests for the Windows-only image context-menu actions in
 `test_image_context_menu.py` (which exercise `winreg`, `win32clipboard`,
-and Explorer directly) are skipped on other platforms. One test in
-`test_chatlog.py` reads a private sample export from `example_inputs/`,
-which is gitignored, so it fails on any checkout that doesn't have that
-file.
+and Explorer directly) are skipped on other platforms. The tests in
+`test_chatlog.py` that read a private sample export from `example_inputs/`
+(gitignored) are skipped on a checkout without that file.
 
 ### The `gui` marker
 
-Some tests build a real (if withdrawn) Tk window - `test_review_view.py`,
-`test_main_window_ocr_error.py`, and `test_main_window_on_start.py` in
-full, plus three tests in `test_image_loading.py`. Even a withdrawn window
-can briefly flash on screen, most noticeably on the very first `Tk()` call
-in a process (which also runs Tcl/Tk's one-time subsystem init), so these
-are marked `gui` in `pyproject.toml` and excluded by default:
+Some tests build a real (if withdrawn) Tk window: all of
+`test_review_view.py`, `test_main_window_on_start.py`,
+`test_select_all.py` and `test_setup_view.py`, plus the `TestOnOcrDone`
+tests in `test_main_window_ocr_error.py` and three tests each in
+`test_image_loading.py` and `test_image_context_menu.py` - 144 tests in
+all. Even a withdrawn window can briefly flash on screen, most noticeably
+on the very first `Tk()` call in a process (which also runs Tcl/Tk's
+one-time subsystem init), so these are marked `gui` (declared in
+`pyproject.toml`) and excluded by default.
 
 `test_review_view.py` can't withdraw its window at all (see the module
-docstring on its `root` fixture) - its ~80 tests (counting parametrized
-cases) need real pixel geometry
-to verify actual row layout, and a withdrawn/never-mapped window never
-gets that. That file's `root` fixture is module-scoped and reused across
-all of its tests rather than opened and closed per test, which is what
-keeps running it from being a rapid-fire flash of ~80 separate windows;
-each test still tears its own widgets down afterward (an autouse fixture)
-so state can't leak between tests the way it would if the shared root were
-never cleaned up.
+docstring on its `root` fixture) - its ~100 tests (counting parametrized
+cases) need real pixel geometry to verify actual row layout, and a
+withdrawn/never-mapped window never gets that. That file's `root` fixture
+is module-scoped and reused across all of its tests rather than opened and
+closed per test, so running it doesn't flash ~100 separate windows; each
+test still tears its own widgets down afterward (an autouse fixture) so
+state can't leak between tests.
 
 ```bash
 # Just the GUI tests
@@ -672,8 +663,6 @@ gets the most detailed treatment there.
   worth of review edits (5 seconds, `AUTOSAVE_INTERVAL_MS`) if it happens
   between two autosaves, since the .bak only protects the *previous*
   successful write, not the in-memory edits since then (low priority).
-- Each "ocr" box now has a checkbox for resetting it back to its original
-  OCR transcription without losing the edit (see the "Review screen"
-  section above) - but a "message" box (a copy of the message's own
-  original text, never OCR'd) still has no equivalent reset-to-original UI
-  (deferred, not an immediate priority, per the original feature request).
+- A "message" box (a copy of the message's own original text, never
+  OCR'd) has no reset-to-original control like an "ocr" box's checkbox
+  (deferred, not an immediate priority).

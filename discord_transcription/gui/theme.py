@@ -48,21 +48,17 @@ def dark_text_kwargs(font_size: int = TEXT_FONT_SIZE) -> dict:
 def enable_dark_title_bar(window: tk.Tk) -> None:
     """Enable the dark window title bar on Windows 10/11. No-op elsewhere.
 
-    DWM only repaints the non-client area (the title bar) lazily - setting
-    the attribute alone leaves the title bar light until the next resize,
-    which is what made it look like the dark theme "kicked in on resize".
-    The SetWindowPos SWP_FRAMECHANGED call below forces that repaint
-    immediately, without actually changing the window's size or position.
+    DWM repaints the title bar lazily, so setting the attribute alone
+    leaves it light until the next resize; the SetWindowPos
+    SWP_FRAMECHANGED call forces the repaint without moving or resizing the
+    window.
 
-    Must be called while the window is still withdrawn (see the
-    withdraw()/deiconify() pair in App.__init__) - i.e. before the window has
-    ever actually been shown on screen. Forcing a repaint *after* the
-    window's first real paint (whether synchronously during construction, or
-    deferred via root.after() to run once mainloop() starts - both were
-    tried) was unreliable, since the window can already have been mapped by
-    Tk before either point. Setting the attribute while still withdrawn and
-    only then showing the window means DWM picks up the dark theme on the
-    window's actual first paint, avoiding the race entirely.
+    Call it while the window is still withdrawn (see App.__init__), so the
+    first paint is already dark. Once the window has been shown, forcing a
+    repaint isn't reliable.
+
+    Args:
+        window: The root window.
     """
     if sys.platform != "win32":
         return

@@ -1,21 +1,12 @@
 """Basic English spellcheck for the review screen's editable text boxes.
 
-Flags a word as potentially misspelled by looking it up in a standard
-English frequency dictionary (the `pyspellchecker` package), with a small
-user-editable whitelist sidecar file (`spellcheck_whitelist.txt`, next to
-this module) for Discord usernames/slang/jargon that would otherwise be
-flagged every time they appear, and a complementary blacklist sidecar file
-(`spellcheck_blacklist.txt`) for words the dictionary treats as real but
-that are usually OCR misreads/typos in this transcript's context - a word
-in both files is treated as whitelisted (never flagged). This is
-deliberately basic - a dictionary lookup, not a real language model - since
-the goal is to catch obvious OCR noise (garbled words), not to be a
-correctness oracle for informal chat text.
-
-Never applied to spacer boxes - callers control that by simply never
-calling into this module for them (see
-SlotBoxes.build_spacer_box, which has no call
-into this module at all).
+A word is flagged if the English dictionary (the `pyspellchecker` package)
+doesn't know it, or if it's in the user-editable blacklist
+(`spellcheck_blacklist.txt`, for real words that are usually OCR misreads
+here) - unless it's in the whitelist (`spellcheck_whitelist.txt`, for
+Discord usernames and slang), which wins over both. It's meant to catch
+obvious OCR noise, not to judge informal chat text. Spacer boxes are never
+checked (SlotBoxes.build_spacer_box doesn't call into this module).
 """
 
 import re

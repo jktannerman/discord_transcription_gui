@@ -49,6 +49,8 @@ logger = logging_config.get_logger(__name__)
 
 
 class ReviewFrame(ttk.Frame):
+    """The review screen (see the module docstring)."""
+
     def __init__(
         self,
         master: tk.Widget,

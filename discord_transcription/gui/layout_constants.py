@@ -1,11 +1,8 @@
-"""Shared row-layout constants for the review screen.
+"""Row-layout constants for the review screen.
 
-Kept in one Tk-free module so both review_view.py (the real layout) and
-virtualization.py (the pre-build height estimate) read the same values
-instead of each hardcoding its own copy that has to be kept in sync by
-hand - a stale copy in one of them is exactly what previously made
-estimate_row_height diverge from the real built layout, surfacing as a
-scroll jump once VirtualRows._remeasure_built_rows corrected it away.
+Shared by the real layout (row_building.py, virtual_rows.py) and the
+pre-build height estimate (virtualization.py), so the two can't use
+different values. Tk-free, like virtualization.py.
 """
 
 # Extra headroom (px) added to an editable text box's height on top of its
@@ -29,16 +26,10 @@ ROW_FRAME_BORDERWIDTH_PX = 1
 ROW_FRAME_OVERHEAD_PX = ROW_FRAME_PADDING_PX * 2 + 2
 
 # Vertical gap (px) pack() leaves *outside* a row's own Frame, above and
-# below it (VirtualRows.build_row's pack(pady=...)) -
-# distinct from ROW_FRAME_OVERHEAD_PX, which is chrome *inside* the row's own
-# bounding box and so already included in its winfo_height(). This gap is
-# real on-screen vertical space a row consumes that winfo_height() can't see
-# at all, on either side - omitting it from a row's recorded height (in both
-# estimate_row_height and VirtualRows._remeasure_built_rows) was what let the
-# document-space model (VirtualRows.heights, VirtualRows.offset_of) drift away from
-# the real screen position by 2*ROW_PACK_PADY_PX for every row scrolled past,
-# silently breaking keyboard_nav.py's scroll-into-view math the more boxes a
-# Tab/Shift-Tab session crossed.
+# below it (VirtualRows.build_row's pack(pady=...)). Unlike
+# ROW_FRAME_OVERHEAD_PX, winfo_height() doesn't include it, so every row
+# height and offset calculation has to add it by hand - see
+# docs/ARCHITECTURE_ROW_GEOMETRY.md.
 ROW_PACK_PADY_PX = 4
 
 # Horizontal gap (px) pack() leaves outside a row's own Frame, on its left

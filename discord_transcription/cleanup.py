@@ -1,6 +1,4 @@
-"""Post-run regex cleanup pass, originally extracted unchanged from the
-original script - now trimmed down to the parts spacer slots and
-ocr_corrections.py didn't replace (see clean_transcript)."""
+"""The structural cleanup applied to a run's text at Finalize."""
 
 import re
 
@@ -12,14 +10,12 @@ logger = logging_config.get_logger(__name__)
 def clean_transcript(existing: str, added: str) -> str:
     """Join this run's text onto the existing output, cleaned up.
 
-    Blank-line spacing is owned entirely by the review screen's spacer
-    slots (see review_item.ReviewItem.slot_roles and
-    docs/ARCHITECTURE_SPACER_SLOTS.md), and OCR-misread fixes by
-    ocr_corrections.py, so all that's left here is structural: stray
-    literal "\n" sequences are removed from this run's text only - past
-    runs' finalized text is never rewritten - and trailing BREAK markers
-    are trimmed from the end of the combined result, so an empty run
-    doesn't leave a second, empty bookmark.
+    Stray literal "\n" sequences are removed from this run's text only
+    (past runs' text is never rewritten), and trailing BREAK markers are
+    trimmed from the end of the result, so an empty run doesn't leave a
+    second, empty bookmark. Blank-line spacing is set by the spacer boxes
+    (docs/ARCHITECTURE_SPACER_SLOTS.md), and OCR misreads are fixed earlier
+    by ocr_corrections.py.
 
     Args:
         existing: The output file's current contents.
