@@ -232,30 +232,41 @@ def test_parse_message_missing_container_raises():
 
 
 def test_real_export_with_multiple_attachments_per_message():
-    """short_test_input.html is a real DiscordChatExporter export with seven
-    messages from one author in a single message group: an image-only
-    message, a text-only continuation, an image with a caption, a message
-    with *two* image attachments and a caption, a text-only message, an
-    embedded-image-only message (a pasted image URL/link Discord unfurled,
-    chatlog__embed/chatlog__embed-generic-image rather than
-    chatlog__attachment/chatlog__attachment-media), and a message mixing one
-    attachment and one embed with a caption - exercising find_all (not just
-    find) actually picking up every image rather than only the first, and
-    both attachment and embed markup together."""
+    """short_test_input.html is a real DiscordChatExporter export with eight
+    messages from one author: two image-only messages, an image with a
+    caption, a message with *two* image attachments and a caption, a
+    text-only message, an embedded-image-only message (a pasted image link
+    Discord unfurled - chatlog__embed/chatlog__embed-generic-image rather
+    than chatlog__attachment/chatlog__attachment-media), a message pasting
+    two image links (two embeds, with the links themselves as its text),
+    and a message mixing one attachment and one embed - exercising find_all
+    (not just find) picking up every image rather than only the first, and
+    attachment and embed markup together.
+
+    DiscordChatExporter stores an identical image once, so the same file can
+    belong to more than one message: image-cc45... is in messages 6 and 7,
+    image-c071... in messages 7 and 8."""
     html = (_EXAMPLE_INPUTS / "short_test_input.html").read_text(encoding="utf8")
     entries = parse_message_groups(html, _start_time("2024-01-01"), {"209767680100663296"})
 
-    assert len(entries) == 7
+    assert len(entries) == 8
     assert [e.image_names for e in entries] == [
-        ["red-132B5.png"],
-        ["black-525D9.png"],
-        ["red-8E623.png"],
-        ["red-C0E63.png", "black-1E1D0.png"],
+        ["image-146b30e31122eeab.png"],
+        ["image-2e3b24fcf40bacb4.png"],
+        ["image-62475a558cc055a5.png"],
+        ["image-5f4b19f240421816.png", "image-74e31a3ad4779ff9.png"],
         [],
-        ["red-EMBED1.png"],
-        ["black-525D9.png", "black-EMBED2.png"],
+        ["image-cc45839ef063b7ef.png"],
+        ["image-cc45839ef063b7ef.png", "image-c0713fe969456d83.png"],
+        ["image-a70d4a1db4cadc23.png", "image-c0713fe969456d83.png"],
     ]
+    assert entries[0].text_lines == []
+    assert entries[2].text_lines == ["red"]
     assert entries[3].text_lines == ["red and black"]
     assert entries[4].text_lines == ["text-only message"]
     assert entries[5].text_lines == []
-    assert entries[6].text_lines == ["black attachment and black embed"]
+    # The pasted links themselves are the message's text.
+    assert len(entries[6].text_lines) == 1
+    assert entries[6].text_lines[0].count("https://cdn.discordapp.com/attachments/") == 2
+    assert entries[7].text_lines == []
+    assert [e.message_id for e in entries][:2] == ["1553810828250058903", "1553810842804293652"]
