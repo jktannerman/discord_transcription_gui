@@ -349,7 +349,7 @@ class App:
             logger.info(
                 "window closing while review screen is open - flushing a final autosave",
                 extra=logging_config.extra(
-                    materialized_range=frame._materialized_range,
+                    materialized_range=frame.get_materialized_range(),
                     focused_slot=frame.get_focused_slot(),
                     last_autosaved_count=len(self._last_autosave_snapshot),
                 ),

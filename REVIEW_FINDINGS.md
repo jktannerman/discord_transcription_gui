@@ -142,7 +142,7 @@ How sure each finding is:
   Either one removes replay, the self-heal step, and most of the forensic
   logging.
 
-- [ ] **B2. Per-box state is spread across about 12 parallel dicts on one class split over several files** - partly done (with B1): `SlotState` (`app/gui/slot_state.py`) replaces `_saved_texts`, `_saved_cursor`, `_checkbox_checked`, `_user_edited_texts`, `_undo_logs`, `_undo_detach`; `_suppress_ocr_auto_check` no longer needed. Still to do: a view object for the widget dicts, fold in `_touched_slots`, stop `App` reading `_materialized_range`
+- [x] **B2. Per-box state is spread across about 12 parallel dicts on one class split over several files** - fixed: `SlotState` (`app/gui/slot_state.py`, the model: text, default, cursor, undo history, checked, user edit, touched) and `SlotView` (`app/gui/slot_view.py`, the live widgets: text widget, container, checkbox var, spellcheck timer). `_suppress_ocr_auto_check` is gone; `App` uses `get_materialized_range()`. The three mixins are kept (their split is documented in `review_view.py`)
   `ReviewFrame` plus 3 mixins (`RowBuildingMixin`, `KeyboardNavMixin`,
   `ImageContextMenuMixin`) all share state keyed by `(idx, role)`:
   `_saved_texts`, `_saved_cursor`, `_checkbox_checked`, `_user_edited_texts`,

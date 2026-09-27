@@ -36,6 +36,11 @@ class SlotState:
         user_edit: For an "ocr" box, the last text the user edited it to,
             kept while the box is unchecked so re-checking can bring it
             back. None if there never was one.
+        touched: Whether the user deliberately acted on this box this
+            session (edited it, undid/redid in it, or clicked its OCR
+            checkbox). Finalize only removes a stored finalized edit for a
+            touched box, so a box that merely *looks* reverted - e.g. from
+            a logic bug - keeps its stored edit. Saved with the session.
     """
 
     default: str
@@ -44,3 +49,4 @@ class SlotState:
     cursor: str = "1.0"
     checked: bool = False
     user_edit: Optional[str] = None
+    touched: bool = False

@@ -125,6 +125,7 @@ from .keyboard_nav import KeyboardNavMixin
 from .layout_constants import ROW_PACK_PADY_PX
 from .row_building import RowBuildingMixin
 from .slot_state import SlotState
+from .slot_view import SlotView
 from .virtualization import compute_visible_range, estimate_row_height
 from .wheel import WHEEL_EVENT_SEQUENCES, wheel_delta
 
@@ -201,12 +202,11 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         }
         self._materialized_range: Optional[Tuple[int, int]] = None
         self._row_frames: Dict[int, tk.Widget] = {}
-        # All per-box bookkeeping below is keyed by (item_index, role) -
-        # see self._slots - since a row can now have any number of
-        # independent boxes (and matching immutable originals) rather than
-        # at most two.
-        self._text_widgets: Dict[Tuple[int, str], tk.Text] = {}
-        self._text_containers: Dict[Tuple[int, str], tk.Widget] = {}
+        # Per-box state is keyed by (item_index, role) - see self._slots -
+        # since a row can have any number of independent boxes. The live
+        # widgets of each currently-built box (see slot_view.py) - only
+        # boxes whose row is materialized have an entry.
+        self._slot_views: Dict[Tuple[int, str], SlotView] = {}
         self._images = ImageLoader()
         # The model for every editable box: text, default, undo history,
         # cursor, and an "ocr" box's checkbox state - see slot_state.py.
@@ -216,29 +216,14 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         self._slot_states: Dict[Tuple[int, str], SlotState] = self._initial_slot_states(
             items, initial_saved_texts, initial_finalized_texts
         )
+        # Slots a resumed session had already touched (SlotState.touched):
+        # an untick made before closing the app still counts.
+        for key in initial_touched_slots or ():
+            if key in self._slot_states:
+                self._slot_states[key].touched = True
         # Time source for EditHistory's pause rule. An attribute so tests
         # can freeze it.
         self._clock: Callable[[], float] = time.monotonic
-        # Slots the user has deliberately acted on this session - typed/
-        # pasted/undone in, or clicked the OCR checkbox of (see
-        # row_building.py's _sync_slot_from_widget/_on_ocr_checkbox_toggle).
-        # Finalize only removes a box's stored finalized edit if its slot is
-        # in here: a box that merely *looks* reverted, with no recorded
-        # action behind it, keeps its stored edit - so a logic bug that
-        # unticks a box or resets its text can't erase a finalized edit.
-        # Persisted with the session (seeded from initial_touched_slots on
-        # resume), since an untick made before closing the app still counts.
-        self._touched_slots: Set[Tuple[int, str]] = set(initial_touched_slots or ())
-        # tk.BooleanVar backing each currently-built OCR box's checkbox -
-        # only exists while that box's row is materialized, same as
-        # self._text_widgets.
-        self._checkbox_vars: Dict[Tuple[int, str], tk.BooleanVar] = {}
-        # after()-id of a pending debounced spellcheck pass for a currently-
-        # built content box (see row_building.py's _schedule_spellcheck) -
-        # only ever set for "message"/"ocr{N}" boxes, never a spacer box.
-        # Cancelled in _destroy_row/_reclaim_widget_if_present so a timer
-        # never fires against an already-destroyed widget.
-        self._spellcheck_after_ids: Dict[Tuple[int, str], str] = {}
         # The slot whose box had focus at the moment its row was torn down
         # (see _destroy_row), restored once that row is rebuilt - see
         # _build_row. None means either nothing was focused when a row was
@@ -367,12 +352,8 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
             # assume stay cheap (see its docstring). Cancelling explicitly
             # here, the same way self._update_job/self._initial_position_job
             # already are, keeps that assumption true.
-            for after_id in self._spellcheck_after_ids.values():
-                try:
-                    self.after_cancel(after_id)
-                except tk.TclError:
-                    pass
-            self._spellcheck_after_ids.clear()
+            for view in self._slot_views.values():
+                view.cancel_spellcheck()
 
         self.bind("<Destroy>", _on_destroy)
 
@@ -561,13 +542,9 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         if row is None:
             return
         focused = self.focus_get()
-        for key in [k for k in self._text_widgets if k[0] == index]:
-            text_widget = self._text_widgets[key]
-            self._sync_slot_from_widget(key, text_widget)
-            del self._text_widgets[key]
-            state = self._slot_states[key]
-            state.cursor = text_widget.index("insert")
-            text = state.text
+        for key in [k for k in self._slot_views if k[0] == index]:
+            view = self._release_slot_view(key)
+            text_widget = view.text_widget
             had_focus = text_widget is focused
             if had_focus:
                 self._refocus_slot = key
@@ -576,16 +553,8 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
                 key=key,
                 widget=str(text_widget),
                 had_focus=had_focus,
-                **logging_config.text_fingerprint(text),
+                **logging_config.text_fingerprint(self._slot_states[key].text),
             )
-            self._text_containers.pop(key, None)
-            self._checkbox_vars.pop(key, None)
-            pending_spellcheck = self._spellcheck_after_ids.pop(key, None)
-            if pending_spellcheck is not None:
-                try:
-                    text_widget.after_cancel(pending_spellcheck)
-                except tk.TclError:
-                    pass
         self._images.unregister_row(index)
         row.destroy()
 
@@ -627,7 +596,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         practice is described in INVESTIGATION_shift_tab_reconcile_lockup.md).
 
         Left uncaught, an exception here (a) left
-        this row's index missing from self._text_widgets while still
+        this row's index missing from self._slot_views while still
         listed in the static self._slots nav list (later KeyError on
         Tab/Shift-Tab), (b) aborted the rest of this batch, so every row
         after the failure in build order was silently never built either,
@@ -1031,9 +1000,9 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
             is an unchecked "ocr" box).
         """
         key = (index, role)
-        widget = self._text_widgets.get(key)
-        if widget is not None:
-            self._sync_slot_from_widget(key, widget)
+        view = self._slot_views.get(key)
+        if view is not None:
+            self._sync_slot_from_widget(key, view.text_widget)
         state = self._slot_states[key]
         if role.startswith("ocr") and not state.checked:
             return None
@@ -1046,10 +1015,15 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
 
     def get_touched_slots(self) -> Set[Tuple[int, str]]:
         """The (item_index, role) slots the user has deliberately acted on
-        this session (see self._touched_slots) - used by Finalize to decide
+        this session (see SlotState.touched) - used by Finalize to decide
         which stored finalized edits may be removed, and by autosave so a
         resumed session keeps them."""
-        return set(self._touched_slots)
+        return {key for key, state in self._slot_states.items() if state.touched}
+
+    def get_materialized_range(self) -> Optional[Tuple[int, int]]:
+        """The inclusive (first, last) item indices whose rows are currently
+        built, or None before the first reconcile - for logging."""
+        return self._materialized_range
 
     def collect_edited_texts(self) -> List[Dict[str, Optional[str]]]:
         """Current role->text mapping for every item, in transcript order -

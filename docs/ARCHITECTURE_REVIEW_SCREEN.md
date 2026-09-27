@@ -195,11 +195,20 @@ plus the scroll/debounce/Finalize-button machinery:
   the guard runs. The cursor isn't part of the autosaved session format, so
   a resumed box's cursor still starts at `"1.0"`.
 - **The per-box model lives outside the widgets.** (`app/gui/slot_state.py`,
-  `app/gui/edit_history.py`.) `self._slot_states` holds one `SlotState` per
-  editable box, built eagerly in `ReviewFrame.__init__` for every slot:
-  its default text, current text, cursor, undo/redo history, and (for an
-  "ocr" box) its checkbox state and hidden user edit. The widgets are just
-  a view of it. Three rules keep the two in step:
+  `app/gui/slot_view.py`, `app/gui/edit_history.py`.) Each editable box has
+  two halves, both keyed by `(item_index, role)`:
+  - `self._slot_states` holds one `SlotState` per box, built eagerly in
+    `ReviewFrame.__init__` for every slot: its default text, current text,
+    cursor, undo/redo history, whether the user touched it this session,
+    and (for an "ocr" box) its checkbox state and hidden user edit.
+  - `self._slot_views` holds one `SlotView` per *currently built* box: its
+    Text widget, container, checkbox variable and pending spellcheck timer.
+    `_release_slot_view` is the one place a view is unregistered (row
+    teardown and `_reclaim_widget_if_present` both use it): it syncs the
+    SlotState from the widget, records the cursor and cancels the timer.
+
+  The widgets are just a view of the SlotState. Three rules keep the two in
+  step:
   - **A (re)build is always the same:** `_populate_text_box` inserts
     `SlotState.text` and restores the cursor. There is no separate
     "first build" versus "rebuild" path, and nothing is replayed.
@@ -295,13 +304,14 @@ plus the scroll/debounce/Finalize-button machinery:
   build can measure as winfo_height()==1" above) and leave that test's own
   first row never actually built. Fixed the same way
   `self._update_job`/`self._initial_position_job` already were: the
-  `ReviewFrame`'s own `<Destroy>` handler now cancels every remaining entry
-  in `self._spellcheck_after_ids` too, not just per-row teardown.
+  `ReviewFrame`'s own `<Destroy>` handler now cancels every still-built
+  box's pending timer (`SlotView.cancel_spellcheck`) too, not just per-row
+  teardown.
 - **Slot-addressed boxes.** Since a row can now have a "message" box (a copy
   of the message's own text) and any number of OCR boxes - one per attached
   image, since a single message can have more than one - a plain item index
   is no longer enough to identify one box. Every per-box structure in
-  `ReviewFrame` (`_slot_states`, `_text_widgets`, `_text_containers`, ...)
+  `ReviewFrame` (`_slot_states`, `_slot_views`)
   is keyed by `(item_index, role)` instead, where `role` is
   `"message"` or `"ocr{N}"` (the Nth attached image's OCR box, 0-indexed in
   attachment order) - encoding the image index into the role string this

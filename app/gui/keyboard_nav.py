@@ -6,7 +6,7 @@ would otherwise go offscreen - see _keep_cursor_in_viewport), Ctrl+Backspace
 deletes the previous word, and Ctrl+Z/Ctrl+Shift+Z undo/redo within a box.
 Mixed into ReviewFrame rather
 than taken as a standalone object, since every method here reaches into
-ReviewFrame's row/widget bookkeeping (self._text_widgets, self._slots,
+ReviewFrame's row/widget bookkeeping (self._slot_views, self._slots,
 self._row_heights, self._ensure_materialized, self._canvas,
 self._finalize_button) - threading all of that through as constructor
 args would just relocate the coupling, not remove it.
@@ -53,8 +53,8 @@ class KeyboardNavMixin:
     def _key_for_widget(self, widget: tk.Text) -> Optional[Tuple[int, str]]:
         """(item_index, role) of the box currently backed by `widget`, or
         None if it isn't one of this frame's currently-materialized boxes."""
-        for key, candidate in self._text_widgets.items():
-            if candidate is widget:
+        for key, view in self._slot_views.items():
+            if view.text_widget is widget:
                 return key
         return None
 
@@ -111,7 +111,7 @@ class KeyboardNavMixin:
             )
             return "break"
         self._set_box_text(key, target, cursor=f"1.0+{cursor_after_change(before, target)}c")
-        self._touched_slots.add(key)
+        state.touched = True
         self._resync_ocr_checkbox_after_undo(key)
         logger.info(
             f"{action} applied",
@@ -143,9 +143,9 @@ class KeyboardNavMixin:
         state.checked = state.text != state.default
         if state.checked:
             state.user_edit = state.text
-        var = self._checkbox_vars.get(key)
-        if var is not None:
-            var.set(state.checked)
+        view = self._slot_views.get(key)
+        if view is not None and view.checkbox_var is not None:
+            view.checkbox_var.set(state.checked)
 
     def _on_page_up(self, event: Optional[tk.Event] = None) -> str:
         if self._scroll_frozen:
@@ -220,10 +220,11 @@ class KeyboardNavMixin:
         _box_document_top, shared with _keep_cursor_in_viewport - see its
         docstring for why the formula is what it is."""
         index, role = key
-        container = self._text_containers.get(key)
+        view = self._slot_views.get(key)
         row = self._row_frames.get(index)
-        if container is None or row is None:
+        if view is None or view.container is None or row is None:
             return
+        container = view.container
         canvas = self._canvas
         total_height = sum(self._row_heights)
         viewport_height = canvas.winfo_height()
@@ -304,11 +305,12 @@ class KeyboardNavMixin:
         _scroll_box_into_view - see its docstring for why the formula is
         what it is."""
         index, _ = key
-        if widget is not self._text_widgets.get(key):
+        view = self._slot_views.get(key)
+        if view is None or widget is not view.text_widget:
             return  # row was torn down/rebuilt before this idle tick ran
-        container = self._text_containers.get(key)
+        container = view.container
         row = self._row_frames.get(index)
-        if container is None or row is None:
+        if row is None:
             return
         try:
             bbox = widget.bbox("insert")
@@ -357,10 +359,10 @@ class KeyboardNavMixin:
         scrolled to wherever its cursor happened to be, which isn't
         necessarily the start of its text."""
         self._log_event("focus_text_box", index=index, role=role)
-        widget = self._text_widgets.get((index, role))
-        if widget is None:
+        view = self._slot_views.get((index, role))
+        if view is None:
             # Listed in self._slots (the static, built-once nav list) but
-            # missing from self._text_widgets - normally impossible, since
+            # missing from self._slot_views - normally impossible, since
             # _goto_slot always calls _ensure_materialized first, but a
             # row whose build failed (see review_view.py's _try_build_row)
             # leaves exactly this gap. Log once per attempt rather than
@@ -374,8 +376,8 @@ class KeyboardNavMixin:
                 extra=logging_config.extra(index=index, role=role),
             )
             return
-        widget.focus_set()
-        widget.see("insert")
+        view.text_widget.focus_set()
+        view.text_widget.see("insert")
         self._scroll_box_into_view((index, role))
 
     def _move_focus(self, delta: int) -> str:

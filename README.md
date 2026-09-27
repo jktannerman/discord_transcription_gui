@@ -448,6 +448,8 @@ gui_transcription/
                           # horizontal/Shift scrolls ignored)
       slot_state.py        # per-box model (text, cursor, undo history,
                           # OCR checkbox) that widgets are filled from
+      slot_view.py         # a built box's live widgets (text, container,
+                          # checkbox var, pending spellcheck timer)
       edit_history.py      # per-box undo/redo snapshots and undo-step
                           # grouping (in-memory only)
       theme.py             # dark theme colors/fonts + ttk Style setup

@@ -2,8 +2,8 @@
 
 Mixed into ReviewFrame rather than taken as a standalone object, since
 every method here reaches into ReviewFrame's bookkeeping
-(self._row_frames, self._text_widgets, self._text_containers,
-self._slot_states, self._images, self._canvas) and keyboard_nav.py's
+(self._row_frames, self._slot_views, self._slot_states, self._images,
+self._canvas) and keyboard_nav.py's
 mixin methods (self._scroll_box_into_view, self._delete_word_backward, etc.)
 - threading all of that through as constructor args would just relocate
 the coupling, not remove it. This module owns *building* a row's widgets;
@@ -33,6 +33,7 @@ from .layout_constants import (
     SPACER_BOX_HEIGHT_PX,
     TEXT_BOX_MARGIN_PX,
 )
+from .slot_view import SlotView
 from .wheel import WHEEL_EVENT_SEQUENCES
 
 logger = logging_config.get_logger(__name__)
@@ -228,37 +229,42 @@ class RowBuildingMixin:
         Args:
             key: The (item_index, role) about to get a new widget.
         """
-        old_widget = self._text_widgets.pop(key, None)
-        if old_widget is None:
+        if key not in self._slot_views:
             return
         logger.warning(
             "building a box for a key that already has a live widget - "
             "reclaiming its content before replacing it, rather than "
             "silently orphaning it",
-            extra=logging_config.extra(key=key, old_widget=str(old_widget)),
+            extra=logging_config.extra(key=key, old_widget=str(self._slot_views[key].text_widget)),
         )
+        self._release_slot_view(key).container.destroy()
+
+    def _release_slot_view(self, key: Tuple[int, str]) -> SlotView:
+        """Unregister a box's widgets, saving what the SlotState needs first.
+
+        Brings the SlotState up to date with the widget's text and cursor
+        and cancels any pending spellcheck. Doesn't destroy anything: the
+        caller destroys the row (or container).
+
+        Args:
+            key: The box's (item_index, role); must have a SlotView.
+
+        Returns:
+            The SlotView that was removed.
+        """
+        view = self._slot_views.pop(key)
+        view.cancel_spellcheck()
         try:
-            self._sync_slot_from_widget(key, old_widget)
-            self._slot_states[key].cursor = old_widget.index("insert")
+            self._sync_slot_from_widget(key, view.text_widget)
+            self._slot_states[key].cursor = view.text_widget.index("insert")
         except tk.TclError:
-            # The widget is in some unusable state - nothing more to
-            # reclaim, but still worth cleaning up below.
             logger.error(
-                "could not read back the orphaned widget's content - "
-                "whatever it held since its last teardown is lost",
+                "could not read back this box's widget - whatever it held "
+                "since the last sync is lost",
                 exc_info=True,
                 extra=logging_config.extra(key=key),
             )
-        self._checkbox_vars.pop(key, None)
-        pending_spellcheck = self._spellcheck_after_ids.pop(key, None)
-        if pending_spellcheck is not None:
-            try:
-                old_widget.after_cancel(pending_spellcheck)
-            except tk.TclError:
-                pass
-        container = self._text_containers.pop(key, None)
-        if container is not None:
-            container.destroy()
+        return view
 
     def _build_editable_text_box(
         self,
@@ -309,6 +315,7 @@ class RowBuildingMixin:
         # even earlier than this column, not just before text_widget, to
         # land at the true right edge outside it.
         checkbox_column: Optional[tk.Widget] = None
+        checked_var: Optional[tk.BooleanVar] = None
         if role.startswith("ocr"):
             # ttk.Checkbutton (styled via "OcrCheckbox.TCheckbutton" -
             # theme.py), not a raw tk.Checkbutton - this app's clam ttk
@@ -327,7 +334,6 @@ class RowBuildingMixin:
                 command=lambda k=key: self._on_ocr_checkbox_toggle(k),
             )
             checkbox.pack(side="top")
-            self._checkbox_vars[key] = checked_var
 
         # Set after construction (rather than passed as a kwarg) since the
         # callback needs to close over text_widget itself.
@@ -343,9 +349,8 @@ class RowBuildingMixin:
         text_widget.pack(side="left", fill="both", expand=True)
 
         self._populate_text_box(key, text_widget)
-        self._text_widgets[key] = text_widget
-        self._text_containers[key] = text_container
-        self._schedule_spellcheck(key, text_widget)
+        self._slot_views[key] = SlotView(text_widget, text_container, checkbox_var=checked_var)
+        self._schedule_spellcheck(key)
 
     def _build_spacer_text_box(
         self,
@@ -381,8 +386,7 @@ class RowBuildingMixin:
         text_widget.pack(side="left", fill="both", expand=True)
 
         self._populate_text_box(key, text_widget)
-        self._text_widgets[key] = text_widget
-        self._text_containers[key] = text_container
+        self._slot_views[key] = SlotView(text_widget, text_container)
 
     def _populate_text_box(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
         """Fill a freshly-built box from its SlotState and wire up the
@@ -524,23 +528,25 @@ class RowBuildingMixin:
             )
             text_widget.tag_configure(SPELLCHECK_TAG, underline=True)
 
-    def _schedule_spellcheck(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
+    def _schedule_spellcheck(self, key: Tuple[int, str]) -> None:
         """Debounce a spellcheck pass on this box: cancel whatever pass was
         already pending for it and schedule a fresh one SPELLCHECK_DEBOUNCE_MS
         from now. Called on every keystroke (_on_text_modified) as well as
         right after a box is (re)built (_build_editable_text_box) - the
         latter so a rebuilt row's tags (which don't survive the old widget
         being destroyed) are always recomputed rather than left
-        blank until the user's next keystroke in that specific box."""
-        pending = self._spellcheck_after_ids.pop(key, None)
-        if pending is not None:
-            try:
-                text_widget.after_cancel(pending)
-            except tk.TclError:
-                pass
-        self._spellcheck_after_ids[key] = text_widget.after(
+        blank until the user's next keystroke in that specific box.
+
+        Args:
+            key: The box's (item_index, role). Ignored if its row isn't built.
+        """
+        view = self._slot_views.get(key)
+        if view is None:
+            return
+        view.cancel_spellcheck()
+        view.spellcheck_after_id = view.text_widget.after(
             SPELLCHECK_DEBOUNCE_MS,
-            lambda k=key, t=text_widget: self._run_spellcheck(k, t),
+            lambda k=key, t=view.text_widget: self._run_spellcheck(k, t),
         )
 
     def _run_spellcheck(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
@@ -550,8 +556,10 @@ class RowBuildingMixin:
         _reclaim_widget_if_present already cancel any pending timer up front,
         but this is a cheap last-resort backstop rather than relying on that
         alone, the same defensive posture the rest of this module takes
-        toward a torn-down widget (see _populate_text_box's TclError guard)."""
-        self._spellcheck_after_ids.pop(key, None)
+        toward a torn-down widget."""
+        view = self._slot_views.get(key)
+        if view is not None and view.text_widget is text_widget:
+            view.spellcheck_after_id = None
         try:
             content = text_widget.get("1.0", "end-1c")
         except tk.TclError:
@@ -594,7 +602,7 @@ class RowBuildingMixin:
             return False
         state.history.record(state.text, text, self._clock())
         state.text = text
-        self._touched_slots.add(key)
+        state.touched = True
         if key[1].startswith("ocr"):
             self._on_ocr_box_user_edit(key, text)
         return True
@@ -615,9 +623,10 @@ class RowBuildingMixin:
         state = self._slot_states[key]
         state.text = text
         state.cursor = cursor
-        text_widget = self._text_widgets.get(key)
-        if text_widget is None:
+        view = self._slot_views.get(key)
+        if view is None:
             return
+        text_widget = view.text_widget
         text_widget.delete("1.0", "end")
         text_widget.insert("1.0", text)
         text_widget.mark_set("insert", cursor)
@@ -652,7 +661,7 @@ class RowBuildingMixin:
         # A spacer box never gets the "misspelled" tag configured (see
         # _build_spacer_text_box), and holds nothing but "\n" tokens anyway.
         if not key[1].startswith("spacer"):
-            self._schedule_spellcheck(key, text_widget)
+            self._schedule_spellcheck(key)
         if had_focus:
             self._scroll_box_into_view(key)
 
@@ -670,7 +679,8 @@ class RowBuildingMixin:
         state = self._slot_states[key]
         state.checked = True
         state.user_edit = text
-        var = self._checkbox_vars.get(key)
+        view = self._slot_views.get(key)
+        var = view.checkbox_var if view is not None else None
         if var is not None and not var.get():
             var.set(True)
 
@@ -686,15 +696,16 @@ class RowBuildingMixin:
         Args:
             key: The box's (item_index, role).
         """
-        var = self._checkbox_vars[key]
+        view = self._slot_views[key]
+        var = view.checkbox_var
         checked = var.get()
         # Read before syncing: an edit not yet synced would tick the box
         # again via _on_ocr_box_user_edit, undoing the click.
-        self._sync_slot_from_widget(key, self._text_widgets[key])
+        self._sync_slot_from_widget(key, view.text_widget)
         var.set(checked)
         state = self._slot_states[key]
         state.checked = checked
-        self._touched_slots.add(key)
+        state.touched = True
         text_to_show = state.user_edit if checked and state.user_edit is not None else state.default
 
         state.history.record(state.text, text_to_show, self._clock(), standalone=True)

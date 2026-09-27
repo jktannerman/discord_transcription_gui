@@ -27,20 +27,22 @@ class _FakeTextWidget:
 class _NavStub(KeyboardNavMixin):
     """Exercises _move_focus/_focused_slot without building any real Tk
     widgets or a display - everything _move_focus touches (self._slots,
-    self._text_widgets, self._finalize_button, self.focus_get(),
+    self._slot_views, self._finalize_button, self.focus_get(),
     self._ensure_materialized) is faked out below; _ensure_materialized and
     _log_event are no-ops since this stub treats every row as already
-    materialized. self._text_containers/_row_frames are left empty
-    deliberately - the real _scroll_box_into_view (unstubbed) bails out
-    early on its container/row None-checks before touching anything else,
-    so nothing here needs to fake up real Tk geometry."""
+    materialized. Each view's container and self._row_frames are left
+    empty deliberately - the real _scroll_box_into_view (unstubbed) bails
+    out early on its container/row None-checks before touching anything
+    else, so nothing here needs to fake up real Tk geometry."""
 
     def __init__(self, items):
         self._items = items
         self._slots = [(idx, role) for idx, item in enumerate(items) for role in item.slot_roles]
         self._slot_positions = {slot: pos for pos, slot in enumerate(self._slots)}
-        self._text_widgets = {slot: _FakeTextWidget(self, slot) for slot in self._slots}
-        self._text_containers = {}
+        self._slot_views = {
+            slot: SimpleNamespace(text_widget=_FakeTextWidget(self, slot), container=None)
+            for slot in self._slots
+        }
         self._row_frames = {}
         self._finalize_button = _FakeTextWidget(self, "finalize_button")
         self._focused = None
@@ -174,7 +176,7 @@ def test_move_focus_with_no_slots_at_all_does_not_raise():
 
 def test_focus_text_box_on_a_slot_with_no_live_widget_does_not_raise():
     """A slot listed in self._slots (built once, up front) but missing from
-    self._text_widgets - normally impossible, since _goto_slot always calls
+    self._slot_views - normally impossible, since _goto_slot always calls
     _ensure_materialized first, but exactly the gap a failed row build
     leaves (see review_view.py's _try_build_row and
     INVESTIGATION_shift_tab_reconcile_lockup.md). Before this guard, every
@@ -182,7 +184,7 @@ def test_focus_text_box_on_a_slot_with_no_live_widget_does_not_raise():
     every keypress for as long as the user kept trying to navigate there."""
     nav = _NavStub([_text_item(), _image_item()])
     missing_slot = (1, "ocr0")
-    del nav._text_widgets[missing_slot]
+    del nav._slot_views[missing_slot]
 
     nav._focus_text_box(*missing_slot)  # must not raise
 
@@ -196,7 +198,7 @@ def test_move_focus_skips_over_nothing_specially_but_does_not_crash_on_a_missing
     not just a direct call."""
     nav = _NavStub([_text_item()])
     only_slot = (0, "message")
-    del nav._text_widgets[only_slot]
+    del nav._slot_views[only_slot]
 
     nav._move_focus(1)  # must not raise KeyError
 

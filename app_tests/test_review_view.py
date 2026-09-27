@@ -181,7 +181,7 @@ def test_misspelled_word_gets_tagged_in_a_content_box(root, sample_image):
     frame, _ = _build_frame(root, items)
     first_text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (first_text_item, "message")
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
 
     widget.delete("1.0", "end")
     widget.insert("1.0", "this is definitly garbld")
@@ -203,7 +203,7 @@ def test_correctly_spelled_content_box_gets_no_tag(root, sample_image):
     frame, _ = _build_frame(root, items)
     first_text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (first_text_item, "message")
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
 
     widget.delete("1.0", "end")
     widget.insert("1.0", "this is a perfectly normal sentence")
@@ -215,11 +215,11 @@ def test_correctly_spelled_content_box_gets_no_tag(root, sample_image):
 def test_spacer_box_never_gets_the_misspelled_tag_configured(root, sample_image):
     items = _items(sample_image)
     frame, _ = _build_frame(root, items)
-    spacer_key = next(k for k in frame._text_widgets if k[1].startswith("spacer"))
-    widget = frame._text_widgets[spacer_key]
+    spacer_key = next(k for k in frame._slot_views if k[1].startswith("spacer"))
+    widget = frame._slot_views[spacer_key].text_widget
 
     assert "misspelled" not in widget.tag_names()
-    assert spacer_key not in frame._spellcheck_after_ids
+    assert frame._slot_views[spacer_key].spellcheck_after_id is None
 
 
 def test_spellcheck_tag_is_reapplied_after_a_row_is_paged_out_and_back_in(root, sample_image):
@@ -227,7 +227,7 @@ def test_spellcheck_tag_is_reapplied_after_a_row_is_paged_out_and_back_in(root, 
     frame, _ = _build_frame(root, items)
     first_text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (first_text_item, "message")
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.delete("1.0", "end")
     widget.insert("1.0", "definitly misspelled")
     frame._run_spellcheck(key, widget)
@@ -240,7 +240,7 @@ def test_spellcheck_tag_is_reapplied_after_a_row_is_paged_out_and_back_in(root, 
     frame._canvas.yview_moveto(0.0)
     frame._reconcile()
 
-    rebuilt_widget = frame._text_widgets[key]
+    rebuilt_widget = frame._slot_views[key].text_widget
     assert rebuilt_widget is not widget
     # The rebuild schedules its own debounced pass (_build_editable_text_box)
     # rather than applying immediately - run it directly, as above.
@@ -251,12 +251,14 @@ def test_spellcheck_tag_is_reapplied_after_a_row_is_paged_out_and_back_in(root, 
 def test_destroying_a_row_cancels_its_pending_spellcheck_timer(root, sample_image):
     items = _items(sample_image)
     frame, _ = _build_frame(root, items)
-    key = next(k for k in frame._text_widgets if k[1] == "message")
-    assert key in frame._spellcheck_after_ids
+    key = next(k for k in frame._slot_views if k[1] == "message")
+    after_id = frame._slot_views[key].spellcheck_after_id
+    assert after_id is not None
 
     frame._destroy_row(key[0])
 
-    assert key not in frame._spellcheck_after_ids
+    assert key not in frame._slot_views
+    assert after_id not in root.tk.splitlist(root.tk.call("after", "info"))
 
 
 def test_edited_text_survives_a_row_being_paged_out_and_back_in(root, sample_image):
@@ -264,7 +266,7 @@ def test_edited_text_survives_a_row_being_paged_out_and_back_in(root, sample_ima
     frame, _ = _build_frame(root, items)
     first_text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
 
-    widget = frame._text_widgets[(first_text_item, "message")]
+    widget = frame._slot_views[(first_text_item, "message")].text_widget
     widget.delete("1.0", "end")
     widget.insert("1.0", "an edit the user made")
 
@@ -273,8 +275,8 @@ def test_edited_text_survives_a_row_being_paged_out_and_back_in(root, sample_ima
     frame._canvas.yview_moveto(0.0)
     frame._reconcile()
 
-    assert (first_text_item, "message") in frame._text_widgets
-    restored = frame._text_widgets[(first_text_item, "message")].get("1.0", "end-1c")
+    assert (first_text_item, "message") in frame._slot_views
+    restored = frame._slot_views[(first_text_item, "message")].text_widget.get("1.0", "end-1c")
     assert restored == "an edit the user made"
 
 
@@ -288,7 +290,7 @@ def test_undo_history_survives_a_row_being_paged_out_and_back_in(root, sample_im
     key = (first_text_item, "message")
     original = items[first_text_item].initial_message_text
 
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.insert("end", " edited")
 
     # Page far away (tears the edited row down) and back to the top again.
@@ -296,7 +298,7 @@ def test_undo_history_survives_a_row_being_paged_out_and_back_in(root, sample_im
     frame._canvas.yview_moveto(0.0)
     frame._reconcile()
 
-    rebuilt = frame._text_widgets[key]
+    rebuilt = frame._slot_views[key].text_widget
     assert rebuilt.get("1.0", "end-1c") == original + " edited"
 
     frame._undo_text(type("Event", (), {"widget": rebuilt})())
@@ -317,14 +319,14 @@ def test_undo_after_unchecking_an_ocr_box_restores_the_edit_and_rechecks_it(root
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
     default_text = items[image_item].initial_ocr_texts[0]
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
     widget.insert("end", " typed")
     root.update()
     edited_text = widget.get("1.0", "end-1c")
 
-    var = frame._checkbox_vars[key]
+    var = frame._slot_views[key].checkbox_var
     var.set(False)
     frame._on_ocr_checkbox_toggle(key)
     assert widget.get("1.0", "end-1c") == default_text
@@ -334,7 +336,7 @@ def test_undo_after_unchecking_an_ocr_box_restores_the_edit_and_rechecks_it(root
 
     assert widget.get("1.0", "end-1c") == edited_text
     assert frame._slot_states[key].checked is True
-    assert frame._checkbox_vars[key].get() is True
+    assert frame._slot_views[key].checkbox_var.get() is True
 
 
 def test_focusing_a_box_scrolls_the_whole_box_fully_into_view_not_just_its_row(root, sample_image):
@@ -401,8 +403,8 @@ def test_ocr_checkbox_starts_unchecked_for_an_untouched_box(root, sample_image):
     key = (image_item, "ocr0")
 
     assert frame._slot_states[key].checked is False
-    assert frame._checkbox_vars[key].get() is False
-    assert frame._text_widgets[key].get("1.0", "end-1c") == items[image_item].initial_ocr_texts[0]
+    assert frame._slot_views[key].checkbox_var.get() is False
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == items[image_item].initial_ocr_texts[0]
 
 
 def test_ocr_checkbox_starts_checked_for_a_resumed_edit_differing_from_default(root, sample_image):
@@ -415,8 +417,8 @@ def test_ocr_checkbox_starts_checked_for_a_resumed_edit_differing_from_default(r
     key = (image_item, "ocr0")
 
     assert frame._slot_states[key].checked is True
-    assert frame._checkbox_vars[key].get() is True
-    assert frame._text_widgets[key].get("1.0", "end-1c") == "a resumed ocr edit"
+    assert frame._slot_views[key].checkbox_var.get() is True
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "a resumed ocr edit"
 
 
 def test_typing_into_an_ocr_box_checks_its_checkbox(root, sample_image):
@@ -424,7 +426,7 @@ def test_typing_into_an_ocr_box_checks_its_checkbox(root, sample_image):
     frame, _ = _build_frame(root, items)
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_force()  # focus_set() alone doesn't reliably win real OS focus in a test run
     root.update_idletasks()
 
@@ -432,7 +434,7 @@ def test_typing_into_an_ocr_box_checks_its_checkbox(root, sample_image):
     root.update()  # let the queued <<Modified>> event fire
 
     assert frame._slot_states[key].checked is True
-    assert frame._checkbox_vars[key].get() is True
+    assert frame._slot_views[key].checkbox_var.get() is True
 
 
 def test_unchecking_then_rechecking_an_ocr_box_round_trips_both_versions(root, sample_image):
@@ -445,16 +447,16 @@ def test_unchecking_then_rechecking_an_ocr_box_round_trips_both_versions(root, s
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
     default_text = items[image_item].initial_ocr_texts[0]
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
     widget.insert("end", " typed")
     root.update()
     edited_text = widget.get("1.0", "end-1c")
     assert edited_text != default_text
-    assert frame._checkbox_vars[key].get() is True
+    assert frame._slot_views[key].checkbox_var.get() is True
 
-    var = frame._checkbox_vars[key]
+    var = frame._slot_views[key].checkbox_var
     var.set(False)
     frame._on_ocr_checkbox_toggle(key)
 
@@ -480,12 +482,12 @@ def test_collect_edited_texts_reports_none_for_an_unchecked_ocr_box(root, sample
     frame, _ = _build_frame(root, items)
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
     widget.insert("end", " typed")
     root.update()
-    var = frame._checkbox_vars[key]
+    var = frame._slot_views[key].checkbox_var
     var.set(False)
     frame._on_ocr_checkbox_toggle(key)
 
@@ -516,7 +518,7 @@ def test_typing_marks_a_box_touched_and_reverting_by_hand_reports_none(root, sam
     frame, _ = _build_frame(root, items)
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (text_item, "message")
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
     widget.insert("end", "!")
@@ -537,9 +539,9 @@ def test_unticking_an_ocr_box_marks_it_touched(root, sample_image):
     frame, _ = _build_frame(root, items)
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
-    frame._checkbox_vars[key].set(True)
+    frame._slot_views[key].checkbox_var.set(True)
     frame._on_ocr_checkbox_toggle(key)
-    frame._checkbox_vars[key].set(False)
+    frame._slot_views[key].checkbox_var.set(False)
     frame._on_ocr_checkbox_toggle(key)
 
     assert key in frame.get_touched_slots()
@@ -570,14 +572,14 @@ def test_ocr_checkbox_state_and_both_versions_survive_paging_out_and_back_in(roo
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
     default_text = items[image_item].initial_ocr_texts[0]
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
     widget.insert("end", " typed")
     root.update()
     edited_text = widget.get("1.0", "end-1c")
 
-    var = frame._checkbox_vars[key]
+    var = frame._slot_views[key].checkbox_var
     var.set(False)
     frame._on_ocr_checkbox_toggle(key)
 
@@ -586,10 +588,10 @@ def test_ocr_checkbox_state_and_both_versions_survive_paging_out_and_back_in(roo
     frame._canvas.yview_moveto(0.0)
     frame._reconcile()
 
-    assert key in frame._text_widgets
+    assert key in frame._slot_views
     assert frame._slot_states[key].checked is False
-    assert frame._checkbox_vars[key].get() is False
-    assert frame._text_widgets[key].get("1.0", "end-1c") == default_text
+    assert frame._slot_views[key].checkbox_var.get() is False
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == default_text
     assert frame._slot_states[key].user_edit == edited_text
 
 
@@ -629,11 +631,11 @@ def test_spacer_slot_boxes_are_one_line_tall_and_hold_their_own_text(root, sampl
     ]
     frame, _ = _build_frame(root, items)
 
-    spacer_widget = frame._text_widgets[(0, "spacer_msg_img")]
+    spacer_widget = frame._slot_views[(0, "spacer_msg_img")].text_widget
     assert int(spacer_widget.cget("height")) == 1
     assert spacer_widget.get("1.0", "end-1c") == "\\n\\n"
 
-    end_widget = frame._text_widgets[(0, "spacer_end")]
+    end_widget = frame._slot_views[(0, "spacer_end")].text_widget
     assert int(end_widget.cget("height")) == 1
     assert end_widget.get("1.0", "end-1c") == "\\n\\n\\n\\n"
 
@@ -674,7 +676,7 @@ def test_resuming_session_restores_saved_edit_and_focus(root, sample_image):
             break
         time.sleep(0.01)
 
-    widget = frame._text_widgets[(text_item, "message")]
+    widget = frame._slot_views[(text_item, "message")].text_widget
     assert widget.get("1.0", "end-1c") == "a resumed edit"
     assert focus_calls == [(text_item, "message")]
 
@@ -701,7 +703,7 @@ def test_resumed_edit_survives_being_paged_out_and_back_in_with_no_further_edits
 
     frame, _ = _build_frame(root, items, initial_saved_texts=saved_texts)
     key = (text_item, "message")
-    assert frame._text_widgets[key].get("1.0", "end-1c") == "a resumed edit"
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "a resumed edit"
 
     # Page far away (tears the row down with no edits made this build) and
     # back to the top again - no typing in between, matching the real
@@ -711,8 +713,8 @@ def test_resumed_edit_survives_being_paged_out_and_back_in_with_no_further_edits
     frame._canvas.yview_moveto(0.0)
     frame._reconcile()
 
-    assert key in frame._text_widgets
-    assert frame._text_widgets[key].get("1.0", "end-1c") == "a resumed edit"
+    assert key in frame._slot_views
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "a resumed edit"
 
 
 def _container_bounds(frame, index, role):
@@ -725,7 +727,7 @@ def _container_bounds(frame, index, role):
     of frame._offset_of(index): that offset is where row `index`'s full
     pack-allocated slot starts, not where its Frame's own visible top edge
     (what the winfo_rooty() delta below is anchored to) actually sits."""
-    container = frame._text_containers[(index, role)]
+    container = frame._slot_views[(index, role)].container
     row = frame._row_frames[index]
     top = (
         frame._offset_of(index) + ROW_PACK_PADY_PX
@@ -760,7 +762,7 @@ def test_keep_cursor_in_viewport_scrolls_down_to_align_box_bottom_with_view_bott
     root.update_idletasks()
 
     key = (5, "message")
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_set()
     widget.mark_set("insert", "end-1c")
     widget.see("insert")
@@ -785,7 +787,7 @@ def test_keep_cursor_in_viewport_scrolls_up_to_align_box_top_with_view_top(root,
     root.update_idletasks()
 
     key = (5, "message")
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_set()
     widget.mark_set("insert", "1.0")
     widget.see("insert")
@@ -830,7 +832,7 @@ def test_jumping_focus_to_a_far_row_lands_it_fully_within_the_real_canvas_viewpo
     root.update()
 
     canvas = frame._canvas
-    container = frame._text_containers[(target_index, target_role)]
+    container = frame._slot_views[(target_index, target_role)].container
     canvas_top = canvas.winfo_rooty()
     canvas_bottom = canvas_top + canvas.winfo_height()
     box_top = container.winfo_rooty()
@@ -908,7 +910,7 @@ def test_jumping_focus_past_a_capped_long_message_row_lands_target_fully_in_view
     root.update()
 
     canvas = frame._canvas
-    container = frame._text_containers[(target_index, "message")]
+    container = frame._slot_views[(target_index, "message")].container
     canvas_top = canvas.winfo_rooty()
     canvas_bottom = canvas_top + canvas.winfo_height()
     box_top = container.winfo_rooty()
@@ -923,7 +925,7 @@ def test_keep_cursor_in_viewport_does_nothing_when_cursor_already_visible(root, 
     frame, _ = _build_frame(root, items)
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (text_item, "message")
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_set()
     widget.mark_set("insert", "1.0")
     root.update_idletasks()
@@ -947,7 +949,7 @@ def test_destroying_a_focused_rows_box_then_rebuilding_restores_focus_and_cursor
     frame, _ = _build_frame(root, items)
 
     key = (text_item, "message")
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_force()  # focus_set() alone doesn't reliably win real OS focus in a test run
     widget.mark_set("insert", "1.3")
     root.update_idletasks()
@@ -967,7 +969,7 @@ def test_destroying_a_focused_rows_box_then_rebuilding_restores_focus_and_cursor
     root.update()  # let the after_idle-scheduled refocus run
 
     assert focus_calls == [key]
-    assert frame._text_widgets[key].index("insert") == "1.3"
+    assert frame._slot_views[key].text_widget.index("insert") == "1.3"
 
 
 def test_destroying_an_unfocused_rows_box_then_rebuilding_does_not_steal_focus(root, sample_image):
@@ -1004,7 +1006,7 @@ def test_typing_in_a_focused_box_scrolled_offscreen_scrolls_its_row_back_into_vi
     items = _items(sample_image, count=20)
     frame, _ = _build_frame(root, items)
     key = (0, "message")  # i % 3 == 0 -> text-only, per _items
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_force()  # focus_set() alone doesn't reliably win real OS focus in a test run
     root.update_idletasks()
 
@@ -1016,7 +1018,7 @@ def test_typing_in_a_focused_box_scrolled_offscreen_scrolls_its_row_back_into_vi
     frame._canvas.yview_moveto((frame._row_heights[0] + 10) / total_height)
     frame._reconcile()
     root.update_idletasks()
-    assert key in frame._text_widgets  # row 0 stays materialized (buffer covers it)
+    assert key in frame._slot_views  # row 0 stays materialized (buffer covers it)
 
     scroll_calls = []
     original_scroll_box_into_view = frame._scroll_box_into_view
@@ -1045,7 +1047,7 @@ def test_fresh_run_uses_finalized_text_when_no_session(root, sample_image):
 
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
 
-    assert frame._text_widgets[(text_item, "message")].get("1.0", "end-1c") == "finalized message text"
+    assert frame._slot_views[(text_item, "message")].text_widget.get("1.0", "end-1c") == "finalized message text"
 
 
 def test_session_takes_priority_over_finalized_text(root, sample_image):
@@ -1060,7 +1062,7 @@ def test_session_takes_priority_over_finalized_text(root, sample_image):
 
     frame, _ = _build_frame(root, items, initial_saved_texts=saved_texts, initial_finalized_texts=finalized)
 
-    assert frame._text_widgets[(text_item, "message")].get("1.0", "end-1c") == "session edit"
+    assert frame._slot_views[(text_item, "message")].text_widget.get("1.0", "end-1c") == "session edit"
 
 
 def test_finalized_used_for_slot_not_covered_by_session(root, sample_image):
@@ -1076,8 +1078,8 @@ def test_finalized_used_for_slot_not_covered_by_session(root, sample_image):
 
     frame, _ = _build_frame(root, items, initial_saved_texts=saved_texts, initial_finalized_texts=finalized)
 
-    assert frame._text_widgets[(text_item, "message")].get("1.0", "end-1c") == "session message"
-    assert frame._text_widgets[(image_item, "ocr0")].get("1.0", "end-1c") == "finalized ocr"
+    assert frame._slot_views[(text_item, "message")].text_widget.get("1.0", "end-1c") == "session message"
+    assert frame._slot_views[(image_item, "ocr0")].text_widget.get("1.0", "end-1c") == "finalized ocr"
 
 
 def test_ocr_checkbox_starts_checked_when_finalized_differs_from_ocr(root, sample_image):
@@ -1095,8 +1097,8 @@ def test_ocr_checkbox_starts_checked_when_finalized_differs_from_ocr(root, sampl
     key = (image_item, "ocr0")
 
     assert frame._slot_states[key].checked is True
-    assert frame._checkbox_vars[key].get() is True
-    assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized ocr different from default"
+    assert frame._slot_views[key].checkbox_var.get() is True
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "finalized ocr different from default"
     assert frame._slot_states[key].user_edit == "finalized ocr different from default"
 
 
@@ -1114,7 +1116,7 @@ def test_ocr_checkbox_starts_unchecked_when_finalized_matches_ocr(root, sample_i
     key = (image_item, "ocr0")
 
     assert frame._slot_states[key].checked is False
-    assert frame._checkbox_vars[key].get() is False
+    assert frame._slot_views[key].checkbox_var.get() is False
 
 
 def test_finalized_edit_survives_page_out_and_back_in(root, sample_image):
@@ -1131,15 +1133,15 @@ def test_finalized_edit_survives_page_out_and_back_in(root, sample_image):
 
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
     key = (text_item, "message")
-    assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized edit"
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "finalized edit"
 
     # Page far away (tears the row down with no further edits) and back.
     frame._ensure_materialized(len(items) - 1)
     frame._canvas.yview_moveto(0.0)
     frame._reconcile()
 
-    assert key in frame._text_widgets
-    assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized edit"
+    assert key in frame._slot_views
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "finalized edit"
 
 
 def test_spacer_finalized_edit_pre_populates_spacer_box(root, sample_image):
@@ -1155,7 +1157,7 @@ def test_spacer_finalized_edit_pre_populates_spacer_box(root, sample_image):
 
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
 
-    spacer_widget = frame._text_widgets[(text_item, "spacer_end")]
+    spacer_widget = frame._slot_views[(text_item, "spacer_end")].text_widget
     assert spacer_widget.get("1.0", "end-1c") == custom_spacer
 
 
@@ -1167,8 +1169,8 @@ def test_multiple_image_message_finalized_edits_populate_each_ocr_box_independen
 
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
 
-    assert frame._text_widgets[(0, "ocr0")].get("1.0", "end-1c") == "finalized first image"
-    assert frame._text_widgets[(0, "ocr1")].get("1.0", "end-1c") == "finalized second image"
+    assert frame._slot_views[(0, "ocr0")].text_widget.get("1.0", "end-1c") == "finalized first image"
+    assert frame._slot_views[(0, "ocr1")].text_widget.get("1.0", "end-1c") == "finalized second image"
     assert frame._slot_states[(0, "ocr0")].checked is True
     assert frame._slot_states[(0, "ocr1")].checked is True
 
@@ -1186,18 +1188,18 @@ def test_unchecking_then_rechecking_ocr_box_starting_from_finalized_edit(root, s
 
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
     key = (image_item, "ocr0")
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     assert widget.get("1.0", "end-1c") == "finalized ocr text"
-    assert frame._checkbox_vars[key].get() is True
+    assert frame._slot_views[key].checkbox_var.get() is True
 
-    frame._checkbox_vars[key].set(False)
+    frame._slot_views[key].checkbox_var.set(False)
     frame._on_ocr_checkbox_toggle(key)
 
     assert widget.get("1.0", "end-1c") == ocr_default
     assert frame._slot_states[key].checked is False
     assert frame._slot_states[key].user_edit == "finalized ocr text"  # not lost
 
-    frame._checkbox_vars[key].set(True)
+    frame._slot_views[key].checkbox_var.set(True)
     frame._on_ocr_checkbox_toggle(key)
 
     assert widget.get("1.0", "end-1c") == "finalized ocr text"
@@ -1220,7 +1222,7 @@ def test_collect_edited_texts_reports_finalized_text_for_checked_ocr_box(root, s
     collected_checked = frame.collect_edited_texts()
     assert collected_checked[image_item]["ocr0"] == "finalized ocr text"
 
-    frame._checkbox_vars[key].set(False)
+    frame._slot_views[key].checkbox_var.set(False)
     frame._on_ocr_checkbox_toggle(key)
 
     collected_unchecked = frame.collect_edited_texts()
@@ -1243,17 +1245,17 @@ def test_finalized_ocr_edit_and_checkbox_survive_page_out_and_back_in(root, samp
 
     frame, _ = _build_frame(root, items, initial_finalized_texts=finalized)
     key = (image_item, "ocr0")
-    assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized ocr text"
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "finalized ocr text"
     assert frame._slot_states[key].checked is True
 
     frame._ensure_materialized(len(items) - 1)
     frame._canvas.yview_moveto(0.0)
     frame._reconcile()
 
-    assert key in frame._text_widgets
-    assert frame._text_widgets[key].get("1.0", "end-1c") == "finalized ocr text"
+    assert key in frame._slot_views
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "finalized ocr text"
     assert frame._slot_states[key].checked is True
-    assert frame._checkbox_vars[key].get() is True
+    assert frame._slot_views[key].checkbox_var.get() is True
 
 
 # --- Regression tests for INVESTIGATION_shift_tab_reconcile_lockup.md -----
@@ -1278,7 +1280,7 @@ def test_selecting_and_deleting_text_survives_a_row_being_paged_out_and_back_in(
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (text_item, "message")
     frame, _ = _build_frame(root, items)
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
 
     widget.insert("1.0", "PREFIX ")
     widget.tag_add("sel", "1.0", "1.7")
@@ -1291,8 +1293,8 @@ def test_selecting_and_deleting_text_survives_a_row_being_paged_out_and_back_in(
     frame._canvas.yview_moveto(0.0)
     frame._reconcile()  # must not raise
 
-    assert key in frame._text_widgets
-    assert frame._text_widgets[key].get("1.0", "end-1c") == expected_text
+    assert key in frame._slot_views
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == expected_text
 
 
 def test_double_build_reclaims_the_orphaned_widgets_content(root, sample_image):
@@ -1307,10 +1309,10 @@ def test_double_build_reclaims_the_orphaned_widgets_content(root, sample_image):
     key = (text_item, "message")
     frame, _ = _build_frame(root, items)
 
-    live_widget = frame._text_widgets[key]
+    live_widget = frame._slot_views[key].text_widget
     live_widget.insert("end", " typed but never torn down")
     live_text = live_widget.get("1.0", "end-1c")
-    old_container = frame._text_containers[key]
+    old_container = frame._slot_views[key].container
 
     # Simulate the "should be impossible" double-build directly, without
     # going through _destroy_row first.
@@ -1318,8 +1320,8 @@ def test_double_build_reclaims_the_orphaned_widgets_content(root, sample_image):
     frame._build_editable_text_box(right_column, text_item, "message", 20)
 
     assert frame._slot_states[key].text == live_text
-    assert frame._text_widgets[key].get("1.0", "end-1c") == live_text
-    assert frame._text_widgets[key] is not live_widget
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == live_text
+    assert frame._slot_views[key].text_widget is not live_widget
     # The orphaned widget's container must be torn down, not leaked.
     assert str(old_container) not in root.tk.call("info", "commands")
 
@@ -1328,7 +1330,7 @@ def test_one_row_build_failure_does_not_abort_the_rest_of_the_reconcile_batch(ro
     """Before _try_build_row existed, a single row raising partway through
     _sync_materialized_rows's build loop propagated out of _reconcile
     entirely - every later row in that same batch was silently left
-    unbuilt (still listed in self._slots, missing from self._text_widgets),
+    unbuilt (still listed in self._slots, missing from self._slot_views),
     and self._materialized_range was never updated to match reality. This
     directly exercises that a poisoned row is skipped, logged, and does not
     prevent its neighbors from building."""
@@ -1348,7 +1350,7 @@ def test_one_row_build_failure_does_not_abort_the_rest_of_the_reconcile_batch(ro
     frame._ensure_materialized(len(items) - 1)  # must not raise
 
     assert poisoned_index not in frame._row_frames
-    assert poisoned_index not in frame._text_widgets
+    assert poisoned_index not in frame._slot_views
     # Its neighbors in the same jump-triggered batch must still be built.
     assert (len(items) - 1) in frame._row_frames
     assert frame._materialized_range is not None
@@ -1381,7 +1383,7 @@ def _random_edit_sequence(frame, root, key, rng, num_ops, allow_checkbox):
     if allow_checkbox:
         actions.append("checkbox_toggle")
     for _ in range(num_ops):
-        widget = frame._text_widgets[key]
+        widget = frame._slot_views[key].text_widget
         action = rng.choice(actions)
         content = widget.get("1.0", "end-1c")
         if action == "type":
@@ -1411,7 +1413,7 @@ def _random_edit_sequence(frame, root, key, rng, num_ops, allow_checkbox):
                 widget.delete("sel.first", "sel.last")
             widget.insert("insert", rng.choice(_RANDOM_EDIT_SNIPPETS))
         elif action == "checkbox_toggle":
-            var = frame._checkbox_vars[key]
+            var = frame._slot_views[key].checkbox_var
             var.set(not var.get())
             frame._on_ocr_checkbox_toggle(key)
         root.update()
@@ -1435,7 +1437,7 @@ def _actual_undo_walk(frame, key):
     undo, collecting what the widget shows after each press."""
     texts = []
     while frame._slot_states[key].history.can_undo:
-        widget = frame._text_widgets[key]
+        widget = frame._slot_views[key].text_widget
         frame._undo_text(type("Event", (), {"widget": widget})())
         texts.append(widget.get("1.0", "end-1c"))
     return texts
@@ -1467,13 +1469,13 @@ def test_random_interaction_sequence_survives_a_row_teardown_and_rebuild(
     else:
         index = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (index, role)
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
 
     _random_edit_sequence(frame, root, key, rng, num_ops=12, allow_checkbox=(role == "ocr0"))
 
-    live_widget = frame._text_widgets[key]
+    live_widget = frame._slot_views[key].text_widget
     frame._sync_slot_from_widget(key, live_widget)
     live_text = live_widget.get("1.0", "end-1c")
     live_cursor = live_widget.index("insert")
@@ -1484,7 +1486,7 @@ def test_random_interaction_sequence_survives_a_row_teardown_and_rebuild(
     frame._build_row(index)
     root.update()
 
-    rebuilt = frame._text_widgets[key]
+    rebuilt = frame._slot_views[key].text_widget
     assert rebuilt is not live_widget
     assert rebuilt.get("1.0", "end-1c") == live_text
     assert rebuilt.index("insert") == live_cursor
@@ -1506,7 +1508,7 @@ def test_random_interaction_sequence_survives_two_consecutive_teardown_rebuild_c
     _freeze_clock(frame)
     image_item = next(i for i, item in enumerate(items) if item.image_paths)
     key = (image_item, "ocr0")
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
 
@@ -1514,11 +1516,11 @@ def test_random_interaction_sequence_survives_two_consecutive_teardown_rebuild_c
     frame._destroy_row(image_item)
     frame._build_row(image_item)
     root.update()
-    frame._text_widgets[key].focus_force()
+    frame._slot_views[key].text_widget.focus_force()
     root.update_idletasks()
 
     _random_edit_sequence(frame, root, key, rng, num_ops=8, allow_checkbox=True)
-    live_widget = frame._text_widgets[key]
+    live_widget = frame._slot_views[key].text_widget
     frame._sync_slot_from_widget(key, live_widget)
     live_text = live_widget.get("1.0", "end-1c")
     live_checked = frame._slot_states[key].checked
@@ -1528,7 +1530,7 @@ def test_random_interaction_sequence_survives_two_consecutive_teardown_rebuild_c
     frame._build_row(image_item)
     root.update()
 
-    rebuilt = frame._text_widgets[key]
+    rebuilt = frame._slot_views[key].text_widget
     assert rebuilt.get("1.0", "end-1c") == live_text
     assert frame._slot_states[key].checked == live_checked
     assert _actual_undo_walk(frame, key) == expected_walk
@@ -1556,24 +1558,24 @@ def test_random_edits_after_a_seeded_baseline_survive_a_further_teardown_and_reb
     frame, _ = _build_frame(root, items, **kwargs)
     _freeze_clock(frame)
     key = (text_item, "message")
-    assert frame._text_widgets[key].get("1.0", "end-1c") == "seeded baseline text"
-    widget = frame._text_widgets[key]
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "seeded baseline text"
+    widget = frame._slot_views[key].text_widget
     widget.focus_force()
     root.update_idletasks()
 
     _random_edit_sequence(frame, root, key, rng, num_ops=10, allow_checkbox=False)
-    live_text = frame._text_widgets[key].get("1.0", "end-1c")
+    live_text = frame._slot_views[key].text_widget.get("1.0", "end-1c")
 
     # Page far enough away that this row is actually torn down (not just
     # kept alive by the virtualization buffer), then back.
     frame._ensure_materialized(len(items) - 1)
-    assert key not in frame._text_widgets
+    assert key not in frame._slot_views
     frame._canvas.yview_moveto(0.0)
     frame._reconcile()
     root.update()
 
-    assert key in frame._text_widgets
-    assert frame._text_widgets[key].get("1.0", "end-1c") == live_text
+    assert key in frame._slot_views
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == live_text
     walk = _actual_undo_walk(frame, key)
     final = walk[-1] if walk else live_text
     assert final == "seeded baseline text"
@@ -1589,7 +1591,7 @@ def test_undo_steps_are_words_and_survive_a_rebuild(root, sample_image):
     text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
     key = (text_item, "message")
     original = items[text_item].initial_message_text
-    widget = frame._text_widgets[key]
+    widget = frame._slot_views[key].text_widget
     widget.focus_force()
     widget.mark_set("insert", "end")
     root.update()
@@ -1602,7 +1604,7 @@ def test_undo_steps_are_words_and_survive_a_rebuild(root, sample_image):
     root.update()
 
     assert _actual_undo_walk(frame, key) == [original + "two ", original]
-    rebuilt = frame._text_widgets[key]
+    rebuilt = frame._slot_views[key].text_widget
     frame._redo_text(type("Event", (), {"widget": rebuilt})())
     assert rebuilt.get("1.0", "end-1c") == original + "two "
 
@@ -1653,7 +1655,7 @@ def test_wheel_up_on_x11_scrolls_the_review_window_back_up(root, sample_image):
 def test_wheel_over_an_overflowing_box_scrolls_only_the_box_once(root, sample_image):
     items = _long_ocr_item(sample_image) + _items(sample_image, count=20)
     frame, _ = _build_frame(root, items)
-    widget = frame._text_widgets[(0, "ocr0")]
+    widget = frame._slot_views[(0, "ocr0")].text_widget
     root.update()
     box_top_before, _ = widget.yview()
     canvas_top_before, _ = frame._canvas.yview()
@@ -1676,7 +1678,7 @@ def test_wheel_over_an_overflowing_box_scrolls_only_the_box_once(root, sample_im
 def test_wheel_over_a_box_at_its_limit_scrolls_the_review_window(root, sample_image):
     items = _long_ocr_item(sample_image) + _items(sample_image, count=20)
     frame, _ = _build_frame(root, items)
-    widget = frame._text_widgets[(0, "ocr0")]
+    widget = frame._slot_views[(0, "ocr0")].text_widget
     widget.yview_moveto(1.0)
     root.update()
     canvas_top_before, _ = frame._canvas.yview()
@@ -1697,7 +1699,7 @@ def test_shift_tab_key_moves_focus_back_and_scrolls_it_into_view(root, sample_im
     first_key = frame._slots[0]
     second_key = frame._slots[1]
     frame._focus_text_box(*second_key)
-    widget = frame._text_widgets[second_key]
+    widget = frame._slot_views[second_key].text_widget
     widget.focus_force()  # focus_set() alone doesn't reliably win real OS focus in a test run
     root.update()
     # Scroll one page down, the way the mouse/scrollbar can - within the
@@ -1705,7 +1707,7 @@ def test_shift_tab_key_moves_focus_back_and_scrolls_it_into_view(root, sample_im
     frame._canvas.yview_scroll(1, "pages")
     frame._reconcile()
     root.update()
-    first_container = frame._text_containers[first_key]
+    first_container = frame._slot_views[first_key].container
     assert first_container.winfo_rooty() + first_container.winfo_height() <= frame._canvas.winfo_rooty()
     assert frame.focus_get() is widget
 
@@ -1713,6 +1715,6 @@ def test_shift_tab_key_moves_focus_back_and_scrolls_it_into_view(root, sample_im
     root.update()
 
     assert frame._focused_slot() == first_key
-    container = frame._text_containers[first_key]
+    container = frame._slot_views[first_key].container
     box_top = container.winfo_rooty() - frame._canvas.winfo_rooty()
     assert 0 <= box_top < frame._canvas.winfo_height()
