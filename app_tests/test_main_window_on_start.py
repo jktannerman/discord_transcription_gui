@@ -299,67 +299,7 @@ def _make_text_item(message_id: str) -> ReviewItem:
     )
 
 
-def _finalize(app, tmp_path, items, edited_texts):
-    """Set up app._run/_review_items and call _on_finalize_clicked with
-    pipeline and most state calls mocked out, returning the args each call
-    received as a list."""
-    html = tmp_path / "chat.html"
-    html.write_text("<html></html>", encoding="utf8")
-    output = tmp_path / "out.txt"
-    output.write_text("", encoding="utf8")
-
-    app._run = RunContext(
-        html_path=html,
-        image_folder=tmp_path / "images",
-        output_path=output,
-        start_time=0,
-        approved_author_ids=None,
-        use_cache=True,
-    )
-    app._review_items = items
-
-    save_calls = []
-    with patch.object(main_window.pipeline, "write_all_items"), \
-         patch.object(main_window.pipeline, "finalize_run", return_value="added"), \
-         patch.object(main_window.state, "save_finalized_edits",
-                      side_effect=lambda *a: save_calls.append(a)), \
-         patch.object(main_window.state, "clear_session"):
-        app._on_finalize_clicked(edited_texts)
-
-    return save_calls
-
-
-def test_on_finalize_clicked_saves_non_none_edits_as_finalized(app, tmp_path, monkeypatch):
-    """_on_finalize_clicked must call state.save_finalized_edits with only
-    the non-None edited values, keyed by each item's message_id."""
-    monkeypatch.setattr(config, "FINALIZED_EDITS_FILE", tmp_path / "finalized_edits.json")
-
-    items = [_make_text_item("msg1"), _make_text_item("msg2")]
-    edited_texts = [
-        {"message": "edited text", "spacer_end": None},   # non-None message, None spacer
-        {"message": None, "spacer_end": r"\n\n\n\n"},     # None message, non-None spacer
-    ]
-
-    save_calls = _finalize(app, tmp_path, items, edited_texts)
-
-    assert len(save_calls) == 1
-    _, by_id = save_calls[0]
-    assert by_id == {
-        "msg1": {"message": "edited text"},   # spacer_end None → dropped
-        "msg2": {"spacer_end": r"\n\n\n\n"},  # message None → dropped
-    }
-
-
-def test_on_finalize_clicked_does_not_save_finalized_edits_on_pipeline_failure(app, tmp_path, monkeypatch):
-    """If write_all_items or finalize_run raises, _on_finalize_clicked must
-    abort before saving finalized edits, so a failed finalize never
-    overwrites a prior good run's stored edits."""
-    monkeypatch.setattr(config, "FINALIZED_EDITS_FILE", tmp_path / "finalized_edits.json")
-
-    items = [_make_text_item("msg1")]
-    edited_texts = [{"message": "edited text", "spacer_end": None}]
-
-    save_calls = []
+def _set_up_run(app, tmp_path, items):
     html = tmp_path / "chat.html"
     html.write_text("<html></html>", encoding="utf8")
     app._run = RunContext(
@@ -372,11 +312,121 @@ def test_on_finalize_clicked_does_not_save_finalized_edits_on_pipeline_failure(a
     )
     app._review_items = items
 
-    with patch.object(main_window.pipeline, "write_all_items",
-                      side_effect=OSError("disk full")), \
+
+def _finalize(
+    app, tmp_path, items, edited_texts, *, confirm=True, finalize_result=None,
+    finalize_error=None, clear_session_error=None,
+):
+    """Set up app._run/_review_items and call _on_finalize_clicked with the
+    confirmation prompt answered `confirm`, pipeline.finalize_run mocked to
+    return `finalize_result` (or raise `finalize_error`), and state calls
+    mocked out. Returns a dict of what each mock was called with."""
+    _set_up_run(app, tmp_path, items)
+    if finalize_result is None:
+        finalize_result = main_window.pipeline.FinalizeResult(
+            just_added="added", copied_to_clipboard=True
+        )
+
+    calls = {"save_finalized": [], "show_setup": [], "show_done": []}
+    app.show_setup = lambda: calls["show_setup"].append(True)
+    real_show_done = app._show_done
+    app._show_done = lambda *a: (calls["show_done"].append(a), real_show_done(*a))
+    with patch.object(main_window.messagebox, "askyesno", return_value=confirm), \
+         patch.object(main_window.messagebox, "showerror") as showerror, \
+         patch.object(main_window.pipeline, "finalize_run",
+                      return_value=finalize_result, side_effect=finalize_error) as finalize_run, \
          patch.object(main_window.state, "save_finalized_edits",
-                      side_effect=lambda *a: save_calls.append(a)), \
-         patch.object(main_window.messagebox, "showerror"):
+                      side_effect=lambda *a: calls["save_finalized"].append(a)), \
+         patch.object(main_window.state, "clear_session",
+                      side_effect=clear_session_error) as clear_session:
         app._on_finalize_clicked(edited_texts)
 
-    assert save_calls == []
+    calls["finalize_run"] = finalize_run.call_args_list
+    calls["clear_session"] = clear_session.call_args_list
+    calls["showerror"] = showerror.call_args_list
+    return calls
+
+
+def test_on_finalize_clicked_saves_non_none_edits_as_finalized(app, tmp_path, monkeypatch):
+    """_on_finalize_clicked must call state.save_finalized_edits with only
+    the non-None edited values, keyed by each item's message_id."""
+    items = [_make_text_item("msg1"), _make_text_item("msg2")]
+    edited_texts = [
+        {"message": "edited text", "spacer_end": None},   # non-None message, None spacer
+        {"message": None, "spacer_end": r"\n\n\n\n"},     # None message, non-None spacer
+    ]
+
+    calls = _finalize(app, tmp_path, items, edited_texts)
+
+    assert len(calls["save_finalized"]) == 1
+    _, by_id = calls["save_finalized"][0]
+    assert by_id == {
+        "msg1": {"message": "edited text"},   # spacer_end None -> dropped
+        "msg2": {"spacer_end": r"\n\n\n\n"},  # message None -> dropped
+    }
+    assert len(calls["clear_session"]) == 1
+    assert len(calls["show_done"]) == 1
+
+
+def test_on_finalize_clicked_does_nothing_when_confirmation_declined(app, tmp_path):
+    items = [_make_text_item("msg1")]
+
+    calls = _finalize(app, tmp_path, items, [{"message": "edited"}], confirm=False)
+
+    assert calls["finalize_run"] == []
+    assert calls["save_finalized"] == []
+    assert calls["clear_session"] == []
+    assert calls["show_done"] == []
+
+
+def test_on_finalize_clicked_stays_on_review_screen_when_output_write_fails(app, tmp_path):
+    """If finalize_run raises, nothing was written - so the saved session
+    must be kept (so nothing is lost) and the app must stay put rather than
+    tearing down the review screen, letting the user retry."""
+    items = [_make_text_item("msg1")]
+    edited_texts = [{"message": "edited text", "spacer_end": None}]
+
+    calls = _finalize(
+        app, tmp_path, items, edited_texts, finalize_error=OSError("disk full")
+    )
+
+    assert calls["save_finalized"] == []
+    assert calls["clear_session"] == []
+    assert calls["show_setup"] == []
+    assert calls["show_done"] == []
+    assert len(calls["showerror"]) == 1
+    assert "disk full" in calls["showerror"][0].args[1]
+
+
+def test_on_finalize_clicked_still_finishes_when_clearing_session_fails(app, tmp_path):
+    """Once the output is written the run is finalized - a later failure
+    must surface as a warning on the done screen, not an error that leaves
+    a resumable (and so re-finalizable) session behind silently."""
+    items = [_make_text_item("msg1")]
+
+    calls = _finalize(
+        app, tmp_path, items, [{"message": None, "spacer_end": None}],
+        clear_session_error=OSError("locked"),
+    )
+
+    assert len(calls["show_done"]) == 1
+    _, _, warnings = calls["show_done"][0]
+    assert len(warnings) == 1
+    assert "locked" in warnings[0]
+    assert calls["showerror"] == []
+
+
+def test_on_finalize_clicked_passes_pipeline_warnings_to_done_screen(app, tmp_path):
+    items = [_make_text_item("msg1")]
+    result = main_window.pipeline.FinalizeResult(
+        just_added="added", copied_to_clipboard=False,
+        warnings=["Could not copy the new text to the clipboard (no xclip)."],
+    )
+
+    calls = _finalize(
+        app, tmp_path, items, [{"message": None, "spacer_end": None}], finalize_result=result
+    )
+
+    just_added, copied, warnings = calls["show_done"][0]
+    assert copied is False
+    assert warnings == result.warnings

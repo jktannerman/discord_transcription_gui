@@ -293,18 +293,24 @@ What's in scope for v1:
    transcript (or the whole transcript fits on screen with nothing to
    scroll past) - it stays out of the way the rest of the time instead of
    permanently occupying its own strip below the review area. Clicking it
-   writes every message's final lines (edited text if you changed it,
-   original OCR/message text otherwise, with each spacer box's blank-line
-   count written out as real newlines in between) to the output file in
-   one pass, then runs the remaining post-run cleanup (leftover literal
-   `\n`s and trailing `[BREAK]` markers - blank-line spacing is no longer
-   touched here, since spacer boxes already wrote exactly what you left in
-   them; common OCR misreads are now fixed earlier, before you ever see
-   the text - see "OCR corrections" below), records the new run-end
-   date, copies the newly-added text to the clipboard, appends a fresh
-   `[BREAK]` marker as a bookmark for the next run, and clears the
-   autosaved session - there's nothing left to resume once a run has
-   actually been finalized.
+   asks for confirmation, saves the session, then builds the new output in
+   memory: the existing file, plus every message's final lines (edited
+   text if you changed it, original OCR/message text otherwise, with each
+   spacer box's blank-line count written out as real newlines in between),
+   run through the remaining post-run cleanup (leftover literal `\n`s and
+   trailing `[BREAK]` markers - blank-line spacing is no longer touched
+   here, since spacer boxes already wrote exactly what you left in them;
+   common OCR misreads are now fixed earlier, before you ever see the text
+   - see "OCR corrections" below), plus a fresh `[BREAK]` marker as a
+   bookmark for the next run. That is written to the output file in one
+   atomic replace, so a failure never leaves it half-written. If the write
+   fails, nothing has changed on disk and you stay on the review screen to
+   fix the problem and try again. Once it succeeds, the run counts as
+   finalized: it records the new run-end date, copies the newly-added text
+   to the clipboard, and clears the autosaved session, since there's
+   nothing left to resume. A failure in any of those later steps (e.g. no
+   clipboard tool installed) is shown as a warning on the done screen
+   rather than undoing the run.
 
    Finalize also stores every box that had a user edit (non-None value in
    `collect_edited_texts`) into `finalized_edits.json`, keyed by this

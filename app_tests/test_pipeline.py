@@ -4,8 +4,7 @@ from gui_transcription.app.chatlog import MessageEntry
 from gui_transcription.app.pipeline import (
     parse_approved_user_ids,
     parse_start_date,
-    write_all_items,
-    write_message_lines,
+    render_items,
 )
 from gui_transcription.app.review_item import build_review_items
 
@@ -54,10 +53,7 @@ def test_parse_approved_user_ids_empty_text_returns_empty_set():
     assert parse_approved_user_ids("") == set()
 
 
-def test_write_all_items_writes_each_message_in_order(tmp_path):
-    output_path = tmp_path / "out.txt"
-    output_path.write_text("", encoding="utf8")
-
+def test_render_items_joins_each_message_in_order(tmp_path):
     entries = [
         MessageEntry(message_id="m1", text_lines=["first message"], image_names=[]),
         MessageEntry(message_id="m2", text_lines=[], image_names=["card.png"]),
@@ -66,21 +62,10 @@ def test_write_all_items_writes_each_message_in_order(tmp_path):
         entries, {"card.png": ["card text"]}, image_folder=tmp_path
     )
 
-    write_all_items(output_path, items, edited_texts=[{}, {}])
+    rendered = render_items(items, edited_texts=[{}, {}])
 
-    written = output_path.read_text(encoding="utf8")
     # No fixed leading padding - this is exactly the behavior spacer slots
     # replaced.
-    assert written.startswith("first message")
-    assert "first message" in written
-    assert "card text" in written
-    assert written.index("first message") < written.index("card text")
-
-
-def test_write_message_lines_appends_chunks_with_no_added_padding(tmp_path):
-    output_path = tmp_path / "out.txt"
-    output_path.write_text("", encoding="utf8")
-
-    write_message_lines(output_path, ["chunk one", "\n\n", "chunk two"])
-
-    assert output_path.read_text(encoding="utf8") == "chunk one\n\nchunk two"
+    assert rendered.startswith("first message")
+    assert "card text" in rendered
+    assert rendered.index("first message") < rendered.index("card text")

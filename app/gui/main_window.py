@@ -592,15 +592,54 @@ class App:
         self._start_autosave()
 
     def _on_finalize_clicked(self, edited_texts: list[dict[str, str | None]]) -> None:
+        """Confirm, save the session, then append this run to the output file.
+
+        If writing the output fails, nothing has been written, so the review
+        screen stays up (autosave still running) and the user can fix the
+        problem and click Finalize again. Once the output *has* been written,
+        the run counts as finalized no matter what fails afterwards: the
+        saved session is cleared so it can't be resumed and finalized a
+        second time (which would append everything twice), and any later
+        failures are shown as warnings on the done screen.
+
+        Args:
+            edited_texts: One role->text dict per review item, from
+                ReviewFrame.collect_edited_texts.
+        """
         logger.info("finalize clicked")
         run = self._run
-        try:
-            pipeline.write_all_items(run.output_path, self._review_items, edited_texts)
-            just_added = pipeline.finalize_run(run.output_path, run.html_path)
-        except Exception as exc:
-            logger.exception("finalize failed")
-            self._on_run_error(f"Failed to write output: {exc}")
+        confirmed = messagebox.askyesno(
+            "Finalize",
+            f"Append this run's transcript to\n{run.output_path}?\n\n"
+            "This can't be undone from within the app.",
+        )
+        if not confirmed:
+            logger.info("finalize cancelled at confirmation prompt")
             return
+
+        # Flush the latest edits first, so a failure below loses nothing.
+        frame = getattr(self, "_review_frame", None)
+        if frame is not None and frame.winfo_exists():
+            try:
+                self._snapshot_and_save(frame, tag="pre_finalize")
+            except Exception:
+                logger.exception("pre-finalize session save failed; finalizing anyway")
+
+        try:
+            result = pipeline.finalize_run(
+                run.output_path, run.html_path, self._review_items, edited_texts
+            )
+        except Exception as exc:
+            logger.exception("finalize failed; output file left unchanged")
+            messagebox.showerror(
+                "Finalize failed",
+                f"Nothing was written to the output file:\n{exc}\n\n"
+                "Your edits are still here and saved. Fix the problem and "
+                "click Finalize again.",
+            )
+            return
+
+        warnings = list(result.warnings)
 
         finalized_by_id: dict[str, dict] = {}
         for item, edited in zip(self._review_items, edited_texts):
@@ -608,13 +647,46 @@ class App:
             if per_msg:
                 finalized_by_id[item.message_id] = per_msg
         if finalized_by_id:
-            state.save_finalized_edits(str(run.html_path), finalized_by_id)
+            try:
+                state.save_finalized_edits(str(run.html_path), finalized_by_id)
+            except Exception as exc:
+                logger.exception("could not save finalized edits")
+                warnings.append(
+                    f"Could not store this run's edits for future runs ({exc})."
+                )
 
         self._cancel_autosave()
-        state.clear_session(str(run.html_path))
+        try:
+            state.clear_session(str(run.html_path))
+        except Exception as exc:
+            logger.exception("could not clear saved session after finalize")
+            warnings.append(
+                f"Could not clear the saved session ({exc}). If you're asked to "
+                "resume a session for this chatlog, choose No - it has already "
+                "been written to the output file."
+            )
 
+        self._show_done(result.just_added, result.copied_to_clipboard, warnings)
+
+    def _show_done(self, just_added: str, copied_to_clipboard: bool, warnings: list[str]) -> None:
+        """Show the post-finalize summary screen.
+
+        Args:
+            just_added: The text this run appended to the output file.
+            copied_to_clipboard: Whether just_added was copied to the clipboard.
+            warnings: Problems from steps after the output was written.
+        """
         frame = ttk.Frame(self.container)
-        ttk.Label(frame, text="Done! The new content has been copied to your clipboard.", padding=12).pack()
+        headline = (
+            "Done! The new content has been copied to your clipboard."
+            if copied_to_clipboard
+            else "Done! The output file was updated."
+        )
+        ttk.Label(frame, text=headline, padding=12).pack()
         ttk.Label(frame, text=f"{len(just_added.splitlines())} lines added.", padding=4).pack()
+        for warning in warnings:
+            ttk.Label(
+                frame, text=f"Warning: {warning}", foreground="orange", wraplength=700, padding=4
+            ).pack()
         ttk.Button(frame, text="Start another run", command=self.show_setup).pack(pady=12)
         self._set_frame(frame)

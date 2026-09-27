@@ -9,17 +9,18 @@ Split into pieces the GUI can drive explicitly:
   see that module for the ``ReviewItem``/spacer-slot domain model this glue
   hands off to and back from. Nothing is written to disk until the user
   reviews everything and clicks Finalize.
-- ``write_all_items`` writes every message's final lines (via
+- ``finalize_run`` renders every message's final text (via
   ``review_item.lines_for_item``, using whatever the user edited, or the
-  original message/OCR text if they left it alone) once, in order, when
-  Finalize is clicked.
-- ``finalize_run`` performs the regex cleanup pass, records the new run
-  date, and bookmarks the output file with a fresh BREAK marker.
+  original message/OCR text if they left it alone), runs the regex cleanup
+  pass, bookmarks the result with a fresh BREAK marker, and writes the
+  output file in a single atomic replace - then records the new run date
+  and copies the added text to the clipboard.
 """
 
 import datetime
 import os
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -161,66 +162,110 @@ def run_ocr_batch(
     return file_info
 
 
-def write_message_lines(output_path: Path, lines_to_write: list[str]) -> None:
-    """Append one review item's lines to the output file verbatim - no
-    padding is added here. Spacing between/within items is now entirely
-    owned by that item's own spacer slots (see ReviewItem.slot_roles and
-    lines_for_item), so each chunk in lines_to_write already carries
-    whatever newlines its surrounding spacers decided on."""
-    with open(output_path, "a", encoding="utf8") as f:
-        for line in lines_to_write:
-            f.write(line)
+def render_items(items: list[ReviewItem], edited_texts: list[dict[str, Optional[str]]]) -> str:
+    """Render every review item's final chunks, in order, as one string.
 
-    logger.debug("wrote message lines", extra=logging_config.extra(line_count=len(lines_to_write)))
+    Args:
+        items: The review items, in transcript order.
+        edited_texts: One role->text dict per item, matching
+            ReviewFrame.collect_edited_texts. None (or a missing role) means
+            "use that slot's default text".
+
+    Returns:
+        The concatenated text for this run. No padding is added between
+        items - spacing is owned entirely by each item's spacer slots (see
+        ReviewItem.slot_roles and lines_for_item).
+    """
+    return "".join(
+        chunk for item, edited in zip(items, edited_texts, strict=True) for chunk in lines_for_item(item, edited)
+    )
 
 
-def write_all_items(
+@dataclass
+class FinalizeResult:
+    """Outcome of a finalize_run call that got as far as writing the output.
+
+    Attributes:
+        just_added: The text added to the output file by this run (also
+            what was copied to the clipboard, if that succeeded).
+        copied_to_clipboard: Whether just_added made it onto the clipboard.
+        warnings: Human-readable problems from steps that ran *after* the
+            output file was written. The run still counts as finalized -
+            retrying it would append the same text a second time.
+    """
+
+    just_added: str
+    copied_to_clipboard: bool = False
+    warnings: list[str] = field(default_factory=list)
+
+
+def finalize_run(
     output_path: Path,
+    html_file_path: Path,
     items: list[ReviewItem],
     edited_texts: list[dict[str, Optional[str]]],
-) -> None:
-    """Write every review item's final chunks, in order, in one pass.
-    edited_texts is one role->text dict per item, matching
-    ReviewFrame.collect_edited_texts."""
-    logger.info("finalizing: writing all review items", extra=logging_config.extra(item_count=len(items)))
-    edited_count = sum(1 for edited in edited_texts if any(v is not None for v in edited.values()))
-    for item, edited in zip(items, edited_texts):
-        write_message_lines(output_path, lines_for_item(item, edited))
+) -> FinalizeResult:
+    """Append this run's transcript to the output file, then do the
+    post-run bookkeeping.
+
+    The new output is built entirely in memory - existing content plus this
+    run's rendered items, cleaned up, plus a fresh BREAK marker bookmarking
+    the end of the run - and written with one atomic replace. That write is
+    the commit point: if anything before it fails, the output file is
+    untouched and the run can safely be retried. Steps after it (recording
+    the run date, copying to the clipboard) can't undo the write, so their
+    failures are returned as warnings instead of raised.
+
+    Args:
+        output_path: The transcript file to append to. Created if missing.
+        html_file_path: The chatlog export; its mtime becomes the recorded
+            run-end date (the next run's default start date).
+        items: The review items, in transcript order.
+        edited_texts: One role->text dict per item (see render_items).
+
+    Returns:
+        The added text, plus any post-commit warnings.
+
+    Raises:
+        OSError: If the output or chatlog file can't be read, or the output
+            can't be written. The output file is unchanged in that case.
+    """
     logger.info(
-        "finished writing all review items",
-        extra=logging_config.extra(item_count=len(items), edited_count=edited_count),
+        "finalizing run",
+        extra=logging_config.extra(output_path=str(output_path), item_count=len(items)),
     )
 
-
-def finalize_run(output_path: Path, html_file_path: Path) -> str:
-    """Clean up the output file, record the new run date, and bookmark it
-    with a fresh BREAK marker. Returns the text added during this run
-    (also copied to the clipboard)."""
-    logger.info("finalizing run", extra=logging_config.extra(output_path=str(output_path)))
-
-    with open(output_path, "r", encoding="utf8") as f:
-        raw = f.read()
-
-    cleaned = cleanup.clean_transcript(raw)
-
-    with open(output_path, "w", encoding="utf8") as f:
-        f.write(cleaned)
-
-    end_time = os.path.getmtime(html_file_path)
-    end_date = datetime.datetime.fromtimestamp(end_time, tz=datetime.timezone.utc)
-    state.append_run_date(end_date.strftime("%Y-%m-%d-%H-%M-%S"))
-
-    # cleaned is already exactly what output_path now holds on disk (nothing
-    # else writes to it between the write above and here) - re-reading it
-    # back would just reproduce the same string from a second disk read.
+    existing = output_path.read_text(encoding="utf8") if output_path.exists() else ""
+    cleaned = cleanup.clean_transcript(existing + render_items(items, edited_texts))
     just_added = cleaned.split(config.BREAK_MARKER)[-1]
-    pyperclip.copy(just_added)
+    # Read before the commit point, so a missing/unreadable chatlog aborts
+    # cleanly rather than leaving a written output with no recorded date.
+    end_time = os.path.getmtime(html_file_path)
 
-    with open(output_path, "a", encoding="utf8") as f:
-        f.write(f"\n\n\n{config.BREAK_MARKER}\n\n\n")
-
+    state.atomic_write_text(output_path, f"{cleaned}\n\n\n{config.BREAK_MARKER}\n\n\n")
     logger.info(
-        "run finalized",
+        "output file written",
         extra=logging_config.extra(added_chars=len(just_added), added_lines=len(just_added.splitlines())),
     )
-    return just_added
+
+    result = FinalizeResult(just_added=just_added)
+
+    end_date = datetime.datetime.fromtimestamp(end_time, tz=datetime.timezone.utc)
+    try:
+        state.append_run_date(end_date.strftime("%Y-%m-%d-%H-%M-%S"))
+    except Exception as exc:
+        logger.exception("could not record run date")
+        result.warnings.append(
+            f"Could not record this run's end date ({exc}) - the next run's "
+            "start date won't be pre-filled correctly."
+        )
+
+    try:
+        pyperclip.copy(just_added)
+        result.copied_to_clipboard = True
+    except Exception as exc:
+        logger.exception("could not copy added text to clipboard")
+        result.warnings.append(f"Could not copy the new text to the clipboard ({exc}).")
+
+    logger.info("run finalized", extra=logging_config.extra(warning_count=len(result.warnings)))
+    return result

@@ -85,7 +85,7 @@ preceding content box.
   are written. Any other stray character typed into a spacer box is
   ignored, never written - nothing but backslash/`n` characters has any
   effect there.
-- `write_message_lines`/`write_all_items` no longer add any fixed padding
+- `pipeline.render_items` doesn't add any fixed padding
   around an item's chunks (the old unconditional `"\n\n\n\n"` prefix/`"\n\n"`
   suffix was exactly the behavior spacer slots replace) - each item's own
   `"spacer_end"` chunk now supplies the entire gap before the next item. The

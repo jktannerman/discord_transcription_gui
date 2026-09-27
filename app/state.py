@@ -22,26 +22,33 @@ def _ensure_data_dir() -> None:
     config.APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _atomic_write_json(path: Path, data) -> None:
-    """Write data to path as JSON without ever leaving a truncated/partial
-    file in its place: write to a temp file in the same directory, fsync it
-    so the bytes are actually on disk, rotate whatever currently occupies
-    path to a .bak sibling, then os.replace the temp file into path.
-    os.replace is atomic on Windows/POSIX, so a crash at any point leaves
-    either the old file or the new one intact - never a half-written one -
-    and the .bak rotation means even a bad *new* write (not just a crash
-    mid-write) still leaves the previous good version recoverable."""
-    _ensure_data_dir()
-    backup_path = path.with_suffix(".bak")
+def atomic_write_text(path: Path, text: str, backup_path: Optional[Path] = None) -> None:
+    """Replace path's contents with text without ever leaving a truncated or
+    partial file in its place.
 
+    Writes to a temp file in the same directory, fsyncs it so the bytes are
+    actually on disk, then os.replaces it into path. os.replace is atomic on
+    Windows/POSIX, so a crash at any point leaves either the old file or the
+    new one intact - never a half-written one.
+
+    Args:
+        path: The file to write. Its directory must already exist.
+        text: The full new contents.
+        backup_path: If given, whatever currently occupies path is first
+            rotated there, so even a bad *new* write (not just a crash
+            mid-write) leaves the previous version recoverable.
+
+    Raises:
+        OSError: If writing fails. path is left as it was.
+    """
     fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=path.stem + "_", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf8") as f:
-            json.dump(data, f, indent=2)
+            f.write(text)
             f.flush()
             os.fsync(f.fileno())
 
-        if path.exists():
+        if backup_path is not None and path.exists():
             os.replace(path, backup_path)
         os.replace(tmp_path, path)
     except OSError:
@@ -51,6 +58,14 @@ def _atomic_write_json(path: Path, data) -> None:
         except OSError:
             pass
         raise
+
+
+def _atomic_write_json(path: Path, data) -> None:
+    """Write data to path as JSON via atomic_write_text, rotating the
+    previous version to a .bak sibling (read back by
+    _read_json_with_backup if the primary file is ever missing/corrupt)."""
+    _ensure_data_dir()
+    atomic_write_text(path, json.dumps(data, indent=2), backup_path=path.with_suffix(".bak"))
 
 
 def _read_json_with_backup(path: Path):
