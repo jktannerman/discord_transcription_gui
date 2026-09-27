@@ -1659,3 +1659,114 @@ def test_random_edits_after_a_seeded_baseline_survive_a_further_teardown_and_reb
     assert key in frame._text_widgets
     assert frame._text_widgets[key].get("1.0", "end-1c") == live_text
     _assert_no_replay_self_heal_logged(caplog)
+
+
+# -- mouse wheel / keyboard events, sent as real Tk events ----------------------
+#
+# These deliberately go through event_generate rather than calling handler
+# methods directly: both bugs below were in *which events* were bound, which
+# a direct method call can't catch.
+
+
+def _long_ocr_item(sample_image):
+    """One image message whose OCR text is far taller than its box, so the
+    box has its own internal scrollbar."""
+    entries = [MessageEntry(message_id="long", text_lines=[], image_names=["sample.png"])]
+    file_info = {"sample.png": [f"line {n}" for n in range(200)]}
+    return build_review_items(entries, file_info, image_folder=sample_image.parent)
+
+
+@pytest.mark.parametrize("sequence, kwargs", [
+    ("<Button-5>", {}),                     # X11, Tk 8.6
+    ("<MouseWheel>", {"delta": -120}),      # Windows/macOS
+])
+def test_wheel_down_over_the_canvas_scrolls_the_review_window(root, sample_image, sequence, kwargs):
+    frame, _ = _build_frame(root, _items(sample_image, count=40))
+    top_before, _ = frame._canvas.yview()
+
+    frame._canvas.event_generate(sequence, **kwargs)
+    root.update()
+
+    top_after, _ = frame._canvas.yview()
+    assert top_after > top_before
+
+
+def test_wheel_up_on_x11_scrolls_the_review_window_back_up(root, sample_image):
+    frame, _ = _build_frame(root, _items(sample_image, count=40))
+    frame._canvas.yview_moveto(0.5)
+    root.update()
+    top_before, _ = frame._canvas.yview()
+
+    frame._canvas.event_generate("<Button-4>")
+    root.update()
+
+    top_after, _ = frame._canvas.yview()
+    assert top_after < top_before
+
+
+def test_wheel_over_an_overflowing_box_scrolls_only_the_box_once(root, sample_image):
+    items = _long_ocr_item(sample_image) + _items(sample_image, count=20)
+    frame, _ = _build_frame(root, items)
+    widget = frame._text_widgets[(0, "ocr0")]
+    root.update()
+    box_top_before, _ = widget.yview()
+    canvas_top_before, _ = frame._canvas.yview()
+    assert box_top_before == 0.0
+
+    widget.event_generate("<Button-5>")
+    root.update()
+    box_after_one, _ = widget.yview()
+    widget.event_generate("<Button-5>")
+    root.update()
+    box_after_two, _ = widget.yview()
+
+    assert frame._canvas.yview()[0] == canvas_top_before
+    # Scrolled, and by the same amount each notch - Tk's own Text wheel
+    # binding also running would double the first step.
+    assert box_after_one > 0.0
+    assert box_after_two - box_after_one == pytest.approx(box_after_one, rel=0.25)
+
+
+def test_wheel_over_a_box_at_its_limit_scrolls_the_review_window(root, sample_image):
+    items = _long_ocr_item(sample_image) + _items(sample_image, count=20)
+    frame, _ = _build_frame(root, items)
+    widget = frame._text_widgets[(0, "ocr0")]
+    widget.yview_moveto(1.0)
+    root.update()
+    canvas_top_before, _ = frame._canvas.yview()
+
+    widget.event_generate("<Button-5>")
+    root.update()
+
+    assert frame._canvas.yview()[0] > canvas_top_before
+
+
+@pytest.mark.parametrize("keysym, state", [
+    ("ISO_Left_Tab", 0x1),   # what X11 sends for Shift+Tab
+    ("Tab", 0x1),            # Shift held, as Windows sends it
+])
+def test_shift_tab_key_moves_focus_back_and_scrolls_it_into_view(root, sample_image, keysym, state):
+    items = _items(sample_image, count=40)
+    frame, _ = _build_frame(root, items)
+    first_key = frame._slots[0]
+    second_key = frame._slots[1]
+    frame._focus_text_box(*second_key)
+    widget = frame._text_widgets[second_key]
+    widget.focus_force()  # focus_set() alone doesn't reliably win real OS focus in a test run
+    root.update()
+    # Scroll one page down, the way the mouse/scrollbar can - within the
+    # materialization buffer, so both boxes stay built but go off screen.
+    frame._canvas.yview_scroll(1, "pages")
+    frame._reconcile()
+    root.update()
+    first_container = frame._text_containers[first_key]
+    assert first_container.winfo_rooty() + first_container.winfo_height() <= frame._canvas.winfo_rooty()
+    assert frame.focus_get() is widget
+
+    widget.event_generate("<KeyPress>", keysym=keysym, state=state)
+    root.update()
+
+    assert frame._focused_slot() == first_key
+    container = frame._text_containers[first_key]
+    box_top = container.winfo_rooty() - frame._canvas.winfo_rooty()
+    assert 0 <= box_top < frame._canvas.winfo_height()

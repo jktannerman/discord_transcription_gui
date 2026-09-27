@@ -373,6 +373,7 @@ def test_frozen_mousewheel_and_page_keys_do_not_scroll(root, sample_image):
     assert top_after_page == top_before
 
     frame._canvas.event_generate("<MouseWheel>", delta=-120, warp=False)
+    frame._canvas.event_generate("<Button-5>", warp=False)  # X11 wheel-down
     root.update()
     top_after_wheel, _ = frame._canvas.yview()
     assert top_after_wheel == top_before

@@ -33,6 +33,7 @@ from .layout_constants import (
     TEXT_BOX_MARGIN_PX,
 )
 from .text_undo import UndoLog, attach_undo_recording, replay_onto
+from .wheel import WHEEL_EVENT_SEQUENCES
 
 logger = logging_config.get_logger(__name__)
 
@@ -642,7 +643,14 @@ class RowBuildingMixin:
 
         text_widget.bind("<Control-BackSpace>", self._delete_word_backward)
         text_widget.bind("<Tab>", self._on_tab)
-        text_widget.bind("<Shift-Tab>", self._on_shift_tab)
+        # <<PrevWindow>> rather than <Shift-Tab> - see the same binding on
+        # the Finalize button in review_view.py for why.
+        text_widget.bind("<<PrevWindow>>", self._on_shift_tab)
+        # Widget-level, so it runs before - and via "break" replaces - Tk's
+        # own Text class wheel binding, which would otherwise scroll the box
+        # a second time for the same event.
+        for sequence in WHEEL_EVENT_SEQUENCES:
+            text_widget.bind(sequence, self._on_mousewheel)
         text_widget.bind("<Prior>", self._on_page_up)
         text_widget.bind("<Next>", self._on_page_down)
         text_widget.bind("<Control-z>", self._undo_text)

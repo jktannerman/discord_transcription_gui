@@ -68,7 +68,7 @@ How sure each finding is:
   *Fix:* only report or save a value when it differs from the default, or
   when the box really was edited.
 
-- [ ] **A5. Mouse wheel over the review canvas probably does nothing on Linux** [likely]
+- [x] **A5. Mouse wheel over the review canvas probably does nothing on Linux** [confirmed by user] - fixed: one handler for `<MouseWheel>` and `<Button-4>`/`<Button-5>` (`app/gui/wheel.py`), also bound on each text box so Tk's own Text wheel scrolling doesn't also run
   `review_view.py` only binds `<MouseWheel>`. Tk 8.6 on X11 (the installed
   version is 8.6) sends `<Button-4>`/`<Button-5>` for the wheel; the two were
   only unified in Tk 8.7. So the wheel probably only scrolls inside
@@ -104,6 +104,16 @@ How sure each finding is:
   after a restart can't bring the edit back. The README suggests it can (see
   E3). Decide which behaviour you want, then fix either the code or the
   README.
+
+- [x] **A10. Shift-Tab moves focus back but doesn't scroll to it (Linux)** [confirmed from user's scroll_trace.log] - fixed
+  Found by the user after the review. On X11, Shift+Tab arrives as the key
+  `ISO_Left_Tab`, which the app's `<Shift-Tab>` bindings never matched, so
+  the app's handler never ran (the session's trace log shows 33
+  `move_focus_start` events, all forward). Tk's own "focus previous widget"
+  traversal handled the key instead, which never scrolls the canvas. Fixed by
+  binding Tk's platform-neutral `<<PrevWindow>>` event on the text boxes and
+  the Finalize button. The new tests send real key events; the old ones only
+  called `_move_focus` directly, which is why this was missed.
 
 ---
 
@@ -253,6 +263,26 @@ How sure each finding is:
   long narrative prose instead. There are also a few unannotated defs, e.g.
   `state._read_json_with_backup`, `ImageLoader.__init__`, and the inner
   handlers in `ReviewFrame.__init__`.
+
+- [ ] **D6. GUI tests take OS keyboard focus (deferred - revisit later)**
+  `event_generate` itself is harmless: it goes into Tk's own event queue in
+  the test process, never through the OS/X input system, so no other app can
+  receive it and the pointer doesn't move (`warp` is off by default). The
+  intrusive part is `focus_force()` (13 uses in `test_review_view.py`,
+  including the Shift-Tab test from A10). It takes real keyboard focus away
+  from whatever you're working in, so your typing can land in the test window
+  or disturb the test. Together with the window flashing, this is why the
+  `gui` tests are opt-in.
+  Options, best first:
+  - (1) Run the GUI tests on a virtual display (Xvfb): `sudo apt install xvfb`,
+    then `xvfb-run` or the `pytest-xvfb` plugin. No flashing, no focus
+    stealing, and no test code changes. Standard in CI. Linux-only; the
+    Windows behaviour stays as it is.
+  - (2) Generate `<<PrevWindow>>` directly instead of the key, plus a check
+    that Tk maps `ISO_Left_Tab` to it. No focus needed, but less end-to-end,
+    and it doesn't help the 12 older `focus_force()` uses.
+  - (3) Only assert the bindings exist. No events at all, but the weakest.
+  Recommended: (1).
 
 ---
 

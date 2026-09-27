@@ -122,6 +122,7 @@ from .layout_constants import ROW_PACK_PADY_PX
 from .row_building import RowBuildingMixin
 from .text_undo import UndoLog
 from .virtualization import compute_visible_range, estimate_row_height
+from .wheel import WHEEL_EVENT_SEQUENCES, wheel_delta
 
 logger = logging_config.get_logger(__name__)
 # High-frequency per-scroll-tick tracing (reconcile/debounce/remeasure/
@@ -387,23 +388,8 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
 
         canvas.bind("<Configure>", _on_canvas_configure)
 
-        def _on_mousewheel(e):
-            if self._scroll_frozen:
-                return
-            self._log_event("input_mousewheel", delta=e.delta, widget=str(e.widget))
-            # e.widget is whichever widget the cursor is actually over when
-            # the wheel event fires (bind_all dispatches using the real
-            # target, not just focus) - so hovering a scrollable text box
-            # scrolls *it* first, and only once it's scrolled as far as it
-            # can go in that direction does the wheel fall through to
-            # scrolling the whole review window, same as if the box weren't
-            # there at all.
-            if isinstance(e.widget, tk.Text) and self._scroll_text_widget(e.widget, e.delta):
-                return
-            canvas.yview_scroll(int(-e.delta / 120), "units")
-            self._schedule_reconcile()
-
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        for sequence in WHEEL_EVENT_SEQUENCES:
+            canvas.bind_all(sequence, self._on_mousewheel)
         # Global fallback for Page Up/Down so they scroll the review window
         # even when focus is on the Finalize button rather than a text box
         # (each text box also gets its own binding in _build_row, which
@@ -413,7 +399,8 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         # bind_all is global, so undo it when this frame goes away, otherwise
         # the next screen's scrolling would dispatch to this destroyed canvas
         def _on_destroy(e):
-            canvas.unbind_all("<MouseWheel>")
+            for sequence in WHEEL_EVENT_SEQUENCES:
+                canvas.unbind_all(sequence)
             canvas.unbind_all("<Prior>")
             canvas.unbind_all("<Next>")
             if self._update_job is not None:
@@ -459,7 +446,12 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
             button_row, text="Finalize and write to file", command=self._on_finalize_clicked
         )
         self._finalize_button.pack()
-        self._finalize_button.bind("<Shift-Tab>", self._on_shift_tab)
+        # <<PrevWindow>>, not <Shift-Tab>: on X11, Shift+Tab arrives as the
+        # ISO_Left_Tab key, which <Shift-Tab> never matches - Tk's own
+        # all-widget traversal (which doesn't scroll the canvas) handled it
+        # instead. <<PrevWindow>> is Tk's own name for every platform's
+        # "previous" key (Shift-Tab, ISO_Left_Tab, hpBackTab).
+        self._finalize_button.bind("<<PrevWindow>>", self._on_shift_tab)
         self._finalize_button_row = button_row
         self._finalize_button_visible = False
 
@@ -496,6 +488,34 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
             self._canvas.yview_moveto(self._initial_scroll_fraction)
         self._reconcile()
 
+    def _on_mousewheel(self, event: tk.Event) -> str:
+        """Handle one wheel/touchpad scroll event from anywhere on the review
+        screen - bound globally for WHEEL_EVENT_SEQUENCES, and directly on
+        every editable text box (row_building.py) so it replaces, rather
+        than runs alongside, Tk's own Text scrolling for the same event.
+
+        event.widget is whichever widget the cursor is over - so hovering a
+        scrollable text box scrolls *it* first, and only once it's scrolled
+        as far as it can go in that direction does the wheel fall through to
+        scrolling the whole review window, as if the box weren't there.
+
+        Returns:
+            "break", so no other binding also handles this event.
+        """
+        if self._scroll_frozen:
+            return "break"
+        delta = wheel_delta(event)
+        if not delta:
+            return "break"
+        self._log_event("input_mousewheel", delta=delta, widget=str(event.widget))
+        if isinstance(event.widget, tk.Text) and self._scroll_text_widget(event.widget, delta):
+            return "break"
+        # At least one unit: macOS reports small deltas that would round to 0.
+        units = int(-delta / 120) or (-1 if delta > 0 else 1)
+        self._canvas.yview_scroll(units, "units")
+        self._schedule_reconcile()
+        return "break"
+
     def _scroll_text_widget(self, text_widget: tk.Text, delta: int) -> bool:
         """Try to scroll an editable text box by one wheel notch in the
         direction of `delta`. Returns False (does nothing) if the box is
@@ -509,7 +529,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         at_limit = first <= 0.0 if scrolling_up else last >= 1.0
         if at_limit:
             return False
-        text_widget.yview_scroll(int(-delta / 120), "units")
+        text_widget.yview_scroll(int(-delta / 120) or (-1 if delta > 0 else 1), "units")
         return True
 
     def _log_event(self, event: str, **fields) -> None:

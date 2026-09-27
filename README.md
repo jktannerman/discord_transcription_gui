@@ -420,6 +420,8 @@ gui_transcription/
                           # message, copy to clipboard) - freezes scrolling
                           # (mousewheel/Page Up-Down/scrollbar) while open
       keyboard_nav.py      # Tab/Page Up-Down/undo keyboard shortcuts
+      wheel.py             # mouse wheel/touchpad events across platforms
+                          # (<MouseWheel> vs X11's <Button-4>/<Button-5>)
       text_undo.py          # per-box undo/redo history that survives a
                           # row being paged out and rebuilt (in-memory only)
       theme.py             # dark theme colors/fonts + ttk Style setup
