@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "discord-transcription-gui"
 version = "1.0.0"
 description = "Tkinter GUI for transcribing a Discord export's images via OCR"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "pytesseract==0.3.13",
     "pyperclip==1.10.0",

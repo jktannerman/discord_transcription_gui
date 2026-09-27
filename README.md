@@ -27,6 +27,10 @@ What's in scope for v1:
   there for an eventual settings screen, but not yet exposed in the UI). The
   approved-author list is the one exception - it's entered and cached from
   the setup screen, the same way the file/folder pickers are.
+- It runs on Windows and Linux (X11) with Python 3.12 or newer. The core
+  workflow (setup, OCR, review, finalize) works the same on both. The
+  image right-click menu actions and the dark title bar are still
+  Windows-only - see "Known gaps" below.
 
 ## What it does
 
@@ -205,6 +209,10 @@ What's in scope for v1:
    dragging the scrollbar) is frozen for as long as it's open. Every open,
    close, and action click is logged, along with whether the action itself
    succeeded or failed.
+
+   The five actions are currently Windows-only. On Linux the menu still
+   opens, but every action fails (logged as a failure in `app.log`, without
+   crashing the app) - see "Known gaps" below.
 
    Each "ocr" box additionally has a checkbox in an otherwise-invisible
    column at its own top-right corner - inside the box, compressing its text
@@ -413,13 +421,64 @@ gui_transcription/
     ARCHITECTURE_LOGGING.md         # app.log/scroll_trace.log conventions
 ```
 
+## Requirements
+
+- **Python 3.12 or newer**, with Tkinter. On Windows, Tkinter comes with the
+  python.org installer. On Debian/Ubuntu/Mint it's a separate package:
+  `sudo apt install python3-tk`.
+- **Tesseract OCR**, installed separately from the Python packages:
+  - Windows: install it to the default location,
+    `C:\Program Files\Tesseract-OCR\`. `app/config.py` points pytesseract
+    there directly, since the installer doesn't add it to PATH.
+  - Linux: `sudo apt install tesseract-ocr`. It only needs to be on PATH.
+- **Linux only: a clipboard tool** for finalize's copy-to-clipboard step
+  (pyperclip uses it): `sudo apt install xclip` (or `xsel`) on X11.
+
 ## Running it
 
-Install it as an editable package (once), which registers the `app` package
-on Python's path globally and adds a console-script entry point:
+### Linux
+
+Install it once with [pipx](https://pipx.pypa.io/). pipx creates and manages
+an isolated virtual environment for the app and puts the
+`discord-transcription-gui` command on your PATH:
+
+```bash
+pipx install --editable path/to/gui_transcription
+```
+
+Then, from any directory:
+
+```bash
+discord-transcription-gui
+```
+
+Install with `--editable`. The app reads `ocr_corrections.txt` and the
+spellcheck whitelist/blacklist from next to its source files, and
+`pyproject.toml` doesn't package those `.txt` files, so a normal
+(non-editable) install would leave them out. An editable install also means
+code and config changes take effect without reinstalling.
+
+Don't `pip install` it into the system Python: most current distros mark it
+as externally managed (PEP 668), and the package installs a top-level module
+with the generic name `app`, which belongs in its own environment.
+
+To run it without installing, use a virtual environment inside
+`gui_transcription/`:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m app.main
+```
+
+### Windows
+
+Install it as an editable package (once), which puts the `app` package on
+Python's path and adds a console-script entry point:
 
 ```powershell
-py -3.13 -m pip install -e gui_transcription
+py -3 -m pip install -e gui_transcription
 ```
 
 Then, from any directory:
@@ -431,17 +490,35 @@ discord-transcription-gui
 Without installing, it can also be run directly from inside `gui_transcription/`:
 
 ```powershell
-py -3.13 -m pip install -r requirements.txt
-py -3.13 -m app.main
+py -3 -m pip install -r requirements.txt
+py -3 -m app.main
 ```
 
 ## Testing
 
+The tests import the package as `gui_transcription.app`, so run them from
+the directory that *contains* `gui_transcription/`, not from inside it. Use
+whichever Python environment has the requirements plus `pytest` installed
+(on Linux, e.g. the `.venv` above; pipx's app environment doesn't include
+pytest).
+
 Run the default suite:
 
-```powershell
-py -3.13 -m pytest gui_transcription\app_tests -v
+```bash
+# Linux
+python -m pytest gui_transcription/app_tests -v
 ```
+
+```powershell
+# Windows
+py -3 -m pytest gui_transcription\app_tests -v
+```
+
+On Linux, expect the tests for the Windows-only image context-menu actions
+in `test_image_context_menu.py` to fail (they exercise `winreg`,
+`win32clipboard`, and Explorer directly). One test in `test_chatlog.py` also
+reads a private sample export from `example_inputs/`, which is gitignored,
+so it fails on any checkout that doesn't have that file.
 
 ### The `gui` marker
 
@@ -462,13 +539,15 @@ each test still tears its own widgets down afterward (an autouse fixture)
 so state can't leak between tests the way it would if the shared root were
 never cleaned up.
 
-```powershell
+```bash
 # Just the GUI tests
-py -3.13 -m pytest gui_transcription\app_tests -v -m gui
+python -m pytest gui_transcription/app_tests -v -m gui
 
 # Everything, GUI tests included
-py -3.13 -m pytest gui_transcription\app_tests -v -m ""
+python -m pytest gui_transcription/app_tests -v -m ""
 ```
+
+(On Windows, use `py -3` and `gui_transcription\app_tests` as above.)
 
 ### What's covered where
 
@@ -480,6 +559,17 @@ gets the most detailed treatment there.
 
 ## Known gaps / next steps
 
+- The image right-click menu actions are Windows-only. On Linux: **Open
+  Image** uses `os.startfile`, which doesn't exist there; **Open Image in
+  Browser** and **Open Chatlog at Message** look the default browser up in
+  the Windows registry; **Open Image Location** relies on Explorer's
+  `/select` flag, which has no common equivalent across Linux file managers;
+  and **Copy Image** uses the Win32 clipboard API. Each one fails and logs
+  the failure instead of crashing. Likely Linux replacements: `xdg-open` for
+  the first three, and `xclip -selection clipboard -t image/png` (X11) or
+  `wl-copy` (Wayland) for Copy Image.
+- The dark title bar is Windows-only (it uses DWM). On Linux, the title bar
+  follows the window manager's theme.
 - Other `config.py` constants (Tesseract path, skip-types, etc.) are still
   not editable from the UI (deferred, not an immediate priority) - only the
   approved-users list has been moved out of config.py so far.

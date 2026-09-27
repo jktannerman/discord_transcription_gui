@@ -170,7 +170,13 @@ class App:
         self.root.withdraw()
         self.root.title("Discord Transcription Tool")
         self.root.geometry("700x500")
-        self.root.state("zoomed")
+        # Start maximized. The "zoomed" wm state only exists on Windows and
+        # macOS; X11 Tk rejects it and exposes maximizing as the -zoomed
+        # attribute instead.
+        try:
+            self.root.state("zoomed")
+        except tk.TclError:
+            self.root.attributes("-zoomed", True)
         theme.apply_dark_theme(self.root)
 
         self.container = ttk.Frame(self.root, padding=12)

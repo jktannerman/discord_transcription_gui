@@ -108,4 +108,11 @@ turn\1
 # tom -> torn - 1
 # biocyle -> bicycle - 1
 # toa -> to a - 1
-# ttle -> little - 1
+# ttle -> little - 2
+# €xpedition -> Expedition - 1
+# fiesh -> flesh - 1
+# itout -> it out - 1
+# biame -> blame - 1
+# titted -> tilted - 1
+# cil -> oil - 1
+# olose -> close - 1
