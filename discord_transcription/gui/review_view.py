@@ -243,6 +243,12 @@ class ReviewFrame(
         # _build_row. None means either nothing was focused when a row was
         # last destroyed, or that restore has already happened.
         self._refocus_slot: Optional[Tuple[int, str]] = None
+        # The text box that most recently had focus, kept even after this
+        # app stops being the active window - Tk's focus_get() then returns
+        # None, which on some desktops is already the case by the time the
+        # window-close handler runs its final save. Cleared when focus goes
+        # to the Finalize button. See get_focused_slot.
+        self._last_focused_slot: Optional[Tuple[int, str]] = None
         self._update_job: Optional[str] = None
         self._initial_position_job: Optional[str] = None
         # Monotonic counter stamped on every _log_event call, purely so log
@@ -397,6 +403,7 @@ class ReviewFrame(
         # instead. <<PrevWindow>> is Tk's own name for every platform's
         # "previous" key (Shift-Tab, ISO_Left_Tab, hpBackTab).
         self._finalize_button.bind("<<PrevWindow>>", self._on_shift_tab)
+        self._finalize_button.bind("<FocusIn>", lambda e: self._note_focused_slot(None), add="+")
         self._finalize_button_row = button_row
         self._finalize_button_visible = False
 
@@ -498,7 +505,14 @@ class ReviewFrame(
             self._focus_text_box(index, role)
             return
         if self._initial_scroll_fraction is not None:
-            self._canvas.yview_moveto(self._initial_scroll_fraction)
+            # The scrollregion has to be set first: without one, yview_moveto
+            # is silently ignored (see _ensure_materialized).
+            total_height = sum(self._row_heights)
+            if total_height > 0:
+                self._canvas.configure(
+                    scrollregion=(0, 0, max(self._canvas.winfo_width(), 1), total_height)
+                )
+                self._canvas.yview_moveto(self._initial_scroll_fraction)
         self._reconcile()
 
     def _on_mousewheel(self, event: tk.Event) -> str:
@@ -1083,11 +1097,23 @@ class ReviewFrame(
         ]
 
     def get_focused_slot(self) -> Optional[Tuple[int, str]]:
-        """(item_index, role) of the currently-focused text box, or None if
-        no text box has focus (e.g. focus is on the Finalize button, or
-        nothing in this frame at all) - used by autosave to remember where
-        to restore focus to on resume."""
-        return self._focused_slot()
+        """The text box to restore focus to on resume, for autosave.
+
+        The currently focused box if Tk reports one. Otherwise the last box
+        that had focus: Tk reports no focus at all while this app isn't the
+        active window, which includes the moment the window is being closed
+        on some desktops, and that mustn't erase where the user was.
+
+        Returns:
+            (item_index, role), or None if no box has had focus yet, or
+            focus last went to the Finalize button.
+        """
+        current = self._focused_slot()
+        if current is not None:
+            return current
+        if self.focus_get() is self._finalize_button:
+            return None
+        return self._last_focused_slot
 
     def get_scroll_top_fraction(self) -> float:
         """Canvas scroll position as a [0.0, 1.0] fraction - used as the

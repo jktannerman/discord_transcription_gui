@@ -208,6 +208,20 @@ plus the scroll/debounce/Finalize-button machinery:
   frame rather than clearing it, so it's never actually `None` by the time
   the guard runs. The cursor isn't part of the autosaved session format, so
   a resumed box's cursor still starts at `"1.0"`.
+- **Autosave can't ask Tk what's focused.** Tk's `focus_get()` returns
+  `None` whenever this app isn't the active window - and on the project
+  owner's desktop that's already true by the time the window-close handler
+  runs its final save. Asking it at save time recorded no focused box on 18
+  of 22 closes in one day's `app.log`, so resuming rarely restored focus.
+  `get_focused_slot` falls back to `self._last_focused_slot`, which every
+  box's `<FocusIn>` (and `_focus_text_box`, since FocusIn only arrives
+  once the app is active) records, and the Finalize button's `<FocusIn>`
+  clears. The resume's scroll-fraction fallback had its own trap: it called
+  `yview_moveto` before the canvas had a scrollregion, which Tk silently
+  ignores (the same trap `_ensure_materialized` documents), so it now sets
+  the scrollregion first. Regression tests:
+  `test_focus_survives_app_losing_focus_save_and_resume` and
+  `test_saved_scroll_fraction_is_restored_when_no_box_was_focused`.
 - **The per-box model lives outside the widgets.** (`discord_transcription/gui/slot_state.py`,
   `discord_transcription/gui/slot_view.py`, `discord_transcription/gui/edit_history.py`.) Each editable box has
   two halves, both keyed by `(item_index, role)`:

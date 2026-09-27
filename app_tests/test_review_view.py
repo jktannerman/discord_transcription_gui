@@ -20,6 +20,7 @@ from PIL import Image
 
 from discord_transcription.chatlog import MessageEntry
 from discord_transcription.gui.layout_constants import ROW_PACK_PADY_PX
+from discord_transcription.gui.main_window import _match_focus_slot
 from discord_transcription.gui.review_view import ReviewFrame
 from discord_transcription.gui.column_divider import divider_x_for_width
 from discord_transcription.gui.image_loading import fitted_image_size, image_bounding_box
@@ -1974,3 +1975,95 @@ def test_canvas_width_change_keeps_the_column_proportion(root, wide_image):
     root.update()
 
     assert frame._image_column_width_px == image_column_width_for_fraction(0.4, frame._canvas_width())
+
+
+# -- saving/restoring where the user was (resume) -----------------------------
+
+
+def _app_loses_focus(frame):
+    """What Tk reports once this app isn't the active window (including,
+    on some desktops, by the time the window-close handler runs): no focus
+    anywhere in the app."""
+    frame.focus_get = lambda: None
+
+
+def test_focused_slot_is_kept_after_the_app_loses_focus(root, sample_image):
+    """Regression test: autosave's final save on window close recorded no
+    focused box, because Tk's focus_get() returns None once the app isn't
+    the active window - so resuming never restored focus."""
+    items = _items(sample_image, count=10)
+    frame, _ = _build_frame(root, items)
+    frame._focus_text_box(4, "ocr0")
+
+    _app_loses_focus(frame)
+
+    assert frame.get_focused_slot() == (4, "ocr0")
+
+
+def test_focus_in_on_a_box_updates_the_remembered_slot(root, sample_image):
+    items = _items(sample_image, count=10)
+    frame, _ = _build_frame(root, items)
+    frame._focus_text_box(4, "ocr0")
+
+    # e.g. the user clicks into another box
+    frame._slot_views[(3, "message")].text_widget.event_generate("<FocusIn>")
+    _app_loses_focus(frame)
+
+    assert frame.get_focused_slot() == (3, "message")
+
+
+def test_focus_on_the_finalize_button_clears_the_remembered_slot(root, sample_image):
+    items = _items(sample_image, count=10)
+    frame, _ = _build_frame(root, items)
+    frame._focus_text_box(4, "ocr0")
+
+    frame._finalize_button.event_generate("<FocusIn>")
+    _app_loses_focus(frame)
+
+    assert frame.get_focused_slot() is None
+
+
+def test_nothing_focused_yet_reports_no_slot(root, sample_image):
+    items = _items(sample_image, count=10)
+    frame, _ = _build_frame(root, items)
+    _app_loses_focus(frame)
+
+    assert frame.get_focused_slot() is None
+
+
+def test_saved_scroll_fraction_is_restored_when_no_box_was_focused(root, sample_image):
+    """Regression test: the scroll-fraction fallback called yview_moveto
+    before the canvas had a scrollregion, which Tk silently ignores - so a
+    resume with no saved focus always opened at the top."""
+    items = _items(sample_image, count=60)
+    frame, _ = _build_frame(root, items, initial_scroll_fraction=0.5)
+    root.update()
+
+    top_fraction = frame._canvas.yview()[0]
+    assert top_fraction == pytest.approx(0.5, abs=0.05)
+    assert frame.get_materialized_range()[0] > 0
+
+
+def test_focus_survives_app_losing_focus_save_and_resume(root, sample_image):
+    """In the order a user hits it: focus a box deep in the transcript,
+    switch away / close the window (the app loses focus), autosave records
+    the slot by message ID, then a resumed review screen restores focus
+    and scrolls that box into view."""
+    items = _items(sample_image, count=60)
+    frame, _ = _build_frame(root, items)
+    frame._ensure_materialized(40)
+    frame._focus_text_box(40, "ocr0")
+    _app_loses_focus(frame)
+
+    slot = frame.get_focused_slot()
+    saved = [items[slot[0]].message_id, slot[1]]  # as main_window._snapshot_and_save stores it
+    frame.destroy()
+
+    resumed, _ = _build_frame(root, items, initial_focus_slot=_match_focus_slot(items, saved))
+    root.update()
+
+    key = (40, "ocr0")
+    assert resumed.get_focused_slot() == key
+    box_top, box_bottom = _container_bounds(resumed, *key)
+    assert box_top >= resumed._canvas.canvasy(0) - 1
+    assert box_bottom <= resumed._canvas.canvasy(resumed._canvas.winfo_height()) + 1

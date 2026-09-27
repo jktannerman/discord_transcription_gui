@@ -487,6 +487,7 @@ class RowBuildingMixin:
         )
 
         text_widget.bind("<Control-BackSpace>", self._delete_word_backward)
+        text_widget.bind("<FocusIn>", lambda e, k=key: self._note_focused_slot(k), add="+")
         text_widget.bind("<Tab>", self._on_tab)
         # <<PrevWindow>> rather than <Shift-Tab> - see the same binding on
         # the Finalize button in review_view.py for why.

@@ -211,6 +211,11 @@ class KeyboardNavMixin:
     def _on_shift_tab(self, event: tk.Event) -> str:
         return self._move_focus(-1)
 
+    def _note_focused_slot(self, slot: Optional[Tuple[int, str]]) -> None:
+        """Record the text box that just got focus (None: the Finalize
+        button) - see ReviewFrame.get_focused_slot."""
+        self._last_focused_slot = slot
+
     def _focused_slot(self) -> Optional[Tuple[int, str]]:
         focused = self.focus_get()
         if focused is None:
@@ -435,6 +440,10 @@ class KeyboardNavMixin:
             )
             return
         view.text_widget.focus_set()
+        # Recorded directly as well as via <FocusIn>: Tk only delivers
+        # FocusIn once this app is the active window, which it may not be
+        # yet (e.g. restoring a resumed session's focus at startup).
+        self._note_focused_slot((index, role))
         view.text_widget.see("insert")
         self._scroll_box_into_view((index, role), align_top=align_top)
 
