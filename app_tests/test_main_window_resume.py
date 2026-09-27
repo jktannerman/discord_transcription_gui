@@ -2,9 +2,11 @@ from pathlib import Path
 
 from gui_transcription.app.chatlog import MessageEntry
 from gui_transcription.app.gui.main_window import (
+    _build_finalized_updates,
     _match_finalized_edits,
     _match_focus_slot,
     _match_saved_edits,
+    _match_touched_slots,
 )
 from gui_transcription.app.review_item import ReviewItem
 
@@ -201,3 +203,48 @@ def test_match_finalized_edits_returns_empty_dicts_for_all_items_when_finalized_
     built = _match_finalized_edits(items, {})
 
     assert built == [{}, {}]
+
+
+# -- touched slots / finalized-edit updates ------------------------------------
+
+def test_match_touched_slots_maps_message_ids_to_current_indices():
+    items = [_item("a"), _image_item("b", 1)]
+
+    matched = _match_touched_slots(items, [["b", "ocr0"], ["a", "message"]])
+
+    assert matched == {(1, "ocr0"), (0, "message")}
+
+
+def test_match_touched_slots_drops_vanished_messages_roles_and_junk():
+    items = [_item("a"), _image_item("b", 1)]
+
+    matched = _match_touched_slots(
+        items, [["gone", "message"], ["b", "ocr3"], "junk", ["a"], ["a", "message"]]
+    )
+
+    assert matched == {(0, "message")}
+    assert _match_touched_slots(items, None) == set()
+
+
+def test_build_finalized_updates_stores_edits_and_removes_only_touched_reverts():
+    items = [_item("a"), _image_item("b", 2)]
+    edited_texts = [
+        {"message": "edited", "spacer_end": None},
+        {"ocr0": None, "spacer_img0": None, "ocr1": None, "spacer_end": None},
+    ]
+    # b's ocr0 was deliberately unticked; b's ocr1 is unticked/default but
+    # was never acted on, so any stored edit for it must be left alone.
+    touched = {(0, "message"), (1, "ocr0")}
+
+    updates = _build_finalized_updates(items, edited_texts, touched)
+
+    assert updates == {
+        "a": {"message": "edited"},
+        "b": {"ocr0": None},
+    }
+
+
+def test_build_finalized_updates_leaves_untouched_default_boxes_out_entirely():
+    items = [_item("a")]
+
+    assert _build_finalized_updates(items, [{"message": None, "spacer_end": None}], set()) == {}

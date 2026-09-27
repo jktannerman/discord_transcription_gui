@@ -377,7 +377,7 @@ def test_focusing_a_box_scrolls_the_whole_box_fully_into_view_not_just_its_row(r
     assert container_bottom <= view_bottom + 1
 
 
-def test_collect_edited_texts_returns_initial_text_for_untouched_items(root, sample_image):
+def test_collect_edited_texts_reports_none_for_untouched_items(root, sample_image):
     items = _items(sample_image, count=5)
     frame, _ = _build_frame(root, items)
 
@@ -386,14 +386,12 @@ def test_collect_edited_texts_returns_initial_text_for_untouched_items(root, sam
     assert len(collected) == len(items)
     for edited, item in zip(collected, items):
         for role in item.slot_roles:
-            if role.startswith("ocr"):
-                # An untouched OCR box's checkbox starts unchecked, so
-                # _get_box_text reports None (meaning "use the default")
-                # rather than the literal (default) text it displays - see
-                # ReviewFrame._get_box_text.
-                assert edited[role] is None
-            else:
-                assert edited[role] == item.initial_text_for_role(role)
+            # A box still at its default isn't an edit - even though every
+            # row here has been built (so has live widgets) - and an
+            # untouched OCR box's checkbox starts unchecked anyway. None
+            # means "use the default" (see ReviewFrame._get_box_text).
+            assert edited[role] is None
+    assert frame.get_touched_slots() == set()
 
 
 def test_ocr_checkbox_starts_unchecked_for_an_untouched_box(root, sample_image):
@@ -494,6 +492,75 @@ def test_collect_edited_texts_reports_none_for_an_unchecked_ocr_box(root, sample
     collected = frame.collect_edited_texts()
 
     assert collected[image_item]["ocr0"] is None
+
+
+def test_rows_paged_out_and_back_in_still_report_no_edits(root, sample_image):
+    """Scrolling past a box used to save its (default) text, which then
+    counted as an edit - and was stored as a finalized edit at Finalize."""
+    items = _items(sample_image, count=40)
+    frame, _ = _build_frame(root, items)
+    frame._canvas.yview_moveto(1.0)
+    frame._reconcile()
+    frame._canvas.yview_moveto(0.0)
+    frame._reconcile()
+    assert frame._saved_texts  # rows really were torn down and saved
+
+    collected = frame.collect_edited_texts()
+
+    assert all(text is None for edited in collected for text in edited.values())
+
+
+def test_typing_marks_a_box_touched_and_reverting_by_hand_reports_none(root, sample_image):
+    items = _items(sample_image, count=5)
+    frame, _ = _build_frame(root, items)
+    text_item = next(i for i, item in enumerate(items) if item.initial_message_text is not None)
+    key = (text_item, "message")
+    widget = frame._text_widgets[key]
+    widget.focus_force()
+    root.update_idletasks()
+    widget.insert("end", "!")
+    root.update()
+
+    assert key in frame.get_touched_slots()
+    assert frame.collect_edited_texts()[text_item]["message"] == items[text_item].initial_message_text + "!"
+
+    widget.delete("end-2c", "end-1c")
+    root.update()
+
+    assert frame.collect_edited_texts()[text_item]["message"] is None
+    assert key in frame.get_touched_slots()
+
+
+def test_unticking_an_ocr_box_marks_it_touched(root, sample_image):
+    items = _items(sample_image, count=5)
+    frame, _ = _build_frame(root, items)
+    image_item = next(i for i, item in enumerate(items) if item.image_paths)
+    key = (image_item, "ocr0")
+    frame._checkbox_vars[key].set(True)
+    frame._on_ocr_checkbox_toggle(key)
+    frame._checkbox_vars[key].set(False)
+    frame._on_ocr_checkbox_toggle(key)
+
+    assert key in frame.get_touched_slots()
+
+
+def test_building_rows_alone_touches_nothing(root, sample_image):
+    """Only deliberate actions may mark a slot touched - Finalize relies on
+    that to never remove a stored edit the user didn't act on."""
+    items = _items(sample_image, count=40)
+    frame, _ = _build_frame(root, items)
+    frame._canvas.yview_moveto(1.0)
+    frame._reconcile()
+    root.update()
+
+    assert frame.get_touched_slots() == set()
+
+
+def test_initial_touched_slots_are_kept(root, sample_image):
+    items = _items(sample_image, count=5)
+    frame, _ = _build_frame(root, items, initial_touched_slots={(1, "spacer_end")})
+
+    assert frame.get_touched_slots() == {(1, "spacer_end")}
 
 
 def test_ocr_checkbox_state_and_both_versions_survive_paging_out_and_back_in(root, sample_image):

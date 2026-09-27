@@ -140,6 +140,58 @@ def _match_focus_slot(
     return (idx, role) if idx is not None else None
 
 
+def _match_touched_slots(
+    review_items: list["review_item.ReviewItem"], raw_slots: Optional[list]
+) -> set[tuple[int, str]]:
+    """Translate a saved session's [[message_id, role], ...] touched slots
+    onto current (index, role) slots, dropping any whose message or role no
+    longer exists (same rules as _match_edits_by_message_id)."""
+    if not isinstance(raw_slots, list):
+        return set()
+    by_id = {item.message_id: idx for idx, item in enumerate(review_items)}
+    matched = set()
+    for entry in raw_slots:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+            continue
+        message_id, role = entry
+        idx = by_id.get(message_id)
+        if idx is not None and role in review_items[idx].slot_roles:
+            matched.add((idx, role))
+    return matched
+
+
+def _build_finalized_updates(
+    review_items: list["review_item.ReviewItem"],
+    edited_texts: list[dict[str, Optional[str]]],
+    touched_slots: set[tuple[int, str]],
+) -> dict[str, dict[str, Optional[str]]]:
+    """Work out what Finalize should change in the stored finalized edits.
+
+    Args:
+        review_items: This run's items, in transcript order.
+        edited_texts: One role->text dict per item (None = default/unchecked).
+        touched_slots: (index, role) slots the user deliberately acted on.
+
+    Returns:
+        {message_id: {role: text_or_None}} for state.save_finalized_edits:
+        an edited box stores its text; a box at its default (or unchecked)
+        maps to None - remove the stored edit - *only* if the user touched
+        it this session. Any other box is left out, keeping whatever is
+        stored for it.
+    """
+    updates: dict[str, dict[str, Optional[str]]] = {}
+    for idx, (item, edited) in enumerate(zip(review_items, edited_texts)):
+        per_msg: dict[str, Optional[str]] = {}
+        for role, text in edited.items():
+            if text is not None:
+                per_msg[role] = text
+            elif (idx, role) in touched_slots:
+                per_msg[role] = None
+        if per_msg:
+            updates[item.message_id] = per_msg
+    return updates
+
+
 @dataclass
 class RunContext:
     """The inputs a single run (OCR -> review -> finalize) was started with.
@@ -480,6 +532,10 @@ class App:
             ),
             "use_cache": run.use_cache,
             "edited_texts": edited_texts_by_id,
+            "touched_slots": sorted(
+                [self._review_items[idx].message_id, role]
+                for idx, role in frame.get_touched_slots()
+            ),
             "focus_slot": focus_message_id,
             "scroll_fraction": frame.get_scroll_top_fraction(),
         }
@@ -560,7 +616,11 @@ class App:
         initial_saved_texts = None
         initial_focus_slot = None
         initial_scroll_fraction = None
+        initial_touched_slots = None
         if resume is not None:
+            initial_touched_slots = _match_touched_slots(
+                self._review_items, resume.get("touched_slots")
+            )
             saved_texts = resume.get("edited_texts")
             if not isinstance(saved_texts, dict):
                 logger.warning(
@@ -586,6 +646,7 @@ class App:
             initial_focus_slot=initial_focus_slot,
             initial_scroll_fraction=initial_scroll_fraction,
             initial_finalized_texts=initial_finalized_texts,
+            initial_touched_slots=initial_touched_slots,
         )
         self._set_frame(frame)
         self._review_frame = frame
@@ -641,14 +702,13 @@ class App:
 
         warnings = list(result.warnings)
 
-        finalized_by_id: dict[str, dict] = {}
-        for item, edited in zip(self._review_items, edited_texts):
-            per_msg = {role: text for role, text in edited.items() if text is not None}
-            if per_msg:
-                finalized_by_id[item.message_id] = per_msg
-        if finalized_by_id:
+        touched_slots = (
+            frame.get_touched_slots() if frame is not None and frame.winfo_exists() else set()
+        )
+        updates = _build_finalized_updates(self._review_items, edited_texts, touched_slots)
+        if updates:
             try:
-                state.save_finalized_edits(str(run.html_path), finalized_by_id)
+                state.save_finalized_edits(str(run.html_path), updates)
             except Exception as exc:
                 logger.exception("could not save finalized edits")
                 warnings.append(

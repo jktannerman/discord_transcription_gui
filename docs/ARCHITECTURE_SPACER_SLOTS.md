@@ -107,12 +107,13 @@ pre-spacer-slot session is expected to still be on disk.
 
 ## Finalized edit persistence
 
-When the user clicks Finalize and the pipeline succeeds,
-`_on_finalize_clicked` saves every non-`None` slot value to
-`finalized_edits.json` (via `state.save_finalized_edits`), keyed by the HTML
-path and each message's Discord `message_id`. On a subsequent fresh run of
-the same chatlog, `_show_review` loads these via `state.load_finalized_edits`
-and passes them to `ReviewFrame` as `initial_finalized_texts`.
+When the user clicks Finalize and the output file has been written,
+`_on_finalize_clicked` saves the changes worked out by
+`main_window._build_finalized_updates` to `finalized_edits.json` (via
+`state.save_finalized_edits`), keyed by the HTML path and each message's
+Discord `message_id`. On a subsequent fresh run of the same chatlog,
+`_show_review` loads these via `state.load_finalized_edits` and passes them
+to `ReviewFrame` as `initial_finalized_texts`.
 
 **Priority order** inside `ReviewFrame.__init__`: `_saved_texts` is seeded
 first from the in-progress session (`initial_saved_texts`), then from
@@ -121,12 +122,23 @@ checkbox-seeding loop (`checked = saved is not None and saved != default`)
 runs last, so a finalized edit that differs from the OCR default starts its
 checkbox checked automatically with no special-case code.
 
-**Merge semantics** (`state.save_finalized_edits`): new non-`None` values
-are merged into whatever was already stored for this chatlog; `None` values
-(unchecked OCR boxes) are skipped, leaving the prior finalized text for that
-slot intact. A finalized edit is never deleted - once stored it persists
-until overwritten by a subsequent finalize that supplies a non-`None` value
-for that slot.
+**What counts as an edit**: `ReviewFrame._get_box_text` reports `None`
+for any box whose text equals its default (and for any unchecked OCR box),
+so a box whose row was merely built - scrolled past - is never an edit.
+
+**Update semantics** (`_build_finalized_updates` + `state.save_finalized_edits`):
+a non-`None` value stores that text. A `None` value removes the stored edit
+for that slot, but only if the slot is in `ReviewFrame.get_touched_slots()`
+- the user deliberately acted on it this session (typed/pasted/undid in it
+while focused, or clicked its OCR checkbox). Every other slot is left out
+of the update entirely, keeping whatever is stored for it: requiring
+positive evidence of intent means a logic bug that unticks a box or resets
+its text can't remove a finalized edit. Touched slots are saved with the
+session (`touched_slots`, as `[message_id, role]` pairs) so a revert made
+before closing the app still counts after resuming. Before any stored edit
+is replaced by different text or removed, the old version is appended to
+`finalized_edits_history.json` (`state.load_finalized_edits_history`),
+which is written first and never trimmed.
 
 **Matching** (`_match_finalized_edits`): stored `{message_id: {role: text}}`
 data is aligned to the current item list by Discord `message_id` (not by

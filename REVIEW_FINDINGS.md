@@ -53,7 +53,7 @@ How sure each finding is:
   *Fix:* keep a cache per image and only run OCR on images that are missing
   from it. This fits well with C3.
 
-- [ ] **A4. Every box you scroll past counts as edited** [code-read]
+- [x] **A4. Every box you scroll past counts as edited** [code-read] - fixed: a box is only an edit if it differs from its default; a stored edit is only removed after a deliberate revert (recorded user action, persisted in the session), and every replaced/removed stored edit is archived to `finalized_edits_history.json`
   When a row is scrolled out of view, `ReviewFrame._destroy_row` saves every
   box's text unconditionally. `_get_box_text` then returns the live or saved
   text for message and spacer boxes whether or not you changed them. So
@@ -98,7 +98,7 @@ How sure each finding is:
   - The start-date label says `YYYY-MM-DD`, but the pre-filled value is
     `YYYY-MM-DD-HH-MM-SS` and is read as **UTC**. The screen never says so.
 
-- [ ] **A9. An edit behind an unchecked OCR box is lost on restart** [code-read]
+- [x] **A9. An edit behind an unchecked OCR box is lost on restart** [code-read] - decided: intended (unchecking = use OCR); README corrected
   For an unchecked OCR box, `_get_box_text` returns `None`, so
   `_user_edited_texts` for that box is never autosaved. Re-checking the box
   after a restart can't bring the edit back. The README suggests it can (see
@@ -266,11 +266,11 @@ How sure each finding is:
   keep one viewport of rows loaded on each side, recompute the range from
   scratch each time, and correct the scroll position after measuring.
 
-- [ ] **E2. The README's claim about which edits are saved at Finalize is wrong**
+- [x] **E2. The README's claim about which edits are saved at Finalize is wrong** - fixed with A4
   It says "every box that had a user edit" is stored. In practice it's every
   loaded message/spacer box (see A4).
 
-- [ ] **E3. The README's claim about resuming checkbox edits is wrong**
+- [x] **E3. The README's claim about resuming checkbox edits is wrong** - fixed with A9
   It says resuming shows your edited version "regardless of whether it
   happened to be checked or unchecked" at close. That isn't true for
   unchecked boxes (see A9).

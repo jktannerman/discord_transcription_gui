@@ -10,6 +10,7 @@ compatibility constraints.
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -314,27 +315,56 @@ def load_finalized_edits(html_path: str) -> Optional[dict]:
     return data
 
 
-def save_finalized_edits(html_path: str, edits_by_message: dict) -> None:
-    """Merge edits_by_message ({message_id: {role: text}}) into the stored
-    finalized edits for html_path. Only non-None values in edits_by_message
-    are stored; roles absent from or None in the new dict leave any prior
-    stored value for that role intact ("preserve" policy - an untouched or
-    unchecked box at finalize time does not erase a prior finalized edit).
+def save_finalized_edits(html_path: str, updates_by_message: dict) -> None:
+    """Apply one Finalize's changes to the stored finalized edits for html_path.
+
+    Roles absent from updates_by_message are left exactly as stored, so a
+    box the user didn't deliberately change keeps its prior finalized edit.
+    Before any stored edit is replaced by different text or removed, the
+    old version is appended to config.FINALIZED_EDITS_HISTORY_FILE, and
+    that history is written first - if it can't be, nothing is changed.
     Finalized edits for other chatlogs are kept alongside this one
-    indefinitely."""
+    indefinitely.
+
+    Args:
+        html_path: The chatlog these edits belong to.
+        updates_by_message: {message_id: {role: text_or_None}}. A string
+            stores that text for the role; None removes any stored edit for
+            it (the user deliberately reverted the box to its default).
+    """
     all_finalized = _read_json_with_backup(config.FINALIZED_EDITS_FILE)
     if not isinstance(all_finalized, dict):
         all_finalized = {}
 
     key = str(Path(html_path))
     existing = all_finalized.get(key, {})
-    for message_id, role_texts in edits_by_message.items():
+    replaced_at = datetime.now(timezone.utc).isoformat()
+    history_entries = []
+    for message_id, role_texts in updates_by_message.items():
         per_message = existing.get(message_id, {})
         for role, text in role_texts.items():
-            if text is not None:
+            old_text = per_message.get(role)
+            if old_text is not None and old_text != text:
+                history_entries.append({
+                    "html_path": key,
+                    "message_id": message_id,
+                    "role": role,
+                    "old_text": old_text,
+                    "new_text": text,
+                    "replaced_at": replaced_at,
+                })
+            if text is None:
+                per_message.pop(role, None)
+            else:
                 per_message[role] = text
-        existing[message_id] = per_message
+        if per_message:
+            existing[message_id] = per_message
+        else:
+            existing.pop(message_id, None)
     all_finalized[key] = existing
+
+    if history_entries:
+        _append_finalized_edits_history(history_entries)
     _atomic_write_json(config.FINALIZED_EDITS_FILE, all_finalized)
 
     stored_count = sum(len(roles) for roles in existing.values())
@@ -344,8 +374,42 @@ def save_finalized_edits(html_path: str, edits_by_message: dict) -> None:
             html_path=html_path,
             message_count=len(existing),
             stored_role_count=stored_count,
+            replaced_or_removed_count=len(history_entries),
         ),
     )
+
+
+def _append_finalized_edits_history(entries: list) -> None:
+    """Append entries to the finalized-edit history file (see
+    config.FINALIZED_EDITS_HISTORY_FILE). Never removes anything."""
+    history = _read_json_with_backup(config.FINALIZED_EDITS_HISTORY_FILE)
+    if not isinstance(history, list):
+        history = []
+    history.extend(entries)
+    _atomic_write_json(config.FINALIZED_EDITS_HISTORY_FILE, history)
+    logger.info(
+        "archived replaced/removed finalized edits",
+        extra=logging_config.extra(count=len(entries), history_size=len(history)),
+    )
+
+
+def load_finalized_edits_history(html_path: Optional[str] = None) -> list:
+    """Return the finalized-edit history, oldest first.
+
+    Args:
+        html_path: If given, only entries for this chatlog are returned.
+
+    Returns:
+        A list of {html_path, message_id, role, old_text, new_text,
+        replaced_at} dicts - empty if nothing has ever been replaced.
+    """
+    history = _read_json_with_backup(config.FINALIZED_EDITS_HISTORY_FILE)
+    if not isinstance(history, list):
+        return []
+    if html_path is None:
+        return history
+    key = str(Path(html_path))
+    return [entry for entry in history if entry.get("html_path") == key]
 
 
 def load_cache(folder_path: str) -> Optional[dict]:

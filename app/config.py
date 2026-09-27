@@ -90,6 +90,11 @@ SESSION_BACKUP_COUNT = 3
 # Merged on each Finalize (never deleted) so unchecked/untouched boxes at
 # finalize time leave prior stored edits intact.
 FINALIZED_EDITS_FILE = APP_DATA_DIR / "finalized_edits.json"
+# [{html_path, message_id, role, old_text, new_text, replaced_at}, ...] -
+# append-only record of every stored finalized edit that a later Finalize
+# replaced or removed (see state.save_finalized_edits), so an edit is never
+# lost for good even if it was removed by mistake.
+FINALIZED_EDITS_HISTORY_FILE = APP_DATA_DIR / "finalized_edits_history.json"
 LOG_FILE = APP_DATA_DIR / "app.log"
 # Separate, much higher-frequency stream for the review screen's per-scroll-
 # tick tracing (reconcile/debounce/remeasure/image-load events) - kept out of

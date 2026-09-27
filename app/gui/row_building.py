@@ -841,6 +841,9 @@ class RowBuildingMixin:
         if key[1].startswith("ocr") and had_focus and key not in self._suppress_ocr_auto_check:
             self._on_ocr_box_user_edit(key, text_widget)
         if had_focus:
+            # The same "focused means the user did it" signal as above -
+            # covers typing, paste, Ctrl+Backspace and undo/redo alike.
+            self._touched_slots.add(key)
             self._scroll_box_into_view(key)
 
     def _on_ocr_box_user_edit(self, key: Tuple[int, str], text_widget: tk.Text) -> None:
@@ -884,6 +887,7 @@ class RowBuildingMixin:
         text_widget = self._text_widgets[key]
         checked = self._checkbox_vars[key].get()
         self._checkbox_checked[key] = checked
+        self._touched_slots.add(key)
         image_index = int(role[len("ocr"):])
         ocr_default = self._items[index].initial_ocr_texts[image_index]
         text_to_show = self._user_edited_texts.get(key, ocr_default) if checked else ocr_default

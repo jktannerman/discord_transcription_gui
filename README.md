@@ -225,10 +225,11 @@ What's in scope for v1:
    without discarding whatever you'd typed - re-checking it brings your
    edit straight back. Both versions, and the checkbox's own state, survive
    a row being scrolled out of the materialized window and back in, the
-   same as an ordinary edit does; resuming a saved session always shows
-   your edited version (checked) for any box that has one, regardless of
-   whether it happened to be checked or unchecked at the moment you closed
-   the app. Tab/Shift-Tab never land on the checkbox itself - only on the
+   same as an ordinary edit does. Unchecking means "use the OCR text": an
+   edit hidden behind an unchecked box is kept only while the app stays
+   open, so re-checking can bring it back within a session, but it isn't
+   saved - after closing and resuming, that box is just the OCR text.
+   Tab/Shift-Tab never land on the checkbox itself - only on the
    text boxes, same as before this existed.
 
    When a box is pre-populated from a previously-finalized edit (see
@@ -312,15 +313,23 @@ What's in scope for v1:
    clipboard tool installed) is shown as a warning on the done screen
    rather than undoing the run.
 
-   Finalize also stores every box that had a user edit (non-None value in
-   `collect_edited_texts`) into `finalized_edits.json`, keyed by this
-   chatlog's HTML path and each message's Discord message ID. These are
-   merged into whatever was already stored for this chatlog (prior edits
-   for boxes not touched in this run are preserved), so running again on
-   the same chatlog - e.g. to fix a noticed mistake - starts with every
-   prior edit already in place. Spacer-box edits are included. Boxes that
-   were unchecked or never touched (value is `None`) do not overwrite a
-   prior stored edit for the same slot.
+   Finalize also stores every box whose text differs from its default
+   (an OCR box only while checked) into `finalized_edits.json`, keyed by
+   this chatlog's HTML path and each message's Discord message ID, so
+   running again on the same chatlog - e.g. to fix a noticed mistake -
+   starts with every prior edit already in place. Spacer-box edits are
+   included. Just scrolling past a box doesn't count as an edit.
+
+   A stored edit is only removed when you deliberately revert that box:
+   unchecking its OCR checkbox, or editing it back to its default text,
+   during the session you finalize (the session remembers these actions
+   across closing and resuming). A box that is at its default with no such
+   action behind it keeps its stored edit, so a bug that unticked a box or
+   reset its text could never erase a finalized edit. Anything a Finalize
+   replaces or removes is first copied into `finalized_edits_history.json`
+   (in the app's data folder), which is only ever appended to - so no
+   finalized edit is ever lost for good; recovering one currently means
+   copying its `old_text` out of that file by hand.
 
 ## OCR corrections
 

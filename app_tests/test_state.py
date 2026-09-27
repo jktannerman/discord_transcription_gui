@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from gui_transcription.app import config, state
 
 
@@ -120,18 +122,75 @@ def test_save_finalized_edits_isolates_html_paths(tmp_path, monkeypatch):
     assert state.load_finalized_edits(html_b) == {"msgB": {"message": "text B"}}
 
 
-def test_save_finalized_edits_skips_none_values(tmp_path, monkeypatch):
-    """None values in the new dict must be silently dropped - they represent
-    unchecked or untouched boxes whose prior stored edit should be preserved,
-    not overwritten with None."""
+def test_save_finalized_edits_removes_roles_set_to_none(tmp_path, monkeypatch):
+    """None means the user deliberately reverted that box - its stored edit
+    is removed, while other roles of the same message are kept."""
     _patch_finalized(monkeypatch, tmp_path)
     html = "/path/to/chatlog.html"
 
-    state.save_finalized_edits(html, {"msg1": {"message": "original"}})
-    state.save_finalized_edits(html, {"msg1": {"message": None, "ocr0": "ocr text"}})
+    state.save_finalized_edits(html, {"msg1": {"message": "original", "ocr0": "ocr text"}})
+    state.save_finalized_edits(html, {"msg1": {"message": None}})
 
-    result = state.load_finalized_edits(html)
-    assert result == {"msg1": {"message": "original", "ocr0": "ocr text"}}
+    assert state.load_finalized_edits(html) == {"msg1": {"ocr0": "ocr text"}}
+
+
+def test_save_finalized_edits_drops_a_message_once_all_its_roles_are_removed(tmp_path, monkeypatch):
+    _patch_finalized(monkeypatch, tmp_path)
+    html = "/path/to/chatlog.html"
+
+    state.save_finalized_edits(html, {"msg1": {"message": "a"}, "msg2": {"message": "b"}})
+    state.save_finalized_edits(html, {"msg1": {"message": None}})
+
+    assert state.load_finalized_edits(html) == {"msg2": {"message": "b"}}
+
+
+def test_removing_or_replacing_a_finalized_edit_archives_the_old_text(tmp_path, monkeypatch):
+    _patch_finalized(monkeypatch, tmp_path)
+    html = "/path/to/chatlog.html"
+
+    state.save_finalized_edits(html, {"msg1": {"message": "first", "ocr0": "long edit"}})
+    state.save_finalized_edits(html, {"msg1": {"message": "second", "ocr0": None}})
+
+    history = state.load_finalized_edits_history(html)
+    by_role = {entry["role"]: entry for entry in history}
+    assert set(by_role) == {"message", "ocr0"}
+    assert by_role["message"]["old_text"] == "first"
+    assert by_role["message"]["new_text"] == "second"
+    assert by_role["ocr0"]["old_text"] == "long edit"
+    assert by_role["ocr0"]["new_text"] is None
+    assert all(entry["message_id"] == "msg1" for entry in history)
+
+
+def test_history_only_records_real_changes_and_is_never_trimmed(tmp_path, monkeypatch):
+    _patch_finalized(monkeypatch, tmp_path)
+    html = "/path/to/chatlog.html"
+
+    state.save_finalized_edits(html, {"msg1": {"message": "v1"}})  # new - nothing to archive
+    state.save_finalized_edits(html, {"msg1": {"message": "v1"}})  # unchanged
+    state.save_finalized_edits(html, {"msg1": {"message": "v2"}})
+    state.save_finalized_edits(html, {"msg1": {"message": "v3"}})
+    state.save_finalized_edits("/other.html", {"x": {"message": "y"}})
+
+    assert [e["old_text"] for e in state.load_finalized_edits_history(html)] == ["v1", "v2"]
+    assert len(state.load_finalized_edits_history()) == 2
+
+
+def test_finalized_edits_unchanged_if_history_cannot_be_written(tmp_path, monkeypatch):
+    """The history is written first - if that fails, the stored edits must
+    not have been modified (so the old text is never removed unarchived)."""
+    _patch_finalized(monkeypatch, tmp_path)
+    html = "/path/to/chatlog.html"
+    state.save_finalized_edits(html, {"msg1": {"message": "precious"}})
+
+    def failing_append(entries):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(state, "_append_finalized_edits_history", failing_append)
+
+    with pytest.raises(OSError):
+        state.save_finalized_edits(html, {"msg1": {"message": None}})
+
+    assert state.load_finalized_edits(html) == {"msg1": {"message": "precious"}}
 
 
 def test_load_finalized_edits_returns_none_for_unknown_path_when_file_exists(tmp_path, monkeypatch):

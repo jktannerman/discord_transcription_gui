@@ -110,7 +110,7 @@ pass changes only timing, never the result.
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from .. import logging_config
 from ..review_item import ReviewItem
@@ -158,6 +158,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         initial_focus_slot: Optional[Tuple[int, str]] = None,
         initial_scroll_fraction: Optional[float] = None,
         initial_finalized_texts: Optional[List[Dict[str, Optional[str]]]] = None,
+        initial_touched_slots: Optional[Iterable[Tuple[int, str]]] = None,
     ):
         super().__init__(master)
         logger.info(
@@ -223,6 +224,16 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
                 for role, text in edited.items():
                     if text is not None and (idx, role) not in self._saved_texts:
                         self._saved_texts[(idx, role)] = text
+        # Slots the user has deliberately acted on this session - typed/
+        # pasted/undone in, or clicked the OCR checkbox of (see
+        # row_building.py's _on_text_modified/_on_ocr_checkbox_toggle).
+        # Finalize only removes a box's stored finalized edit if its slot is
+        # in here: a box that merely *looks* reverted, with no recorded
+        # action behind it, keeps its stored edit - so a logic bug that
+        # unticks a box or resets its text can't erase a finalized edit.
+        # Persisted with the session (seeded from initial_touched_slots on
+        # resume), since an untick made before closing the app still counts.
+        self._touched_slots: Set[Tuple[int, str]] = set(initial_touched_slots or ())
         # Cursor ("insert" mark) position captured alongside self._saved_texts
         # when a box's row is torn down, so paging a focused box's row out and
         # back in (e.g. a fast Page Up/Down burst that outruns the
@@ -1008,14 +1019,27 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         if role.startswith("ocr") and not self._checkbox_checked.get(key, False):
             return None
         widget = self._text_widgets.get(key)
-        if widget is not None:
-            return widget.get("1.0", "end-1c")
-        return self._saved_texts.get(key)
+        text = widget.get("1.0", "end-1c") if widget is not None else self._saved_texts.get(key)
+        # Text identical to the default isn't an edit - reporting it as one
+        # (as every box used to be, once its row had been built even just
+        # by scrolling past) stored copies of defaults as finalized edits,
+        # which then pinned stale text over newer defaults on later runs.
+        if text is not None and text == self._items[index].initial_text_for_role(role):
+            return None
+        return text
+
+    def get_touched_slots(self) -> Set[Tuple[int, str]]:
+        """The (item_index, role) slots the user has deliberately acted on
+        this session (see self._touched_slots) - used by Finalize to decide
+        which stored finalized edits may be removed, and by autosave so a
+        resumed session keeps them."""
+        return set(self._touched_slots)
 
     def collect_edited_texts(self) -> List[Dict[str, Optional[str]]]:
         """Current role->text mapping for every item, in transcript order -
         one entry per item.slot_roles (content and spacer roles alike) -
-        see _get_box_text for what each value means. Used both for
+        see _get_box_text for what each value means (None: unchanged from
+        the default, or an unchecked OCR box). Used both for
         Finalize and for periodic session autosaving - the two need the
         same snapshot, just written to different places."""
         return [
