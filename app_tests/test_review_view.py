@@ -380,6 +380,46 @@ def test_focusing_a_box_scrolls_the_whole_box_fully_into_view_not_just_its_row(r
     assert container_bottom <= view_bottom + 1
 
 
+
+def test_tab_navigation_aligns_the_target_box_top_with_the_viewport_top(root, sample_image):
+    """Tab/Shift-Tab (_goto_slot) scroll the newly focused box's top edge to
+    the top of the review window, even when the box was already fully
+    visible - not just the minimal scroll _focus_text_box does otherwise."""
+    items = _items(sample_image, count=12)
+    frame, _ = _build_frame(root, items)
+    # A box a little way down the first screen: already fully visible, so
+    # the minimal scroll would leave the view where it is.
+    key = (1, "ocr0")
+    container_top, container_bottom = _container_bounds(frame, *key)
+    assert frame._canvas.canvasy(0) < container_top
+    assert container_bottom <= frame._canvas.canvasy(frame._canvas.winfo_height())
+
+    frame._goto_slot(key)
+    root.update()
+
+    container_top, _ = _container_bounds(frame, *key)
+    assert abs(container_top - frame._canvas.canvasy(0)) <= 1
+    # Real screen pixels agree with the document-space model.
+    real_offset = frame._slot_views[key].container.winfo_rooty() - frame._canvas.winfo_rooty()
+    assert abs(real_offset) <= 1
+
+
+def test_tab_navigation_near_the_end_scrolls_only_as_far_as_the_document_allows(root, sample_image):
+    items = _items(sample_image, count=12)
+    frame, _ = _build_frame(root, items)
+    last_key = frame._slots[-1]
+
+    frame._goto_slot(last_key)
+    root.update()
+
+    # The last box can't reach the top of the window - the view is simply
+    # scrolled to the very bottom, with the box fully visible.
+    _, bottom_fraction = frame._canvas.yview()
+    assert bottom_fraction >= 0.999
+    container_top, container_bottom = _container_bounds(frame, *last_key)
+    assert container_top >= frame._canvas.canvasy(0) - 1
+    assert container_bottom <= frame._canvas.canvasy(frame._canvas.winfo_height()) + 1
+
 def test_collect_edited_texts_reports_none_for_untouched_items(root, sample_image):
     items = _items(sample_image, count=5)
     frame, _ = _build_frame(root, items)

@@ -32,7 +32,7 @@ from tkinter import messagebox, ttk
 from typing import Callable, Optional
 
 from .. import chatlog, config, logging_config, pipeline, review_item, state
-from . import theme
+from . import keyboard_nav, theme
 from .progress_view import ProgressFrame
 from .review_view import ReviewFrame
 from .setup_view import SetupFrame
@@ -310,6 +310,7 @@ class App:
         except tk.TclError:
             self.root.attributes("-zoomed", True)
         theme.apply_dark_theme(self.root)
+        keyboard_nav.bind_select_all(self.root)
 
         self.container = ttk.Frame(self.root, padding=12)
         self.container.pack(fill="both", expand=True)

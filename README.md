@@ -291,7 +291,11 @@ What's in scope for v1:
    has one, then one OCR box per attached image, in attachment order,
    matching their top-to-bottom order on screen, with a spacer box visited
    between/after each of those too; paging the window in if needed),
+   scrolling each newly focused box's top edge to the top of the window
+   (as far as the end of the transcript allows), and
    landing on the Finalize button once there's no further box;
+   **Ctrl+A** selects all of the focused box's text (on Linux too, where
+   Tk's own default for it is "go to start of line");
    **Page Up**/**Page Down** scroll the whole window, overriding Tk's
    default of scrolling within whichever text box has focus; **Up**/**Down**
    move the cursor within a box as usual, but also scroll the review window

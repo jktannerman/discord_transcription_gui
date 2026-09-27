@@ -15,6 +15,9 @@ args would just relocate the coupling, not remove it.
 built once in ReviewFrame.__init__ - a row can now have a "message" box, an
 "ocr" box, or both (message first, since text sits above image), so a
 single item index is no longer enough to address one box.
+
+Also home to bind_select_all, the one app-wide shortcut (Ctrl+A), set up
+once at startup for every screen's text fields.
 """
 
 import re
@@ -30,6 +33,45 @@ logger = logging_config.get_logger(__name__)
 _TRAILING_WORD_RE = re.compile(r"\S+\s*$")
 # Shift modifier bit in a key event's state.
 _SHIFT_MASK = 0x1
+
+# Widget classes whose Ctrl+A should select all their text (see
+# bind_select_all) - every text-entry widget the app uses.
+_SELECT_ALL_CLASSES = ("Text", "Entry", "TEntry", "TCombobox")
+# Ctrl+A, Ctrl+Shift+A, and Ctrl+A with Caps Lock on.
+_SELECT_ALL_SEQUENCES = ("<Control-a>", "<Control-A>", "<Control-Lock-A>")
+
+
+def _select_all(event: tk.Event) -> str:
+    """Select all of the focused widget's text, via its class's own
+    <<SelectAll>> handler.
+
+    Args:
+        event: The Ctrl+A key event.
+
+    Returns:
+        "break", so the key's default X11 binding (move to line start)
+        doesn't also run.
+    """
+    event.widget.event_generate("<<SelectAll>>")
+    return "break"
+
+
+def bind_select_all(root: tk.Misc) -> None:
+    """Make Ctrl+A select all in every text field, on every platform.
+
+    Tk maps Ctrl+A to select-all only on Windows. On X11 it's an
+    Emacs-style "move to line start" (<<LineStart>>), with select-all on
+    Ctrl+/ instead. A class binding on the physical key takes priority over
+    that virtual event, so this overrides it for the whole app. Tk also
+    binds <<LineStart>> to Control-Lock-A specifically, so Caps Lock needs
+    its own binding here, or it would still go to line start.
+
+    Args:
+        root: Any widget in the app (class bindings are app-wide).
+    """
+    for widget_class in _SELECT_ALL_CLASSES:
+        for sequence in _SELECT_ALL_SEQUENCES:
+            root.bind_class(widget_class, sequence, _select_all)
 
 
 class KeyboardNavMixin:
@@ -200,12 +242,18 @@ class KeyboardNavMixin:
             + (container.winfo_rooty() - row.winfo_rooty())
         )
 
-    def _scroll_box_into_view(self, key: Tuple[int, str]) -> None:
+    def _scroll_box_into_view(self, key: Tuple[int, str], align_top: bool = False) -> None:
         """Adjust the canvas's scroll position only as much as needed to
         bring `key`'s own box - not just its row - fully into the
-        viewport. Used after Tab/Shift-Tab moves focus somewhere not fully
-        visible, and by _on_text_modified to keep a focused box onscreen
-        while typing.
+        viewport. Used when focus is restored to a box, and by
+        _on_text_modified to keep a focused box onscreen while typing.
+
+        With `align_top` (Tab/Shift-Tab, via _goto_slot), the box's top edge
+        is instead scrolled to the top of the viewport every time, even if
+        the box was already fully visible - so the next box always starts
+        at the same place on screen. Near the end of the transcript the
+        view can't scroll that far, so the box just ends up as high as it
+        can go.
 
         A row can stack more than one box (a message's text box, one OCR
         box per attached image, and a spacer box between/after each of
@@ -240,7 +288,11 @@ class KeyboardNavMixin:
         view_bottom = canvas.canvasy(viewport_height)
 
         action = "none"
-        if box_top < view_top:
+        if align_top:
+            if abs(box_top - view_top) >= 1:
+                canvas.yview_moveto(max(box_top, 0) / total_height)
+                action = "align_top"
+        elif box_top < view_top:
             canvas.yview_moveto(max(box_top, 0) / total_height)
             action = "scroll_up"
         elif box_bottom > view_bottom:
@@ -276,6 +328,11 @@ class KeyboardNavMixin:
             model_offset_px=round(model_offset_px, 1),
             model_real_discrepancy_px=round(model_offset_px - real_offset_px, 1),
         )
+        if action == "align_top":
+            # Aligning to the top can move the view down by up to a whole
+            # viewport, further than the minimal scroll ever does, so rows
+            # below the target may not be built yet.
+            self._schedule_reconcile()
         self._update_finalize_button_visibility()
 
     def _on_vertical_arrow(self, event: tk.Event, key: Tuple[int, str]) -> None:
@@ -352,12 +409,13 @@ class KeyboardNavMixin:
             self._schedule_reconcile()
             self._update_finalize_button_visibility()
 
-    def _focus_text_box(self, index: int, role: str) -> None:
+    def _focus_text_box(self, index: int, role: str, align_top: bool = False) -> None:
         """Focus items[index]'s `role` text box, scroll its row into view
         on the review canvas, and make sure the box's own internal view
         shows its cursor - the box may have been built (or last left)
         scrolled to wherever its cursor happened to be, which isn't
-        necessarily the start of its text."""
+        necessarily the start of its text. `align_top` is passed through
+        to _scroll_box_into_view."""
         self._log_event("focus_text_box", index=index, role=role)
         view = self._slot_views.get((index, role))
         if view is None:
@@ -378,7 +436,7 @@ class KeyboardNavMixin:
             return
         view.text_widget.focus_set()
         view.text_widget.see("insert")
-        self._scroll_box_into_view((index, role))
+        self._scroll_box_into_view((index, role), align_top=align_top)
 
     def _move_focus(self, delta: int) -> str:
         """Move focus to the next/previous box in self._slots (or to/from
@@ -418,6 +476,8 @@ class KeyboardNavMixin:
         return "break"
 
     def _goto_slot(self, slot: Tuple[int, str]) -> None:
+        """Focus `slot` for Tab/Shift-Tab, aligning its box to the top of
+        the review window."""
         index, role = slot
         self._ensure_materialized(index)
-        self._focus_text_box(index, role)
+        self._focus_text_box(index, role, align_top=True)
