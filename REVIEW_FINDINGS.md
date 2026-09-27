@@ -175,18 +175,18 @@ How sure each finding is:
   it easy to run OCR in parallel, since Tesseract runs as a separate
   process.
 
-- [ ] **B5. The output file is the only file that isn't written safely** - partly done in A2: now atomic; still no backup of the previous version
+- [x] **B5. The output file is the only file that isn't written safely** - fixed: atomic since A2, and the previous version is now copied to `<output name>.bak` before each write
   Everything in `state.py` is written atomically with a `.bak` copy, but
   `finalize_run` reads the *whole* output file (including past runs), runs a
   regex over it, and rewrites it in place with no backup.
 
-- [ ] **B6. `cleanup.clean_transcript` deletes every literal `\n` in the whole output file**
+- [x] **B6. `cleanup.clean_transcript` deletes every literal `\n` in the whole output file** - fixed: only this run's text is cleaned; past runs are never rewritten. (Kept for new text, since a literal `\n` typed into a message/OCR box would otherwise reach the output.)
   It also hits past runs and any genuine text containing a backslash-n.
   Spacer tokens are already parsed in `review_item.lines_for_item`, so this
   step is probably redundant now. Check, then remove it or limit it to the
   text added this run.
 
-- [ ] **B7. Background thread calls `root.after()` directly**
+- [x] **B7. Background thread calls `root.after()` directly** - fixed: the worker only puts callbacks on a `queue.Queue`; `App._poll_worker_events` runs them on the Tk thread
   The OCR worker in `main_window._begin_run` calls Tk from a non-main thread.
   This usually works with a threaded Tcl build, but it isn't guaranteed.
   *Fix:* use the standard pattern, a `queue.Queue` that the main thread
@@ -204,13 +204,13 @@ How sure each finding is:
 
 ## C. Persistence / state
 
-- [ ] **C1. State keys are raw path strings**
+- [x] **C1. State keys are raw path strings** - fixed for spellings/symlinks/case: keys are `state.path_key` (resolved, `normcase`d); entries under old keys are still found and migrated on the next save. Moving/renaming a chatlog still orphans its state (needs a UI decision)
   `str(Path(p))` isn't resolved or normalised. The same chatlog reached
   through a different spelling, a symlink, or different case on Windows
   misses its session, finalized edits and cache. Moving or renaming a
   chatlog silently orphans all of its finalized edits.
 
-- [ ] **C2. No version field in any state JSON file**
+- [x] **C2. No version field in any state JSON file** - fixed: every state file is written as `{"format_version": 1, "data": ...}` (OCR cache has its own `version`); unversioned files are still read
   This makes future format changes hard to migrate. The old-session
   detection code that was removed earlier is an example of why it's needed.
 
@@ -220,7 +220,7 @@ How sure each finding is:
   current scale, but it's worth splitting into one file per chatlog or
   folder, or using SQLite.
 
-- [ ] **C4. No protection against two running instances**
+- [x] **C4. No protection against two running instances** - fixed: OS-level lock on `app.lock` (flock/msvcrt, released on exit or crash); a second copy shows "Already running" and exits
   Two copies of the app save over each other, and the last write wins. A
   simple lockfile would prevent this.
 
@@ -237,7 +237,7 @@ How sure each finding is:
     file is missing.
   - The other 2 are the state tests from A1.
 
-- [ ] **D2. No CI, no coverage, no lint or type-check config**
+- [ ] **D2. No CI, no coverage, no lint or type-check config** - partly done: `dev` extras (pytest, ruff) and a conservative ruff config in `pyproject.toml`; one unused import removed. Not done: CI (needs a decision on where it runs), coverage, running ruff (not installed here)
   Dev dependencies (`pytest`, `ruff`) aren't declared anywhere. Ruff mostly
   reports style drift (`List` mixed with `list`, `Optional` mixed with `|`),
   plus a few unused variables in the tests.
@@ -258,7 +258,7 @@ How sure each finding is:
   the `.txt` files as package-data, or move the user-editable ones to
   `APP_DATA_DIR`, seeded from defaults on first run.
 
-- [ ] **D5. Docstring style**
+- [ ] **D5. Docstring style** - partly done: every function in `app/` now has full type annotations; new/changed functions use Google-style docstrings. Converting the existing narrative docstrings overlaps E6 and is left for a decision
   `CLAUDE.md` asks for Google-style docstrings (Args/Returns). The code uses
   long narrative prose instead. There are also a few unannotated defs, e.g.
   `state._read_json_with_backup`, `ImageLoader.__init__`, and the inner
@@ -288,7 +288,7 @@ How sure each finding is:
 
 ## E. Documentation vs code
 
-- [ ] **E1. README describes the old scrolling design**
+- [x] **E1. README describes the old scrolling design** - fixed
   The review-screen section says "(12 by default)", "pages the next/previous
   half-window in and tears the opposite half down", and "pins a surviving
   row's on-screen position (scroll anchoring)". That's the design the
@@ -305,13 +305,13 @@ How sure each finding is:
   happened to be checked or unchecked" at close. That isn't true for
   unchecked boxes (see A9).
 
-- [ ] **E4. Stale section references in code comments (9 places)**
+- [x] **E4. Stale section references in code comments (9 places)** - fixed: they point at the topic docs
   They point to `ARCHITECTURE.md`'s "Spacer slots", "Row geometry" and
   "<<Modified>> fires on a box's initial population" sections, which have
   moved to the topic docs. Found in `cleanup.py`, `config.py`,
   `review_item.py`, `review_view.py` and `keyboard_nav.py`.
 
-- [ ] **E5. Small inaccuracies**
+- [x] **E5. Small inaccuracies** - fixed (the `archive/` prefix one struck: dropping it is a documented convention), plus the README's stray-bullet lines and ARCHITECTURE.md's split test names
   - The `main.py` docstring says `py -3.13`.
   - The README layout says "delegates ... to the five modules below" but
     lists eight.
@@ -319,7 +319,7 @@ How sure each finding is:
     functions.
   - README "Known gaps" says only one backup generation is kept, but
     `session_backups.json` now keeps 3.
-  - Several docs cite `INVESTIGATION_*.md` without the `archive/` prefix.
+  - ~~Several docs cite `INVESTIGATION_*.md` without the `archive/` prefix.~~
 
 - [ ] **E6. Too much history in code comments**
   Many docstrings are change histories ("an earlier version did...",
@@ -331,25 +331,25 @@ How sure each finding is:
 
 ## F. Minor / polish
 
-- [ ] **F1. Logging defaults**
+- [ ] **F1. Logging defaults** - partly done: level is `config.LOG_LEVEL` or the `DISCORD_TRANSCRIPTION_LOG_LEVEL` env var; scroll-trace size/on-off are `config.SCROLL_TRACE_*`. Defaults deliberately unchanged until B1
   Logging is hardcoded to `DEBUG`, and JSON goes to stdout. The scroll-trace
   log can reach 40MB x 7, about 280MB. Make the level configurable and
   shrink the defaults once B1 removes the need for forensic logging.
-- [ ] **F2. `keyboard_nav._focused_slot` has an unreachable `return None`.**
-- [ ] **F3. Redo fires with Caps Lock on**
+- [x] **F2. `keyboard_nav._focused_slot` has an unreachable `return None`.** - fixed
+- [x] **F3. Redo fires with Caps Lock on** - fixed: both keys go to `_on_undo_key`, which checks Shift
   `<Control-Z>` is bound for redo, so with Caps Lock on, Ctrl+Z redoes
   instead of undoing.
-- [ ] **F4. Image loading details**
+- [x] **F4. Image loading details** - EXIF orientation fixed (sizing and decoding). The build-time header read is kept: it's what lets row heights be known before images load
   `image_loading.fitted_image_size` opens every image's header when the
   review screen is built. There's also no EXIF orientation handling for
   phone photos.
-- [ ] **F5. Spellcheck word lists need a restart**
+- [x] **F5. Spellcheck word lists need a restart** - fixed: reloaded when the file's mtime changes
   The whitelist and blacklist are cached for the life of the process, so
   edits to them only take effect after a restart.
 - [ ] **F6. The `\|` → `I` OCR correction replaces every pipe character**
   That includes genuine ones. It's a design choice; noting it in case it
   isn't what you want.
-- [ ] **F7. Linux context-menu actions**
+- [x] **F7. Linux context-menu actions** - done: `app/gui/desktop_linux.py` (xdg-open, xdg-settings + .desktop Exec, FileManager1 D-Bus with folder fallback, xclip/wl-copy)
   `xdg-open` covers Open Image, Open Image in Browser, and Open Chatlog at
   Message. For Copy Image, pipe PNG bytes to
   `xclip -selection clipboard -t image/png`.

@@ -1,23 +1,28 @@
 """Entry point for the GUI transcription tool.
 
-Run with the installed console script (works from any directory, since
-`pip install -e .` puts the `app` package on sys.path globally):
+Run with the installed console script (works from any directory once
+installed - see the README's "Running it" section):
     discord-transcription-gui
 
 Or, from inside gui_transcription/ without installing:
-    py -3.13 -m app.main
+    python -m app.main      (Linux)
+    py -3 -m app.main       (Windows)
 """
 
-import logging
 import tkinter as tk
+from types import TracebackType
+from typing import Optional
+from tkinter import messagebox
 
-from . import config, logging_config
+from . import config, logging_config, state
 from .gui.main_window import App
 
 logger = logging_config.get_logger(__name__)
 
 
-def _log_tk_callback_exception(exc, val, tb) -> None:
+def _log_tk_callback_exception(
+    exc: type[BaseException], val: BaseException, tb: Optional[TracebackType]
+) -> None:
     """Installed as tk.Tk.report_callback_exception below. Tk's default
     implementation only prints "Exception in Tkinter callback" + traceback
     to stderr - any exception raised inside a Tk-bound callback (a button
@@ -42,8 +47,22 @@ def _log_tk_callback_exception(exc, val, tb) -> None:
 
 
 def main() -> None:
-    logging_config.setup_logging(level=logging.DEBUG)
+    """Start the app, unless another copy of it is already running."""
+    logging_config.setup_logging(level=logging_config.resolve_log_level())
     logger.info("application starting", extra=logging_config.extra(log_file=str(config.LOG_FILE)))
+
+    # Held until this function returns, i.e. for the app's whole lifetime.
+    instance_lock = state.acquire_instance_lock()
+    if instance_lock is None:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "Already running",
+            "Discord Transcription Tool is already running. Two copies at once "
+            "would overwrite each other's saved sessions and settings.",
+        )
+        root.destroy()
+        return
 
     root = tk.Tk()
     root.report_callback_exception = _log_tk_callback_exception
@@ -52,6 +71,7 @@ def main() -> None:
     try:
         root.mainloop()
     finally:
+        instance_lock.close()
         logger.info("application exiting")
 
 

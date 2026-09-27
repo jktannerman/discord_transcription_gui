@@ -34,7 +34,7 @@ import tkinter as tk
 from PIL import Image
 
 from .. import logging_config
-from . import theme
+from . import desktop_linux, theme
 
 logger = logging_config.get_logger(__name__)
 
@@ -168,8 +168,12 @@ class ImageContextMenuMixin:
         # The registered default *file* handler for this extension (e.g.
         # Photos), same as double-clicking the file in Explorer - unlike
         # _open_image_in_browser below, this is exactly what os.startfile
-        # already does, no registry lookup needed.
-        os.startfile(str(Path(image_path).resolve()))
+        # (xdg-open on Linux) already does, no browser lookup needed.
+        resolved = str(Path(image_path).resolve())
+        if sys.platform == "win32":
+            os.startfile(resolved)
+        else:
+            subprocess.Popen(["xdg-open", resolved])
 
     def _open_image_in_browser(self, image_path: Path) -> None:
         # Neither webbrowser.open() nor a plain os.startfile() on a
@@ -210,18 +214,11 @@ class ImageContextMenuMixin:
         _launch_url_in_default_browser(f"{uri}#{anchor}")
 
     def _open_image_location(self, image_path: Path) -> None:
-        # Not yet implemented outside Windows: Explorer's /select flag (open
-        # a folder with one file pre-selected) has no single equivalent
-        # across Linux file managers (Nautilus/Dolphin/Thunar each need a
-        # different flag, and there's no reliable way to detect which one is
-        # in use) - deferred rather than guessed at. Raising here, instead
-        # of just letting the explorer.exe call below fail with a raw
-        # FileNotFoundError, gives _run_image_menu_action's failure log a
-        # clear, intentional reason instead of a confusing one.
         if sys.platform != "win32":
-            raise NotImplementedError(
-                "Open Image Location is not yet implemented outside Windows"
-            )
+            # Explorer's /select has no per-file-manager-agnostic flag on
+            # Linux, but the FileManager1 D-Bus interface does the same job.
+            desktop_linux.show_in_file_manager(Path(image_path))
+            return
         # Popen, not run: waiting for explorer.exe to exit would freeze the
         # UI. Its exit code isn't a reliable success signal anyway (it
         # routinely exits non-zero on a successful /select); a genuinely
@@ -230,15 +227,12 @@ class ImageContextMenuMixin:
         subprocess.Popen(["explorer", "/select,", str(Path(image_path).resolve())])
 
     def _copy_image_to_clipboard(self, image_path: Path) -> None:
-        # Not yet implemented outside Windows: Linux clipboard access is
-        # split across X11 (xclip/xsel) and Wayland (wl-copy), neither
-        # bundled with Python, with no single tool covering both - deferred
-        # rather than guessed at. Raising here, instead of just letting the
-        # win32clipboard import below fail with a raw ModuleNotFoundError,
-        # gives _run_image_menu_action's failure log a clear, intentional
-        # reason instead of a confusing one.
         if sys.platform != "win32":
-            raise NotImplementedError("Copy Image is not yet implemented outside Windows")
+            with Image.open(image_path) as image:
+                buffer = BytesIO()
+                image.save(buffer, "PNG")
+            desktop_linux.copy_png_to_clipboard(buffer.getvalue())
+            return
         # Local import: win32clipboard is Windows-only (see requirements.txt)
         # and this is the only place in the app that needs it.
         import win32clipboard
@@ -262,11 +256,18 @@ def _launch_url_in_default_browser(url: str) -> None:
     """Launch `url` (a file:// URI, with or without a #fragment) in the
     user's actual default *browser*, looked up via _default_browser_command
     - shared by _open_image_in_browser and _open_chatlog_at_message, which
-    otherwise differ only in what URI they build."""
-    command_template = _default_browser_command()
-    if command_template is None:
-        raise RuntimeError("could not determine the default browser from the registry")
-    command = [url if part == "%1" else part for part in shlex.split(command_template)]
+    otherwise differ only in what URI they build. On Linux the browser comes
+    from xdg-settings and its .desktop entry instead (desktop_linux.py)."""
+    if sys.platform == "win32":
+        command_template = _default_browser_command()
+        if command_template is None:
+            raise RuntimeError("could not determine the default browser from the registry")
+        command = [url if part == "%1" else part for part in shlex.split(command_template)]
+    else:
+        exec_line = desktop_linux.default_browser_exec_line()
+        if exec_line is None:
+            raise RuntimeError("could not determine the default browser via xdg-settings")
+        command = desktop_linux.build_exec_command(exec_line, url)
     # Popen, not run: if the browser wasn't already running, the launched
     # process lives until the browser is closed, and waiting on it would
     # freeze the UI for that whole time.

@@ -32,7 +32,7 @@ def _spacer_default(empty_lines: int) -> str:
     """Default literal content for a spacer slot representing empty_lines
     blank lines - one more literal "\\n" token than that, since the gap
     also includes the newline that terminates whatever precedes it (see
-    ARCHITECTURE.md's "Spacer slots" section)."""
+    docs/ARCHITECTURE_SPACER_SLOTS.md)."""
     return "\\n" * (empty_lines + 1)
 
 
@@ -104,7 +104,7 @@ def build_review_items(
     image's joined OCR text - independently, so a message with both a
     caption and images gets all of them), and its spacer box(es) (see
     ReviewItem.slot_roles), pre-filled with the default blank-line counts
-    documented in ARCHITECTURE.md's "Spacer slots" section. A die-roll
+    documented in docs/ARCHITECTURE_SPACER_SLOTS.md. A die-roll
     command/result pair is detected from each message's own *original*
     text (not whatever the user later edits it to), so editing a message's
     transcribed text never changes its default spacing.
@@ -194,7 +194,7 @@ def _count_spacer_tokens(raw: Optional[str]) -> int:
     """Number of literal "\\n" tokens (backslash followed by "n") in a
     spacer box's text, after discarding every *real* newline/carriage-
     return character anywhere in it (start, end, or mixed through the
-    middle - see ARCHITECTURE.md's "Spacer slots" section). Any other
+    middle - see docs/ARCHITECTURE_SPACER_SLOTS.md). Any other
     stray character in the box is ignored, never written."""
     if not raw:
         return 0

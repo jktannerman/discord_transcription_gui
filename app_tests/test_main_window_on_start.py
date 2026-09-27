@@ -5,7 +5,6 @@ _match_focus_slot helpers (test_main_window_resume.py) were tested, not
 the orchestration that calls into them. A fake setup frame stands in for
 the real SetupFrame (pure Tk widget wiring, not under test here) so these
 tests exercise just _on_start's own decision logic."""
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest

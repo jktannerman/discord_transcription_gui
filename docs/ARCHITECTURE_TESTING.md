@@ -85,7 +85,21 @@ deepest coverage:
   blocks until a person dismisses it, which hangs an unattended
   test - `tk_popup` is mocked out instead, so these test what
   `_show_image_context_menu` itself controls (state before/after the call)
-  rather than the real OS-level popup/dismissal.
+  rather than the real OS-level popup/dismissal. The tests of Windows-only
+  code (the real `winreg` lookup, Explorer's `/select`, the Win32
+  clipboard) are marked `windows_only` and skipped on other platforms.
+- Wheel event normalization (`test_wheel.py`, no display needed): X11
+  Button-4/5 and `<MouseWheel>` deltas map to the same vertical units, and
+  Shift-modified (horizontal) events are ignored.
+- The Linux context-menu helpers (`test_desktop_linux.py`, every external
+  command mocked): Desktop Entry `Exec` parsing, XDG application-directory
+  precedence, the `xdg-settings` default-browser lookup, FileManager1
+  `ShowItems` with its open-the-folder fallback, and xclip/wl-copy
+  selection; plus the Linux branch of each menu action
+  (`test_image_context_menu.py`, marked `not_windows`).
+- Ctrl+Z/Ctrl+Shift+Z dispatch depending on Shift, not Caps Lock
+  (`test_keyboard_nav.py`), and EXIF-rotated images being sized and
+  decoded the right way up (`test_image_loading.py`).
 
 ## Session resume
 
@@ -126,20 +140,28 @@ deepest coverage:
   size/mtime changed, the cache is saved periodically and survives an OCR
   failure partway through, and version 1 cache entries are trusted and
   upgraded.
-- The cleanup regexes.
+- The cleanup regexes, including that past runs' text is left untouched.
 - Review-item building/output-writing - a text-only message's editable
   spacing copy standing in for its immutable original when written out, a
   message with both a caption and an image getting two independently-edited
   text blocks, and a message with multiple images getting one
   independently-edited OCR block per image, each falling back to its own
   original OCR text when not edited.
-- The finalize pass (cleanup + run-date + clipboard + BREAK-marker
-  bookmarking).
+- The finalize pass (cleanup of this run's text only + backup of the
+  previous output + run-date + clipboard + BREAK-marker bookmarking).
+- Spellcheck word lists reloading when their file changes
+  (`test_spellcheck.py`), the OCR worker's event queue being drained on the
+  Tk thread until its final callback (`test_main_window_ocr_error.py`),
+  and log-level resolution (`test_logging_config.py`).
 
 ## Persistence
 
 - JSON state persistence - run dates, OCR cache (including reading the
-  version 1 format) and in-progress sessions
+  version 1 format), the `format_version` wrapper on every other state file
+  (and reading files written before it), path-key normalisation (the same
+  chatlog/folder reached through different spellings or a symlink, and
+  entries saved under a pre-normalisation key being found and migrated),
+  the single-instance lock, and in-progress sessions
   both kept per-chatlog/per-folder indefinitely rather than as a single
   global slot, and recent-path history.
 - The atomic-write-plus-backup-rotation/recovery behavior of every state
@@ -151,8 +173,12 @@ deepest coverage:
 
 - No automated test drives real Tk button *clicks* - only direct method
   calls standing in for them - or a live Tesseract install.
+- Nothing checks for repaints of the review screen mid-reconcile (the
+  cause of the scroll-down flicker); the trace log doesn't record paints,
+  so that fix was verified by hand.
 - `setup_view.py`'s widget wiring is still only covered by manual
-  smoke-testing: window construction, the review screen with synthetic
+  smoke-testing, apart from the "Known users → Add" newline handling
+  (`test_setup_view.py`): window construction, the review screen with synthetic
   text-only/image-only/image-with-caption/multiple-images-on-one-message
   items, an edit-then-finalize pass against a temp output file, and a
   resumed session's saved edits/focus restoring correctly.

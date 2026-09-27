@@ -2,6 +2,8 @@
 loading - no Tk widgets involved (the tag application itself is covered by
 the gui-marked tests in test_review_view.py, since it needs a real Text
 widget's tag_add/tag_ranges)."""
+import os
+
 from gui_transcription.app import config, spellcheck
 
 
@@ -29,45 +31,51 @@ def test_all_caps_words_are_never_flagged():
 
 
 def test_whitelisted_word_is_not_flagged(monkeypatch):
-    monkeypatch.setattr(spellcheck, "_whitelist_loaded", True)
-    monkeypatch.setattr(spellcheck, "_whitelist", {"xyzzyplugh"})
+    monkeypatch.setattr(spellcheck, "_get_whitelist", lambda: {"xyzzyplugh"})
     assert spellcheck.find_misspelled_spans("Xyzzyplugh said hello") == []
 
 
 def test_get_whitelist_parses_file_ignoring_blanks_and_comments(tmp_path, monkeypatch):
     path = tmp_path / "whitelist.txt"
     path.write_text("# comment\n\nAlice\nBOB\n", encoding="utf8")
-    monkeypatch.setattr(spellcheck, "_whitelist_loaded", False)
+    monkeypatch.setattr(spellcheck, "_wordlists", {})
     assert spellcheck._get_whitelist(path) == {"alice", "bob"}
 
 
 def test_get_whitelist_missing_file_returns_empty_set(tmp_path, monkeypatch):
-    monkeypatch.setattr(spellcheck, "_whitelist_loaded", False)
+    monkeypatch.setattr(spellcheck, "_wordlists", {})
     assert spellcheck._get_whitelist(tmp_path / "missing.txt") == set()
 
 
-def test_get_whitelist_caches_after_first_load(tmp_path, monkeypatch):
+def test_get_whitelist_reuses_an_unchanged_file(tmp_path, monkeypatch):
     path = tmp_path / "whitelist.txt"
     path.write_text("alice\n", encoding="utf8")
-    monkeypatch.setattr(spellcheck, "_whitelist_loaded", False)
+    monkeypatch.setattr(spellcheck, "_wordlists", {})
     first = spellcheck._get_whitelist(path)
-    path.write_text("bob\n", encoding="utf8")
-    # Second call reuses the cached result rather than re-reading the file -
-    # same convention as ocr_corrections.py's per-process loading.
     assert spellcheck._get_whitelist(path) is first
+
+
+def test_get_whitelist_reloads_after_the_file_changes(tmp_path, monkeypatch):
+    path = tmp_path / "whitelist.txt"
+    path.write_text("alice\n", encoding="utf8")
+    os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+    monkeypatch.setattr(spellcheck, "_wordlists", {})
+    assert spellcheck._get_whitelist(path) == {"alice"}
+    path.write_text("bob\n", encoding="utf8")
+    os.utime(path, ns=(2_000_000_000, 2_000_000_000))
+    assert spellcheck._get_whitelist(path) == {"bob"}
 
 
 def test_default_whitelist_file_parses_without_error(monkeypatch):
     # The real, user-editable app/spellcheck_whitelist.txt - this just
     # confirms it stays well-formed as it's edited over time.
-    monkeypatch.setattr(spellcheck, "_whitelist_loaded", False)
+    monkeypatch.setattr(spellcheck, "_wordlists", {})
     words = spellcheck._get_whitelist(config.SPELLCHECK_WHITELIST_FILE)
     assert isinstance(words, set)
 
 
 def test_blacklisted_word_is_flagged_even_though_dictionary_knows_it(monkeypatch):
-    monkeypatch.setattr(spellcheck, "_blacklist_loaded", True)
-    monkeypatch.setattr(spellcheck, "_blacklist", {"there"})
+    monkeypatch.setattr(spellcheck, "_get_blacklist", lambda: {"there"})
     text = "Put it over there please"
     spans = spellcheck.find_misspelled_spans(text)
     assert len(spans) == 1
@@ -76,39 +84,45 @@ def test_blacklisted_word_is_flagged_even_though_dictionary_knows_it(monkeypatch
 
 
 def test_word_in_both_whitelist_and_blacklist_is_not_flagged(monkeypatch):
-    monkeypatch.setattr(spellcheck, "_whitelist_loaded", True)
-    monkeypatch.setattr(spellcheck, "_whitelist", {"there"})
-    monkeypatch.setattr(spellcheck, "_blacklist_loaded", True)
-    monkeypatch.setattr(spellcheck, "_blacklist", {"there"})
+    monkeypatch.setattr(spellcheck, "_get_whitelist", lambda: {"there"})
+    monkeypatch.setattr(spellcheck, "_get_blacklist", lambda: {"there"})
     assert spellcheck.find_misspelled_spans("Put it over there please") == []
 
 
 def test_get_blacklist_parses_file_ignoring_blanks_and_comments(tmp_path, monkeypatch):
     path = tmp_path / "blacklist.txt"
     path.write_text("# comment\n\nAlice\nBOB\n", encoding="utf8")
-    monkeypatch.setattr(spellcheck, "_blacklist_loaded", False)
+    monkeypatch.setattr(spellcheck, "_wordlists", {})
     assert spellcheck._get_blacklist(path) == {"alice", "bob"}
 
 
 def test_get_blacklist_missing_file_returns_empty_set(tmp_path, monkeypatch):
-    monkeypatch.setattr(spellcheck, "_blacklist_loaded", False)
+    monkeypatch.setattr(spellcheck, "_wordlists", {})
     assert spellcheck._get_blacklist(tmp_path / "missing.txt") == set()
 
 
-def test_get_blacklist_caches_after_first_load(tmp_path, monkeypatch):
+def test_get_blacklist_reuses_an_unchanged_file(tmp_path, monkeypatch):
     path = tmp_path / "blacklist.txt"
     path.write_text("alice\n", encoding="utf8")
-    monkeypatch.setattr(spellcheck, "_blacklist_loaded", False)
+    monkeypatch.setattr(spellcheck, "_wordlists", {})
     first = spellcheck._get_blacklist(path)
-    path.write_text("bob\n", encoding="utf8")
-    # Second call reuses the cached result rather than re-reading the file -
-    # same convention as the whitelist's per-process loading.
     assert spellcheck._get_blacklist(path) is first
+
+
+def test_get_blacklist_reloads_after_the_file_changes(tmp_path, monkeypatch):
+    path = tmp_path / "blacklist.txt"
+    path.write_text("alice\n", encoding="utf8")
+    os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+    monkeypatch.setattr(spellcheck, "_wordlists", {})
+    assert spellcheck._get_blacklist(path) == {"alice"}
+    path.write_text("bob\n", encoding="utf8")
+    os.utime(path, ns=(2_000_000_000, 2_000_000_000))
+    assert spellcheck._get_blacklist(path) == {"bob"}
 
 
 def test_default_blacklist_file_parses_without_error(monkeypatch):
     # The real, user-editable app/spellcheck_blacklist.txt - this just
     # confirms it stays well-formed as it's edited over time.
-    monkeypatch.setattr(spellcheck, "_blacklist_loaded", False)
+    monkeypatch.setattr(spellcheck, "_wordlists", {})
     words = spellcheck._get_blacklist(config.SPELLCHECK_BLACKLIST_FILE)
     assert isinstance(words, set)

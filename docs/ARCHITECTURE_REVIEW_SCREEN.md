@@ -29,6 +29,18 @@ plus the scroll/debounce/Finalize-button machinery:
   into a self-sustaining oscillation loop; see the module docstring for the
   full story. Pure layout math lives in `app/gui/virtualization.py` so it's
   testable without a display.
+- **Nothing may repaint while the materialized block is out of place.**
+  All built rows are packed into one frame, positioned on the canvas at
+  its first row's offset. Destroying rows above shifts everything left in
+  the frame up by their height, and building rows above shifts it down, so
+  `canvas.coords` has to move the frame to match *before* anything flushes
+  Tk's idle queue - `update_idletasks()` repaints the screen. It's moved
+  right after the teardown in `_sync_materialized_rows` and again right
+  after the builds in `_reconcile`. Row building itself must not flush
+  the idle queue either: `_build_immutable_message_label` used to call
+  `update_idletasks()` to measure its label, which repainted the
+  half-rebuilt screen once per message row and was the cause of the
+  visible jumping/flicker when scrolling down.
 - **The pre-build height estimate isn't just cosmetic.**
   `virtualization.estimate_row_height`'s guess for an image row used to
   assume the image filled the full `THUMBNAIL_SIZE` bounding box - but most
@@ -441,9 +453,10 @@ plus the scroll/debounce/Finalize-button machinery:
   only reads the image file's header (cheap), separately from the actual
   lazy pixel decode in `ImageLoader._load_image` once a row scrolls near the
   viewport. The immutable label's height isn't known until the label exists,
-  so `_build_immutable_message_label` measures it with the container's
-  `pack_propagate` left on before pinning both dimensions, rather than
-  computing it upfront the way `fitted_image_size` does for images.
+  so `_build_immutable_message_label` reads the label's own
+  `winfo_reqheight()` (valid as soon as it's configured) before pinning
+  both dimensions, rather than computing it upfront the way
+  `fitted_image_size` does for images.
 - **Per-box text box sizing.** (`row_building.RowBuildingMixin`.) Each
   editable text box lives in its own fixed-height container
   (`pack_propagate(False)`, same trick as the left column's placeholders) so
@@ -469,8 +482,16 @@ plus the scroll/debounce/Finalize-button machinery:
   knowable upfront - the same way an image's height already was, via
   `fitted_image_size`'s cheap header read - removes that correction's reason
   to exist instead of just estimating it more carefully.
+- **Horizontal wheel events must not scroll vertically.** Tk 8.6 on X11
+  delivers horizontal scrolling (buttons 6/7, e.g. a touchpad's sideways
+  drift during a two-finger scroll) as Shift+Button-4/5, and a plain
+  `<Button-4>`/`<Button-5>` binding matches those too. Treated as vertical,
+  that drift cancelled out most downward scrolling. `wheel.wheel_delta`
+  returns 0 for any Shift-modified wheel event, and the `input_mousewheel`
+  trace event records each event's raw `num`/`state` so this kind of
+  problem is visible directly in `scroll_trace.log`.
 - **Per-row scroll redirection.** The mouse wheel is bound globally
-  (`canvas.bind_all("<MouseWheel>", ...)`), but the bound callback still
+  (`canvas.bind_all` for every `wheel.WHEEL_EVENT_SEQUENCES` entry), but the bound callback still
   receives the specific widget under the cursor as `event.widget` - so
   hovering a text box that has its own scrollbar scrolls that box first
   (`_scroll_text_widget`), only falling through to scrolling the whole
@@ -662,11 +683,25 @@ plus the scroll/debounce/Finalize-button machinery:
   Firefox\firefox.exe" -osint -url "%1"`). `_open_image_in_browser`
   substitutes the image's `file://` URI for the literal `%1` placeholder
   (`shlex.split` first, so a quoted path containing spaces splits into one
-  argument correctly) and launches the result directly via `subprocess.run`,
-  bypassing file-type association entirely. Either registry step failing
+  argument correctly) and launches the result directly via
+  `subprocess.Popen` (not `run`, which would freeze the UI until the
+  browser exits), bypassing file-type association entirely. Either registry step failing
   (no `UserChoice` set, or a `ProgId` left over from a since-uninstalled
   browser) makes `_default_browser_command` return `None` rather than
   raise, which `_open_image_in_browser` turns into a `RuntimeError` -
   letting `_run_image_menu_action`'s existing try/except log it as an
   ordinary action failure rather than needing its own special-cased
   handling.
+
+  Linux has the same file-vs-browser split (`xdg-open` on a `file://` URI
+  follows the file's MIME association), so `desktop_linux.py` does the
+  freedesktop equivalent: `xdg-settings get default-web-browser` names the
+  browser's `.desktop` file, found in XDG precedence order
+  (`$XDG_DATA_HOME` first, so a user override wins), and its `Exec` line
+  is expanded with the URL in place of `%u`/`%U`/`%f`/`%F`. Open Image
+  Location uses the `org.freedesktop.FileManager1.ShowItems` D-Bus call
+  (Nemo, Nautilus, Dolphin, ... all implement it) as the equivalent of
+  Explorer's `/select`. Copy Image pipes PNG bytes to xclip/wl-copy with
+  stdout/stderr *not* captured: both fork a background process to keep
+  serving the clipboard, which would inherit a captured pipe and make
+  `subprocess.run` wait until the clipboard changed hands.

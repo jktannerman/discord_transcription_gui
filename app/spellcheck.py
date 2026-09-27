@@ -20,9 +20,12 @@ into this module at all).
 
 import re
 from pathlib import Path
-from typing import List, Set, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 from . import config, logging_config
+
+if TYPE_CHECKING:
+    from spellchecker import SpellChecker
 
 logger = logging_config.get_logger(__name__)
 
@@ -33,13 +36,10 @@ _WORD_RE = re.compile(r"[A-Za-z']+")
 MIN_WORD_LENGTH = 3
 
 _checker = None  # Constructed lazily - loading the dictionary isn't free.
-_whitelist: Set[str] = set()
-_whitelist_loaded = False
-_blacklist: Set[str] = set()
-_blacklist_loaded = False
+# {path: (file mtime_ns or None if missing, parsed words)} - see _load_wordlist.
+_wordlists: Dict[Path, Tuple[Optional[int], Set[str]]] = {}
 
-
-def _get_checker():
+def _get_checker() -> "SpellChecker":
     """Lazily construct (and cache) the SpellChecker instance. Deferred
     rather than built at import time so importing this module - e.g. from a
     non-GUI test - never pays the dictionary-load cost unless spellchecking
@@ -66,30 +66,43 @@ def _parse_wordlist_file(path: Path) -> Set[str]:
     return words
 
 
-def _get_whitelist(path: Path = config.SPELLCHECK_WHITELIST_FILE) -> Set[str]:
-    """Load (and cache) the user-editable whitelist file."""
-    global _whitelist, _whitelist_loaded
-    if _whitelist_loaded:
-        return _whitelist
-    _whitelist = _parse_wordlist_file(path)
-    _whitelist_loaded = True
+def _load_wordlist(path: Path, label: str) -> Set[str]:
+    """Return a word list file's words, re-reading it only when it changed.
+
+    Cached per path and keyed on the file's modification time, so edits to
+    the whitelist/blacklist take effect on the next spellcheck without
+    restarting the app, while an unchanged file costs one stat() per check.
+
+    Args:
+        path: The word list file.
+        label: Its name for log lines ("whitelist"/"blacklist").
+
+    Returns:
+        The parsed, lowercased words (empty if the file is missing).
+    """
+    try:
+        stamp: Optional[int] = path.stat().st_mtime_ns
+    except OSError:
+        stamp = None
+    cached = _wordlists.get(path)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    words = _parse_wordlist_file(path)
+    _wordlists[path] = (stamp, words)
     logger.info(
-        "loaded spellcheck whitelist", extra=logging_config.extra(path=str(path), count=len(_whitelist))
+        f"loaded spellcheck {label}", extra=logging_config.extra(path=str(path), count=len(words))
     )
-    return _whitelist
+    return words
 
 
-def _get_blacklist(path: Path = config.SPELLCHECK_BLACKLIST_FILE) -> Set[str]:
-    """Load (and cache) the user-editable blacklist file."""
-    global _blacklist, _blacklist_loaded
-    if _blacklist_loaded:
-        return _blacklist
-    _blacklist = _parse_wordlist_file(path)
-    _blacklist_loaded = True
-    logger.info(
-        "loaded spellcheck blacklist", extra=logging_config.extra(path=str(path), count=len(_blacklist))
-    )
-    return _blacklist
+def _get_whitelist(path: Optional[Path] = None) -> Set[str]:
+    """Return the user-editable whitelist (config.SPELLCHECK_WHITELIST_FILE by default)."""
+    return _load_wordlist(path or config.SPELLCHECK_WHITELIST_FILE, "whitelist")
+
+
+def _get_blacklist(path: Optional[Path] = None) -> Set[str]:
+    """Return the user-editable blacklist (config.SPELLCHECK_BLACKLIST_FILE by default)."""
+    return _load_wordlist(path or config.SPELLCHECK_BLACKLIST_FILE, "blacklist")
 
 
 def find_misspelled_spans(text: str) -> List[Tuple[int, int]]:

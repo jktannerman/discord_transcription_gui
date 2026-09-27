@@ -49,7 +49,7 @@ text box from `UndoLog.ops` rather than rebuilding it fresh:
    screen's virtualization for the rest of the session.
 3. **Undo/redo replay divergence** (see `ARCHITECTURE_REVIEW_SCREEN.md`'s "A
    recorded undo/redo must not be replayed by calling
-   `edit_undo()`/`edit_redo()` again", `INVESTIGATION_undo_redo_replay_divergence.md`):
+   `edit_undo()`/`edit_redo()` again", `archive/INVESTIGATION_undo_redo_replay_divergence.md`):
    replaying a bare `"undo"`/`"redo"` marker by calling
    `edit_undo()`/`edit_redo()` again silently reverted a *different amount*
    of text than the live press did, with no exception and no log line.
@@ -111,7 +111,7 @@ Concrete habits this argues for here:
   replay, and now runs for all of them - a standing structural guarantee of
   this subsystem, the same way `main.py`'s `root.report_callback_exception`
   is a blanket net for any uncaught Tk-callback exception, not just one
-  revisited when a fifth bug of this shape turns up.
+  revisited when a fourth bug of this shape turns up.
 - **A dedicated regression test per discovered bug only covers combinations
   someone has already hit.** All three bugs above were invisible to the test
   suite until someone hand-wrote a test for the exact scenario each one
@@ -124,12 +124,12 @@ Concrete habits this argues for here:
   asserts the rebuilt content, cursor position, and checked state all match
   what was live immediately before teardown - parametrized across every role
   shape a box can have ("message", "ocr{N}", a spacer role).
-  `test_random_interaction_sequence_survives_two_consecutive_teardown_
-  rebuild_cycles` extends this to two consecutive cycles (the
+  `test_random_interaction_sequence_survives_two_consecutive_teardown_rebuild_cycles`
+  extends this to two consecutive cycles (the
   `UndoLog.baseline` bug specifically needed a *second* rebuild, whose
   starting point was itself a replay result, to surface at all), and
-  `test_random_edits_after_a_seeded_baseline_survive_a_further_teardown_
-  and_rebuild` closes the gap every existing resumed/finalized composition
+  `test_random_edits_after_a_seeded_baseline_survive_a_further_teardown_and_rebuild`
+  closes the gap every existing resumed/finalized composition
   test left open - real further edits on top of a resumed/finalized
   baseline, not just an empty op log, before the next rebuild. Every one of
   these asserts no `ERROR`-level replay-divergence/self-heal log line fired

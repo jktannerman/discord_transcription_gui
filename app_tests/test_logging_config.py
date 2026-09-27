@@ -1,7 +1,9 @@
 import json
 import logging
 
-from gui_transcription.app import logging_config
+import pytest
+
+from gui_transcription.app import config, logging_config
 
 
 def _make_record(**extra_fields) -> logging.LogRecord:
@@ -68,3 +70,22 @@ def test_extra_wraps_fields_under_extra_fields_key():
     assert logging_config.extra(image="card.png", count=3) == {
         "extra_fields": {"image": "card.png", "count": 3}
     }
+
+
+@pytest.mark.parametrize(
+    "env_value, config_value, expected",
+    [
+        (None, "DEBUG", logging.DEBUG),
+        (None, "info", logging.INFO),
+        ("WARNING", "DEBUG", logging.WARNING),
+        ("not-a-level", "INFO", logging.DEBUG),
+    ],
+)
+def test_resolve_log_level(monkeypatch, env_value, config_value, expected):
+    monkeypatch.setattr(config, "LOG_LEVEL", config_value)
+    if env_value is None:
+        monkeypatch.delenv(config.LOG_LEVEL_ENV_VAR, raising=False)
+    else:
+        monkeypatch.setenv(config.LOG_LEVEL_ENV_VAR, env_value)
+
+    assert logging_config.resolve_log_level() == expected

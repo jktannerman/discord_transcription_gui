@@ -9,14 +9,17 @@ compatibility constraints.
 
 import json
 import os
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, TextIO, Union
 
 from . import config, logging_config
 
 logger = logging_config.get_logger(__name__)
+
+StrPath = Union[str, os.PathLike]
 
 
 def _ensure_data_dir() -> None:
@@ -61,15 +64,72 @@ def atomic_write_text(path: Path, text: str, backup_path: Optional[Path] = None)
         raise
 
 
-def _atomic_write_json(path: Path, data) -> None:
+def acquire_instance_lock() -> Optional[TextIO]:
+    """Take the single-instance lock (config.INSTANCE_LOCK_FILE).
+
+    An OS-level lock, released automatically when the process exits -
+    even on a crash - so a stale lock can't block the next launch.
+
+    Returns:
+        The open lock file, which must be kept open (and referenced) for as
+        long as the lock should be held; None if another instance holds it.
+    """
+    _ensure_data_dir()
+    lock_file = open(config.INSTANCE_LOCK_FILE, "a+", encoding="utf8")
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock_file.close()
+        logger.warning("another instance is already running")
+        return None
+    return lock_file
+
+
+# Every state file (except the OCR cache, which carries its own "version")
+# is stored as {"format_version": N, "data": <payload>}, so a future format
+# change can tell old files from new ones. Files written before this
+# wrapper existed hold the bare payload and are read as version 0.
+STATE_FORMAT_VERSION = 1
+_FORMAT_KEYS = frozenset({"format_version", "data"})
+
+
+def _atomic_write_json(path: Path, data: Any, *, versioned: bool = True) -> None:
     """Write data to path as JSON via atomic_write_text, rotating the
     previous version to a .bak sibling (read back by
-    _read_json_with_backup if the primary file is ever missing/corrupt)."""
+    _read_json_with_backup if the primary file is ever missing/corrupt).
+
+    Args:
+        path: The state file.
+        data: The JSON-serialisable payload.
+        versioned: Wrap the payload with STATE_FORMAT_VERSION (see above).
+    """
     _ensure_data_dir()
-    atomic_write_text(path, json.dumps(data, indent=2), backup_path=path.with_suffix(".bak"))
+    payload = {"format_version": STATE_FORMAT_VERSION, "data": data} if versioned else data
+    atomic_write_text(path, json.dumps(payload, indent=2), backup_path=path.with_suffix(".bak"))
 
 
-def _read_json_with_backup(path: Path):
+def _unwrap_format(path: Path, raw: Any) -> Any:
+    """Return a state file's payload, whether or not it has the version wrapper."""
+    if isinstance(raw, dict) and set(raw) == _FORMAT_KEYS:
+        version = raw["format_version"]
+        if not isinstance(version, int) or version > STATE_FORMAT_VERSION:
+            logger.warning(
+                "state file has an unexpected format version",
+                extra=logging_config.extra(path=str(path), format_version=version),
+            )
+        return raw["data"]
+    return raw
+
+
+def _read_json_with_backup(path: Path) -> Any:
     """Read JSON from path, falling back to its .bak sibling (written by
     _atomic_write_json) if path is missing or unreadable - covers both a
     corrupt primary file and the narrow window where path has been rotated
@@ -80,7 +140,7 @@ def _read_json_with_backup(path: Path):
     if path.exists():
         try:
             with open(path, "r", encoding="utf8") as f:
-                return json.load(f)
+                return _unwrap_format(path, json.load(f))
         except (json.JSONDecodeError, OSError):
             logger.warning("%s unreadable, trying backup", path, exc_info=True)
 
@@ -89,7 +149,7 @@ def _read_json_with_backup(path: Path):
             with open(backup_path, "r", encoding="utf8") as f:
                 data = json.load(f)
             logger.warning("loaded %s from backup", path)
-            return data
+            return _unwrap_format(path, data)
         except (json.JSONDecodeError, OSError):
             logger.warning("backup for %s unreadable too", path, exc_info=True)
 
@@ -170,6 +230,49 @@ def save_approved_users_state(text: str, use_all_users: bool) -> None:
     )
 
 
+def path_key(path: StrPath) -> str:
+    """The key per-chatlog/per-folder state is stored under for `path`.
+
+    Resolved to an absolute path with symlinks followed, and case-folded
+    where the filesystem is case-insensitive (Windows), so every spelling
+    of the same file or folder shares one entry.
+
+    Args:
+        path: A file or folder path, which needn't exist.
+
+    Returns:
+        The normalised key.
+    """
+    return os.path.normcase(str(Path(path).expanduser().resolve()))
+
+
+def _matching_key(mapping: dict, path: StrPath) -> Optional[str]:
+    """Find the key in `mapping` that refers to `path`, if any.
+
+    Tries the normalised key first, then any older key (saved before keys
+    were normalised) that normalises to the same thing.
+    """
+    key = path_key(path)
+    if key in mapping:
+        return key
+    for existing in mapping:
+        if isinstance(existing, str) and path_key(existing) == key:
+            return existing
+    return None
+
+
+def _pop_matching(mapping: dict, path: StrPath, default: Any = None) -> Any:
+    """Remove every key in `mapping` referring to `path`; return the first
+    value found (normalised key first), or `default`."""
+    key = path_key(path)
+    found = mapping.pop(key, None)
+    for existing in [k for k in mapping if isinstance(k, str) and path_key(k) == key]:
+        value = mapping.pop(existing)
+        if found is None:
+            found = value
+    return default if found is None else found
+
+
 def load_session(html_path: str) -> Optional[dict]:
     """Return the saved in-progress review session for html_path, or None if
     there isn't one for that specific chatlog (no prior run for it, or its
@@ -180,7 +283,8 @@ def load_session(html_path: str) -> Optional[dict]:
         logger.info("no sessions file found")
         return None
 
-    session = sessions.get(str(Path(html_path)))
+    match = _matching_key(sessions, html_path)
+    session = sessions.get(match) if match is not None else None
     if session is None:
         return None
 
@@ -208,7 +312,8 @@ def save_session(html_path: str, session: dict) -> None:
     sessions = _read_json_with_backup(config.SESSIONS_FILE)
     if not isinstance(sessions, dict):
         sessions = {}
-    sessions[str(Path(html_path))] = session
+    _pop_matching(sessions, html_path)
+    sessions[path_key(html_path)] = session
     _atomic_write_json(config.SESSIONS_FILE, sessions)
 
     logger.debug(
@@ -233,13 +338,10 @@ def clear_session(html_path: str) -> None:
     if not isinstance(sessions, dict):
         return
 
-    key = str(Path(html_path))
-    if key not in sessions:
+    if _matching_key(sessions, html_path) is None:
         return
 
-    archive_session_backup(html_path, sessions[key])
-
-    del sessions[key]
+    archive_session_backup(html_path, _pop_matching(sessions, html_path))
     _atomic_write_json(config.SESSIONS_FILE, sessions)
 
     logger.info("cleared saved session", extra=logging_config.extra(html_path=html_path))
@@ -264,11 +366,13 @@ def archive_session_backup(html_path: str, session: dict) -> None:
     if not isinstance(backups, dict):
         backups = {}
 
-    key = str(Path(html_path))
-    history = backups.get(key, [])
+    match = _matching_key(backups, html_path)
+    history = backups.get(match, []) if match is not None else []
     if history and history[0] == session:
         return
 
+    _pop_matching(backups, html_path)
+    key = path_key(html_path)
     history = [session] + history
     backups[key] = history[: config.SESSION_BACKUP_COUNT]
     _atomic_write_json(config.SESSION_BACKUPS_FILE, backups)
@@ -288,7 +392,8 @@ def load_session_backups(html_path: str) -> list:
     if not isinstance(backups, dict):
         return []
 
-    return backups.get(str(Path(html_path)), [])
+    match = _matching_key(backups, html_path)
+    return backups.get(match, []) if match is not None else []
 
 
 def load_finalized_edits(html_path: str) -> Optional[dict]:
@@ -300,7 +405,8 @@ def load_finalized_edits(html_path: str) -> Optional[dict]:
     if not isinstance(all_finalized, dict):
         return None
 
-    data = all_finalized.get(str(Path(html_path)))
+    match = _matching_key(all_finalized, html_path)
+    data = all_finalized.get(match) if match is not None else None
     if data is None:
         logger.info(
             "no finalized edits for this chatlog",
@@ -336,8 +442,8 @@ def save_finalized_edits(html_path: str, updates_by_message: dict) -> None:
     if not isinstance(all_finalized, dict):
         all_finalized = {}
 
-    key = str(Path(html_path))
-    existing = all_finalized.get(key, {})
+    key = path_key(html_path)
+    existing = _pop_matching(all_finalized, html_path, default={})
     replaced_at = datetime.now(timezone.utc).isoformat()
     history_entries = []
     for message_id, role_texts in updates_by_message.items():
@@ -408,8 +514,11 @@ def load_finalized_edits_history(html_path: Optional[str] = None) -> list:
         return []
     if html_path is None:
         return history
-    key = str(Path(html_path))
-    return [entry for entry in history if entry.get("html_path") == key]
+    key = path_key(html_path)
+    return [
+        entry for entry in history
+        if isinstance(entry.get("html_path"), str) and path_key(entry["html_path"]) == key
+    ]
 
 
 # Version 2 wraps the folders in {"version": 2, "folders": {...}} and stores
@@ -457,7 +566,9 @@ def load_cache(folder_path: str) -> Optional[dict[str, dict]]:
     Returns:
         The folder's entries, or None if nothing was ever cached for it.
     """
-    data = _read_ocr_cache_folders().get(str(Path(folder_path)))
+    folders = _read_ocr_cache_folders()
+    match = _matching_key(folders, folder_path)
+    data = folders.get(match) if match is not None else None
     if not isinstance(data, dict):
         logger.info(
             "no ocr cache for this folder",
@@ -485,8 +596,11 @@ def save_cache(folder_path: str, entries: dict[str, dict]) -> None:
         entries: Entries in the shape load_cache returns.
     """
     folders = _read_ocr_cache_folders()
-    folders[str(Path(folder_path))] = entries
-    _atomic_write_json(config.OCR_CACHE_FILE, {"version": OCR_CACHE_VERSION, "folders": folders})
+    _pop_matching(folders, folder_path)
+    folders[path_key(folder_path)] = entries
+    _atomic_write_json(
+        config.OCR_CACHE_FILE, {"version": OCR_CACHE_VERSION, "folders": folders}, versioned=False
+    )
 
     logger.info(
         "saved ocr cache",

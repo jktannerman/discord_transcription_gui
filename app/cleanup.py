@@ -9,30 +9,34 @@ from . import config, logging_config
 logger = logging_config.get_logger(__name__)
 
 
-def clean_transcript(text: str) -> str:
-    # Blank-line spacing (between text/images and between messages,
-    # including die-roll command/result pairs) is now entirely owned by
-    # the review screen's spacer slots (see review_item.ReviewItem.slot_roles
-    # and ARCHITECTURE.md's "Spacer slots" section) - it used to be patched
-    # up here by collapsing %roll/%draw runs and capping excess blank lines
-    # to 3, which would silently clobber a spacer count the user
-    # deliberately chose, so neither regex runs anymore.
-    #
-    # The "|" -> "I" OCR-misread fix that used to run here moved to
-    # ocr_corrections.py/review_item.build_review_items, which runs on each
-    # image's text individually, before the user ever sees it, rather than
-    # over the whole accumulated output file (including already-finalized
-    # text from past runs) every time Finalize is clicked. What's left
-    # below is structural - literal "\n" artifacts and the BREAK-marker
-    # bookmark - not OCR text-quality fixes, so it stays here rather than
-    # moving with it.
-    cleaned = re.sub(r"\\n", "", text)  # stray misformatted newlines
+def clean_transcript(existing: str, added: str) -> str:
+    """Join this run's text onto the existing output, cleaned up.
+
+    Blank-line spacing is owned entirely by the review screen's spacer
+    slots (see review_item.ReviewItem.slot_roles and
+    docs/ARCHITECTURE_SPACER_SLOTS.md), and OCR-misread fixes by
+    ocr_corrections.py, so all that's left here is structural: stray
+    literal "\n" sequences are removed from this run's text only - past
+    runs' finalized text is never rewritten - and trailing BREAK markers
+    are trimmed from the end of the combined result, so an empty run
+    doesn't leave a second, empty bookmark.
+
+    Args:
+        existing: The output file's current contents.
+        added: This run's rendered text.
+
+    Returns:
+        The new output contents, before the fresh BREAK marker is appended.
+    """
+    cleaned_added = re.sub(r"\\n", "", added)  # stray misformatted newlines
     cleaned = re.sub(
-        rf"({re.escape(config.BREAK_MARKER)}(\s|\r|\n)*)+\Z", "", cleaned
+        rf"({re.escape(config.BREAK_MARKER)}(\s|\r|\n)*)+\Z", "", existing + cleaned_added
     )  # trailing BREAK markers
 
     logger.info(
         "cleaned transcript",
-        extra=logging_config.extra(input_chars=len(text), output_chars=len(cleaned)),
+        extra=logging_config.extra(
+            existing_chars=len(existing), added_chars=len(added), output_chars=len(cleaned)
+        ),
     )
     return cleaned

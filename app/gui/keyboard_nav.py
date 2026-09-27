@@ -27,6 +27,8 @@ from .layout_constants import ROW_PACK_PADY_PX
 logger = logging_config.get_logger(__name__)
 
 _TRAILING_WORD_RE = re.compile(r"\S+\s*$")
+# Shift modifier bit in a key event's state.
+_SHIFT_MASK = 0x1
 
 
 class KeyboardNavMixin:
@@ -56,6 +58,21 @@ class KeyboardNavMixin:
             if candidate is widget:
                 return key
         return None
+
+    def _on_undo_key(self, event: tk.Event) -> str:
+        """Ctrl+Z undoes and Ctrl+Shift+Z redoes.
+
+        Decided by the Shift modifier rather than the letter's case, so
+        Caps Lock doesn't turn Ctrl+Z into redo (or Ctrl+Shift+Z into undo).
+
+        Args:
+            event: The <Control-z>/<Control-Z> key event.
+
+        Returns:
+            "break", from whichever handler ran.
+        """
+        shift_held = isinstance(event.state, int) and bool(event.state & _SHIFT_MASK)
+        return self._redo_text(event) if shift_held else self._undo_text(event)
 
     def _undo_text(self, event: tk.Event) -> str:
         widget = event.widget
@@ -242,7 +259,6 @@ class KeyboardNavMixin:
         if focused is None:
             return None
         return self._key_for_widget(focused)
-        return None
 
     def _box_document_top(
         self, index: int, container: tk.Widget, row: tk.Widget
@@ -326,7 +342,7 @@ class KeyboardNavMixin:
         # nonzero model_real_discrepancy_px means self._offset_of(index) (or
         # something it sums over) has drifted from the rows' true on-screen
         # heights, which is exactly the failure mode this logging exists to
-        # catch (see ARCHITECTURE.md's "Row geometry" section).
+        # catch (see docs/ARCHITECTURE_ROW_GEOMETRY.md).
         real_offset_px = container.winfo_rooty() - canvas.winfo_rooty()
         model_offset_px = box_top - view_top
         self._log_event(

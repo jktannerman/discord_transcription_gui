@@ -402,7 +402,7 @@ def test_session_backup_created_on_second_save(tmp_path, monkeypatch):
 
     state.save_session("chat.html", {"output_path": "second.txt", "edited_texts": []})
     assert backup_file.exists()
-    assert json.loads(backup_file.read_text(encoding="utf8"))["chat.html"]["output_path"] == "first.txt"
+    assert json.loads(backup_file.read_text(encoding="utf8"))["data"][state.path_key("chat.html")]["output_path"] == "first.txt"
 
 
 def test_session_recovers_from_backup_when_primary_corrupt(tmp_path, monkeypatch):
@@ -437,7 +437,7 @@ def test_clear_session_removes_backup_too(tmp_path, monkeypatch):
 
     assert state.load_session("chat.html") is None
     assert backup_file.exists()
-    assert json.loads(backup_file.read_text(encoding="utf8"))["chat.html"]["output_path"] == "second.txt"
+    assert json.loads(backup_file.read_text(encoding="utf8"))["data"][state.path_key("chat.html")]["output_path"] == "second.txt"
 
 
 def _backups_config(tmp_path, monkeypatch):
@@ -607,3 +607,70 @@ def test_cache_recovers_from_backup_when_primary_corrupt(tmp_path, monkeypatch):
 
     assert state.load_cache(folder) == {"good.png": {"paragraphs": ["text"]}}
     assert backup_file.exists()
+
+
+def test_instance_lock_blocks_a_second_holder_until_released():
+    first = state.acquire_instance_lock()
+    assert first is not None
+    try:
+        assert state.acquire_instance_lock() is None
+    finally:
+        first.close()
+
+    again = state.acquire_instance_lock()
+    assert again is not None
+    again.close()
+
+
+
+def test_state_is_shared_across_spellings_of_the_same_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "logs")
+    state.save_session("logs/chat.html", {"output_path": "out.txt"})
+
+    for spelling in (
+        str(tmp_path / "logs" / "chat.html"),
+        str(tmp_path / "logs" / ".." / "logs" / "chat.html"),
+        str(tmp_path / "link" / "chat.html"),
+    ):
+        assert state.load_session(spelling) == {"output_path": "out.txt"}
+
+
+def test_entries_under_a_legacy_key_are_found_and_migrated_on_save(tmp_path, monkeypatch):
+    """State saved before keys were normalised used str(Path(path)) - a
+    relative or unresolved spelling must still find it, and the next save
+    must move it to the normalised key rather than duplicate it."""
+    monkeypatch.chdir(tmp_path)
+    legacy_key = "chat.html"
+    config.FINALIZED_EDITS_FILE.write_text(
+        json.dumps({legacy_key: {"m1": {"message": "old edit"}}}), encoding="utf8"
+    )
+
+    assert state.load_finalized_edits(str(tmp_path / "chat.html")) == {"m1": {"message": "old edit"}}
+
+    state.save_finalized_edits(str(tmp_path / "chat.html"), {"m2": {"message": "new edit"}})
+
+    on_disk = json.loads(config.FINALIZED_EDITS_FILE.read_text(encoding="utf8"))["data"]
+    assert list(on_disk) == [state.path_key(tmp_path / "chat.html")]
+    assert on_disk[state.path_key(tmp_path / "chat.html")] == {
+        "m1": {"message": "old edit"}, "m2": {"message": "new edit"},
+    }
+
+
+def test_ocr_cache_is_shared_across_spellings_of_the_same_folder(tmp_path):
+    state.save_cache(str(tmp_path / "images"), {"a.png": {"paragraphs": ["x"]}})
+    assert state.load_cache(str(tmp_path / "images" / ".." / "images")) == {
+        "a.png": {"paragraphs": ["x"]}
+    }
+
+
+def test_state_files_are_written_with_a_format_version():
+    state.append_run_date("2024-01-01-00-00-00")
+    on_disk = json.loads(config.RUN_DATE_FILE.read_text(encoding="utf8"))
+    assert on_disk == {"format_version": state.STATE_FORMAT_VERSION, "data": ["2024-01-01-00-00-00"]}
+
+
+def test_unversioned_state_files_are_still_read():
+    config.RUN_DATE_FILE.write_text(json.dumps(["2024-01-01-00-00-00"]), encoding="utf8")
+    assert state.read_last_run_date() == "2024-01-01-00-00-00"

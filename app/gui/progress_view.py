@@ -5,7 +5,7 @@ from tkinter import ttk
 
 
 class ProgressFrame(ttk.Frame):
-    def __init__(self, master: tk.Widget, status_text: str = ""):
+    def __init__(self, master: tk.Widget, status_text: str = "") -> None:
         super().__init__(master)
 
         self._status_var = tk.StringVar(value=status_text)

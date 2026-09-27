@@ -17,6 +17,7 @@ image_loading.py and keyboard_nav.py already do.
 """
 
 import tkinter as tk
+from pathlib import Path
 from tkinter import ttk
 from typing import Optional, Tuple
 
@@ -167,9 +168,8 @@ class RowBuildingMixin:
         editable copy and from an editable box.
 
         The container's height isn't known until the label exists, so it's
-        measured with pack_propagate left on (sizing naturally around the
-        label, per its wraplength) before being pinned to a fixed
-        width/height - same end state as the image case
+        taken from the label's own requested height (per its wraplength)
+        before being pinned to a fixed width/height - same end state as the image case
         (_build_image_placeholder), just measured rather than computed
         upfront from a cheap header read. This measure-once-at-build-time
         step is unrelated to (and much cheaper than) the per-keystroke
@@ -179,18 +179,22 @@ class RowBuildingMixin:
         preview = "\n".join(item.entry.text_lines).strip() or "(no text)"
         container = ttk.Frame(parent)
         container.pack(pady=(0, pady_bottom))
-        ttk.Label(
+        label = ttk.Label(
             container, text=preview, wraplength=THUMBNAIL_SIZE[0], justify="left",
             font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE),
-        ).pack(anchor="w", fill="x")
-        container.update_idletasks()
-        floor_px = max(container.winfo_reqheight(), 1)
+        )
+        label.pack(anchor="w", fill="x")
+        # The label's requested height is known as soon as it's configured,
+        # and the unpadded container sizes to exactly that. Don't flush the
+        # idle queue to measure the container instead: that repaints the
+        # whole review screen mid-reconcile, showing it half-rebuilt.
+        floor_px = max(label.winfo_reqheight(), 1)
         container.configure(width=THUMBNAIL_SIZE[0], height=floor_px)
         container.pack_propagate(False)
         return floor_px
 
     def _build_image_placeholder(
-        self, parent: tk.Widget, image_path, index: int, image_index: int, pady_bottom: int = 0,
+        self, parent: tk.Widget, image_path: Path, index: int, image_index: int, pady_bottom: int = 0,
     ) -> int:
         """Build the fixed-size image placeholder (actual pixels loaded
         lazily on scroll - see image_loading.py) for one of this row's
@@ -653,8 +657,10 @@ class RowBuildingMixin:
             text_widget.bind(sequence, self._on_mousewheel)
         text_widget.bind("<Prior>", self._on_page_up)
         text_widget.bind("<Next>", self._on_page_down)
-        text_widget.bind("<Control-z>", self._undo_text)
-        text_widget.bind("<Control-Z>", self._redo_text)
+        # Both cases go to one handler that checks Shift itself: the
+        # keysym's case alone would make Caps Lock swap undo and redo.
+        text_widget.bind("<Control-z>", self._on_undo_key)
+        text_widget.bind("<Control-Z>", self._on_undo_key)
         text_widget.bind("<Up>", lambda e, k=key: self._on_vertical_arrow(e, k))
         text_widget.bind("<Down>", lambda e, k=key: self._on_vertical_arrow(e, k))
         text_widget.bind(
@@ -693,10 +699,10 @@ class RowBuildingMixin:
         a row's true height unknowable until it was built and typed in -
         which is exactly the gap _remeasure_built_rows existed to correct,
         and the repeated source of this screen's scroll-position bugs (see
-        ARCHITECTURE.md). Fixing height to something knowable upfront - the
-        same way an image's height already was, via fitted_image_size's
-        cheap header read - removes that correction's reason to exist
-        instead of just estimating it more carefully."""
+        docs/ARCHITECTURE_REVIEW_SCREEN.md). Fixing height to something
+        knowable upfront - the same way an image's height already was, via
+        fitted_image_size's cheap header read - removes that correction's
+        reason to exist instead of just estimating it more carefully."""
         max_px = self._max_text_box_height_px()
         target_px = paired_height + TEXT_BOX_MARGIN_PX
         return max(1, min(target_px, max_px))

@@ -17,6 +17,14 @@ dependencies = [
     "pywin32==311; sys_platform == 'win32'",
 ]
 
+[project.optional-dependencies]
+# Tools for working on the app, not running it:
+#   python -m pip install -e ".[dev]"
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
 [project.scripts]
 discord-transcription-gui = "app.main:main"
 
@@ -28,3 +36,12 @@ markers = [
     "gui: opens a real (non-withdrawn) Tk window to test real layout/geometry - briefly visible on screen, so excluded by default; run with `-m gui` (or `-m \"\"` for the whole suite including these).",
 ]
 addopts = "-m \"not gui\""
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+# Ruff's default rule set (pyflakes plus the pycodestyle errors that matter),
+# plus warnings; style-only rules can be added once the code is clean.
+select = ["E4", "E7", "E9", "F", "W"]

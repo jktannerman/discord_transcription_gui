@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import logging.handlers
+import os
 import sys
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -98,15 +99,35 @@ def setup_logging(level: int = logging.INFO) -> None:
     # review session can log deep into six figures of trace events (per-op
     # fingerprinting added for INVESTIGATION_undo_redo_replay_divergence.md
     # made each op noisier still), and 10MB x 3 backups worked out to only a
-    # session or two of headroom in practice.
+    # session or two of headroom in practice. The budget and an on/off
+    # switch live in config (SCROLL_TRACE_*).
+    trace_logger = logging.getLogger(TRACE_LOGGER_NAME)
+    trace_logger.propagate = False
+    if not config.SCROLL_TRACE_ENABLED:
+        trace_logger.disabled = True
+        return
     trace_handler = logging.handlers.RotatingFileHandler(
-        config.SCROLL_TRACE_LOG_FILE, maxBytes=40_000_000, backupCount=6, encoding="utf8"
+        config.SCROLL_TRACE_LOG_FILE,
+        maxBytes=config.SCROLL_TRACE_MAX_BYTES,
+        backupCount=config.SCROLL_TRACE_BACKUP_COUNT,
+        encoding="utf8",
     )
     trace_handler.setFormatter(formatter)
-    trace_logger = logging.getLogger(TRACE_LOGGER_NAME)
     trace_logger.setLevel(logging.DEBUG)
     trace_logger.addHandler(trace_handler)
-    trace_logger.propagate = False
+
+
+def resolve_log_level() -> int:
+    """The level setup_logging should use for LOG_FILE and the console.
+
+    Returns:
+        The level named by the config.LOG_LEVEL_ENV_VAR environment
+        variable if set, else config.LOG_LEVEL. An unrecognised name falls
+        back to DEBUG rather than stopping the app from starting.
+    """
+    name = (os.environ.get(config.LOG_LEVEL_ENV_VAR) or config.LOG_LEVEL).strip().upper()
+    level = logging.getLevelName(name)
+    return level if isinstance(level, int) else logging.DEBUG
 
 
 def get_trace_logger() -> logging.Logger:

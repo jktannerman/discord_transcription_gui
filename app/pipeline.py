@@ -22,6 +22,7 @@ Split into pieces the GUI can drive explicitly:
 import datetime
 import os
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Optional
@@ -253,6 +254,18 @@ def render_items(items: list[ReviewItem], edited_texts: list[dict[str, Optional[
     )
 
 
+def output_backup_path(output_path: Path) -> Path:
+    """Where finalize_run keeps the output file's previous version.
+
+    Args:
+        output_path: The transcript file.
+
+    Returns:
+        The same path with ".bak" appended, e.g. "transcript.txt.bak".
+    """
+    return output_path.with_name(output_path.name + ".bak")
+
+
 @dataclass
 class FinalizeResult:
     """Outcome of a finalize_run call that got as far as writing the output.
@@ -282,7 +295,8 @@ def finalize_run(
 
     The new output is built entirely in memory - existing content plus this
     run's rendered items, cleaned up, plus a fresh BREAK marker bookmarking
-    the end of the run - and written with one atomic replace. That write is
+    the end of the run - and written with one atomic replace, after copying
+    the previous version to output_backup_path(output_path). That write is
     the commit point: if anything before it fails, the output file is
     untouched and the run can safely be retried. Steps after it (recording
     the run date, copying to the clipboard) can't undo the write, so their
@@ -308,12 +322,17 @@ def finalize_run(
     )
 
     existing = output_path.read_text(encoding="utf8") if output_path.exists() else ""
-    cleaned = cleanup.clean_transcript(existing + render_items(items, edited_texts))
+    cleaned = cleanup.clean_transcript(existing, render_items(items, edited_texts))
     just_added = cleaned.split(config.BREAK_MARKER)[-1]
     # Read before the commit point, so a missing/unreadable chatlog aborts
     # cleanly rather than leaving a written output with no recorded date.
     end_time = os.path.getmtime(html_file_path)
 
+    if output_path.exists():
+        # Copied rather than moved aside, so the output file itself never
+        # disappears, even briefly. A failure here aborts before the commit
+        # point, like any other pre-write failure.
+        shutil.copy2(output_path, output_backup_path(output_path))
     state.atomic_write_text(output_path, f"{cleaned}\n\n\n{config.BREAK_MARKER}\n\n\n")
     logger.info(
         "output file written",

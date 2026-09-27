@@ -15,6 +15,7 @@ from gui_transcription.app.gui.image_loading import (
     THUMBNAIL_SIZE,
     ImageLoader,
     fitted_image_size,
+    load_display_image,
 )
 
 
@@ -36,6 +37,17 @@ def portrait_image(tmp_path):
 def small_image(tmp_path):
     path = tmp_path / "small.png"
     Image.new("RGB", (50, 30), color="green").save(path)
+    return path
+
+
+@pytest.fixture
+def rotated_phone_photo(tmp_path):
+    """Stored 2000x1000 (landscape) with EXIF orientation 6: shown portrait."""
+    path = tmp_path / "phone.jpg"
+    image = Image.new("RGB", (2000, 1000), color="blue")
+    exif = image.getexif()
+    exif[0x0112] = 6
+    image.save(path, exif=exif)
     return path
 
 
@@ -202,3 +214,21 @@ def test_unload_image_clears_photo_and_restores_placeholder_text(tk_root, small_
     assert loader._slots[(0, 0)].loaded is False
     assert loader._slots[(0, 0)].photo is None
     assert label.cget("text") == "(scroll to load image)"
+
+
+# -- EXIF orientation -------------------------------------------------------
+
+
+def test_fitted_image_size_accounts_for_exif_rotation(rotated_phone_photo):
+    # Shown as 1000x2000, so it's height-constrained like any portrait image.
+    assert fitted_image_size(rotated_phone_photo, bounding_box=(760, 950)) == (475, 950)
+
+
+def test_load_display_image_applies_exif_rotation_and_matches_fitted_size(rotated_phone_photo):
+    image = load_display_image(rotated_phone_photo)
+    assert image.size == fitted_image_size(rotated_phone_photo)
+
+
+def test_load_display_image_leaves_unrotated_images_alone(landscape_image):
+    image = load_display_image(landscape_image)
+    assert image.size == fitted_image_size(landscape_image)

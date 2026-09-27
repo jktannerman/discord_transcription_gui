@@ -6,9 +6,10 @@ the same way.
 """
 
 import tkinter as tk
-from typing import Callable, Dict, Optional, Tuple
+from pathlib import Path
+from typing import Callable, Dict, Optional, Sequence, Tuple, Union
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageOps, ImageTk
 
 from .. import logging_config
 
@@ -19,8 +20,50 @@ logger = logging_config.get_logger(__name__)
 # enough to actually read while transcribing.
 THUMBNAIL_SIZE = (760, 950)
 
+ImagePath = Union[str, Path]
 
-def fitted_image_size(image_path, bounding_box: Tuple[int, int] = THUMBNAIL_SIZE) -> Tuple[int, int]:
+# EXIF "Orientation" tag. Values 5-8 mean the stored pixels are a quarter
+# turn away from how the photo should be shown (common for phone photos).
+_EXIF_ORIENTATION_TAG = 0x0112
+_QUARTER_TURN_ORIENTATIONS = frozenset({5, 6, 7, 8})
+
+
+def _displayed_size(img: Image.Image) -> Tuple[int, int]:
+    """An opened image's (width, height) as shown, after EXIF rotation.
+
+    Args:
+        img: An image opened with Image.open (only its header is read).
+
+    Returns:
+        The stored size, with width and height swapped if the EXIF
+        orientation calls for a quarter turn.
+    """
+    width, height = img.size
+    try:
+        orientation = img.getexif().get(_EXIF_ORIENTATION_TAG)
+    except Exception:
+        orientation = None
+    if orientation in _QUARTER_TURN_ORIENTATIONS:
+        return height, width
+    return width, height
+
+
+def load_display_image(image_path: ImagePath) -> Image.Image:
+    """Decode an image for the review screen: EXIF-rotated, fitted to THUMBNAIL_SIZE.
+
+    Args:
+        image_path: The image file.
+
+    Returns:
+        The decoded image, the size fitted_image_size predicts.
+    """
+    with Image.open(image_path) as opened:
+        image = ImageOps.exif_transpose(opened)
+        image.thumbnail(THUMBNAIL_SIZE)
+    return image
+
+
+def fitted_image_size(image_path: ImagePath, bounding_box: Tuple[int, int] = THUMBNAIL_SIZE) -> Tuple[int, int]:
     """The on-screen size review rows actually display image_path at -
     same fit-within-bounding_box-preserving-aspect-ratio logic as
     Image.thumbnail() (used for the real photo in _load_image below), but
@@ -35,7 +78,7 @@ def fitted_image_size(image_path, bounding_box: Tuple[int, int] = THUMBNAIL_SIZE
     the actual photo."""
     try:
         with Image.open(image_path) as img:
-            original_size = img.size
+            original_size = _displayed_size(img)
     except Exception:
         logger.warning(
             "could not read image size", extra=logging_config.extra(image_path=str(image_path))
@@ -61,7 +104,7 @@ class ImageSlot:
 
     __slots__ = ("image_path", "label", "loaded", "photo")
 
-    def __init__(self, image_path, label: tk.Widget):
+    def __init__(self, image_path: ImagePath, label: tk.Widget) -> None:
         self.image_path = image_path
         self.label = label
         self.loaded = False
@@ -78,10 +121,10 @@ class ImageLoader:
     loaded/unloaded as a unit, not image-by-image, the same as before
     multiple images per row were possible."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._slots: Dict[Tuple[int, int], ImageSlot] = {}
 
-    def register(self, index: int, image_index: int, image_path, label: tk.Widget) -> None:
+    def register(self, index: int, image_index: int, image_path: ImagePath, label: tk.Widget) -> None:
         self._slots[(index, image_index)] = ImageSlot(image_path=image_path, label=label)
 
     def unregister_row(self, index: int) -> None:
@@ -90,8 +133,8 @@ class ImageLoader:
 
     def update_visible(
         self,
-        offset_of,
-        row_heights,
+        offset_of: Callable[[int], float],
+        row_heights: Sequence[float],
         visible_top: float,
         visible_bottom: float,
         log_event: Optional[Callable[..., None]] = None,
@@ -128,9 +171,7 @@ class ImageLoader:
 
     def _load_image(self, slot: ImageSlot) -> None:
         try:
-            image = Image.open(slot.image_path)
-            image.thumbnail(THUMBNAIL_SIZE)
-            photo = ImageTk.PhotoImage(image)
+            photo = ImageTk.PhotoImage(load_display_image(slot.image_path))
         except Exception:
             logger.warning(
                 "could not load image preview",

@@ -12,7 +12,7 @@ at all) between/after each of those, holding the literal "\n" tokens that
 control the blank-line gap on either side of it - independently editable,
 so a message with a caption and multiple images gets all of those boxes.
 See review_item.ReviewItem.slot_roles for the exact ordering and
-ARCHITECTURE.md's "Spacer slots" section for the full design. Copy/paste
+docs/ARCHITECTURE_SPACER_SLOTS.md for the full design. Copy/paste
 and arbitrary edits are allowed in every text box; nothing is parsed or
 restricted there. Nothing is written to disk until the Finalize button at
 the bottom is clicked, which writes every message's final lines in one
@@ -68,7 +68,10 @@ The materialized rows are still packed into a single child Frame
 (self._scroll_frame) so Tk handles their relative stacking for free, but
 that Frame is repositioned via canvas.coords() on every _reconcile to sit
 at its materialized range's true offset within the full virtual document
-- it is deliberately NOT left at canvas position (0, 0). The canvas's
+- it is deliberately NOT left at canvas position (0, 0). That repositioning
+happens as soon as rows are destroyed or built, before anything can flush
+the idle queue and repaint, so the screen never shows the block out of
+place. The canvas's
 scrollregion is likewise set explicitly from self._row_heights (the full
 document height), not derived from this frame's own bbox (which would
 only ever reflect the small materialized subset).
@@ -160,7 +163,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         initial_scroll_fraction: Optional[float] = None,
         initial_finalized_texts: Optional[List[Dict[str, Optional[str]]]] = None,
         initial_touched_slots: Optional[Iterable[Tuple[int, str]]] = None,
-    ):
+    ) -> None:
         super().__init__(master)
         logger.info(
             "building review screen",
@@ -274,8 +277,8 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         # own build-time insert/replay and around the checkbox's own
         # programmatic content swap, both of which fire <<Modified>> just
         # like a real edit (see row_building.py's _populate_text_box and
-        # ARCHITECTURE.md's "<<Modified>> fires on a box's initial
-        # population" section for why that event can't be trusted at face
+        # docs/ARCHITECTURE_REVIEW_SCREEN.md's "<<Modified>> fires on a
+        # box's initial population" entry for why that event can't be trusted at face
         # value).
         self._suppress_ocr_auto_check: set = set()
         # One UndoLog per box, recording every insert/delete/undo/redo it's
@@ -360,7 +363,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
             for item in items
         ]
 
-        def _on_scrollbar(*args):
+        def _on_scrollbar(*args: str) -> None:
             if self._scroll_frozen:
                 return
             self._log_event("input_scrollbar", args=args)
@@ -381,7 +384,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         # to just the materialized subset on every row build/destroy.
         self._canvas_window = canvas.create_window((0, 0), window=self._scroll_frame, anchor="nw")
 
-        def _on_canvas_configure(e):
+        def _on_canvas_configure(e: tk.Event) -> None:
             canvas.itemconfig(self._canvas_window, width=e.width)
             self._log_event("input_canvas_configure", width=e.width, height=e.height)
             self._schedule_reconcile()
@@ -398,7 +401,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         canvas.bind_all("<Next>", self._on_page_down)
         # bind_all is global, so undo it when this frame goes away, otherwise
         # the next screen's scrolling would dispatch to this destroyed canvas
-        def _on_destroy(e):
+        def _on_destroy(e: tk.Event) -> None:
             for sequence in WHEEL_EVENT_SEQUENCES:
                 canvas.unbind_all(sequence)
             canvas.unbind_all("<Prior>")
@@ -535,7 +538,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         text_widget.yview_scroll(int(-delta / 120) or (-1 if delta > 0 else 1), "units")
         return True
 
-    def _log_event(self, event: str, **fields) -> None:
+    def _log_event(self, event: str, **fields: object) -> None:
         """Log one step of scroll/page/focus/resize handling to the dedicated
         scroll-trace log (see logging_config.get_trace_logger), stamped with
         a sequence number plus the canvas's current window/scroll state, so
@@ -702,6 +705,11 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         for idx in list(self._row_frames):
             if idx < new_first or idx > new_last:
                 self._destroy_row(idx)
+        # Destroying rows above shifts everything left in the block up by
+        # their height; move the block down to match right away, before
+        # anything can repaint, instead of only at the end of _reconcile.
+        if self._row_frames:
+            self._canvas.coords(self._canvas_window, 0, self._offset_of(min(self._row_frames)))
 
         newly_built: List[int] = []
         # Growth below the old window, appended in index order at the end
@@ -915,6 +923,10 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         old_range = self._materialized_range
         newly_built = self._sync_materialized_rows(old_range, (first_idx, last_idx))
         self._materialized_range = (first_idx, last_idx)
+        # Position the block for its new first row (by estimated height, for
+        # rows just built above) before update_idletasks repaints; the
+        # remeasure below only corrects the remaining estimation error.
+        canvas.coords(self._canvas_window, 0, self._offset_of(first_idx))
 
         canvas.update_idletasks()
         self._settle_pending_geometry(newly_built)

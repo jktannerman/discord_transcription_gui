@@ -32,7 +32,7 @@ from typing import Optional
 
 from urllib.parse import unquote
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from . import config, logging_config
 
@@ -126,7 +126,7 @@ def parse_message_groups(
     return entries
 
 
-def _parse_message(message) -> MessageEntry:
+def _parse_message(message: Tag) -> MessageEntry:
     container = message.find_parent(attrs={"class": "chatlog__message-container"})
     if container is None or "data-message-id" not in container.attrs:
         raise ValueError(

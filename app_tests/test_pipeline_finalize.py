@@ -84,19 +84,40 @@ def test_finalize_run_records_run_date_from_html_mtime(tmp_path, clipboard):
 
     pipeline.finalize_run(output_path, _html(tmp_path), _items(tmp_path), [{}])
 
-    recorded_dates = json.loads(config.RUN_DATE_FILE.read_text(encoding="utf8"))
+    recorded_dates = json.loads(config.RUN_DATE_FILE.read_text(encoding="utf8"))["data"]
     assert len(recorded_dates) == 1
 
 
-def test_finalize_run_applies_cleanup_pass(tmp_path, clipboard):
+def test_finalize_run_leaves_past_runs_text_untouched(tmp_path, clipboard):
     output_path = tmp_path / "out.txt"
-    # cleanup.clean_transcript replaces stray literal "\n" sequences - see test_cleanup.py
+    # cleanup.clean_transcript only strips stray literal "\n" sequences from
+    # this run's text - see test_cleanup.py.
     output_path.write_text("line one\\nline two", encoding="utf8")
 
     pipeline.finalize_run(output_path, _html(tmp_path), _items(tmp_path), [{}])
 
     final_text = output_path.read_text(encoding="utf8")
-    assert "\\n" not in final_text.split(config.BREAK_MARKER)[0]
+    assert final_text.startswith("line one\\nline two")
+
+
+def test_finalize_run_keeps_the_previous_output_as_a_backup(tmp_path, clipboard):
+    output_path = tmp_path / "out.txt"
+    output_path.write_text("previous contents", encoding="utf8")
+
+    pipeline.finalize_run(output_path, _html(tmp_path), _items(tmp_path), [{}])
+
+    backup = pipeline.output_backup_path(output_path)
+    assert backup.name == "out.txt.bak"
+    assert backup.read_text(encoding="utf8") == "previous contents"
+    assert output_path.read_text(encoding="utf8") != "previous contents"
+
+
+def test_finalize_run_makes_no_backup_for_a_new_output_file(tmp_path, clipboard):
+    output_path = tmp_path / "out.txt"
+
+    pipeline.finalize_run(output_path, _html(tmp_path), _items(tmp_path), [{}])
+
+    assert not pipeline.output_backup_path(output_path).exists()
 
 
 def test_finalize_run_leaves_output_unchanged_when_it_fails_before_writing(tmp_path, clipboard):

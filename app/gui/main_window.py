@@ -22,6 +22,7 @@ re-applying the saved edits/position once OCR/parsing finish
 actually finalized, or if the user declines to resume it.
 """
 
+import queue
 import threading
 import tkinter as tk
 from dataclasses import dataclass
@@ -212,6 +213,10 @@ class RunContext:
     use_cache: bool
 
 
+# How often the Tk thread checks the OCR worker's event queue.
+_WORKER_POLL_MS = 50
+
+
 class _RunError(Exception):
     """A run failure whose message is ready to show the user as-is."""
 
@@ -288,7 +293,7 @@ def _warn_missing_images(missing_images: list[str]) -> None:
 
 
 class App:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk) -> None:
         self.root = root
         # Stay hidden until everything (including the dark title bar) is
         # set up, then show it all in one shot - see theme.enable_dark_title_bar's
@@ -485,25 +490,51 @@ class App:
         )
 
         run = self._run
+        # Tk isn't guaranteed to be safe to call from another thread, so the
+        # worker only ever puts (callback, args, is_final) onto this queue,
+        # and _poll_worker_events runs the callbacks on the Tk thread.
+        events: "queue.Queue[tuple[Callable[..., None], tuple, bool]]" = queue.Queue()
 
-        def worker():
+        def worker() -> None:
             try:
                 entries, ocr_result = _prepare_run(
                     run,
-                    progress_callback=lambda frac: self.root.after(0, progress.set_progress, frac),
-                    status_callback=lambda text: self.root.after(0, progress.set_status, text),
+                    progress_callback=lambda frac: events.put((progress.set_progress, (frac,), False)),
+                    status_callback=lambda text: events.put((progress.set_status, (text,), False)),
                 )
             except _RunError as exc:
-                self.root.after(0, self._on_run_error, str(exc))
+                events.put((self._on_run_error, (str(exc),), True))
                 return
             except Exception as exc:  # surfaced to the user, not a crash
                 logger.exception("OCR batch failed")
-                self.root.after(0, self._on_run_error, str(exc))
+                events.put((self._on_run_error, (str(exc),), True))
                 return
 
-            self.root.after(0, self._on_ocr_done, entries, ocr_result)
+            events.put((self._on_ocr_done, (entries, ocr_result), True))
 
+        self.root.after(_WORKER_POLL_MS, self._poll_worker_events, events)
         threading.Thread(target=worker, daemon=True).start()
+
+    def _poll_worker_events(
+        self, events: "queue.Queue[tuple[Callable[..., None], tuple, bool]]"
+    ) -> None:
+        """Run the callbacks the OCR worker queued, on the Tk thread.
+
+        Reschedules itself until the worker's final callback (the run's
+        result or error) has run.
+
+        Args:
+            events: The worker's queue of (callback, args, is_final).
+        """
+        while True:
+            try:
+                callback, args, is_final = events.get_nowait()
+            except queue.Empty:
+                break
+            callback(*args)
+            if is_final:
+                return
+        self.root.after(_WORKER_POLL_MS, self._poll_worker_events, events)
 
     def _on_run_error(self, message: str) -> None:
         logger.error("run failed", extra=logging_config.extra(error=message))

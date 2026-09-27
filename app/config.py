@@ -103,6 +103,19 @@ LOG_FILE = APP_DATA_DIR / "app.log"
 # readable on their own, and so this stream can rotate independently without
 # evicting those - see logging_config.setup_logging.
 SCROLL_TRACE_LOG_FILE = APP_DATA_DIR / "scroll_trace.log"
+# Rotation budget for SCROLL_TRACE_LOG_FILE (sized generously - see
+# logging_config.setup_logging), and a switch to turn it off entirely.
+SCROLL_TRACE_ENABLED = True
+SCROLL_TRACE_MAX_BYTES = 40_000_000
+SCROLL_TRACE_BACKUP_COUNT = 6
+# Level for LOG_FILE and the console ("DEBUG", "INFO", "WARNING", ...).
+# Overridable for a single launch via the LOG_LEVEL_ENV_VAR environment
+# variable, e.g. DISCORD_TRANSCRIPTION_LOG_LEVEL=INFO.
+LOG_LEVEL = "DEBUG"
+LOG_LEVEL_ENV_VAR = "DISCORD_TRANSCRIPTION_LOG_LEVEL"
+# Held (OS-level file lock) for as long as the app runs, so a second copy
+# can't start and silently overwrite the first one's saved state.
+INSTANCE_LOCK_FILE = APP_DATA_DIR / "app.lock"
 
 # How many previously-used values to keep, per setup-screen field, for the
 # dropdown history (most-recently-used first).
@@ -119,11 +132,11 @@ TIMESTAMP_FORMAT = "%d/%m/%Y %H:%M"
 # "%draw 1 20") - its result is assumed to be the very next approved
 # message, so spacer defaults treat the pair as one continuous block
 # rather than separating them like a normal message - see
-# review_item.build_review_items and ARCHITECTURE.md's "Spacer slots" section.
+# review_item.build_review_items and docs/ARCHITECTURE_SPACER_SLOTS.md.
 DICE_COMMAND_RE = re.compile(r"^%roll \d*(d|l|h)\d+|^%draw \d+ \d+")
 
 # Default blank-line counts a spacer slot is pre-filled with (see
-# ARCHITECTURE.md's "Spacer slots" section for the full table this
+# docs/ARCHITECTURE_SPACER_SLOTS.md for the full table this
 # implements) - the literal "\n" token count written into a spacer box is
 # always one more than the empty-line count, since the gap also includes
 # the newline that terminates the line right before it.

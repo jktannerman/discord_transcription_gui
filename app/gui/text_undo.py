@@ -102,7 +102,7 @@ def attach_undo_recording(
     tcl = text_widget.tk
     tcl.call("rename", widget_path, shadow_path)
 
-    def _resolve_index(value):
+    def _resolve_index(value: str) -> str:
         """Turn a possibly-symbolic index argument (`"sel.first"`,
         `"insert"`, `"end"`, `"1.0 lineend"`, ...) into the absolute
         `"line.column"` string it means *right now* - queried against the
@@ -140,7 +140,7 @@ def attach_undo_recording(
         except tk.TclError:
             return value
 
-    def _resolve_op_args(name, rest):
+    def _resolve_op_args(name: str, rest: Tuple[str, ...]) -> Tuple[str, ...]:
         if name == "delete":
             return tuple(_resolve_index(arg) for arg in rest)
         if name == "insert" and rest:
@@ -149,7 +149,7 @@ def attach_undo_recording(
             return (_resolve_index(rest[0]),) + tuple(rest[1:])
         return rest
 
-    def _proxy(*args):
+    def _proxy(*args: str) -> object:
         recordable = bool(args) and args[0] in ("insert", "delete") and not log.suppress
         # Resolved *before* the real call below actually performs the
         # insert/delete - a symbolic mark like "sel.first" only means

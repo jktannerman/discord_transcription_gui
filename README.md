@@ -42,11 +42,11 @@ What's in scope for v1:
    on all images (ignore cache)" checkbox starts unticked; normally
    previously OCR'd images are reused from the cache and only new or
    changed ones are OCR'd, and ticking it forces every image in this run
-   to be OCR'd again. An "Approved users" multi-line box lists which Discord users'
-   messages get kept, one per line in the form `123456789012345678 - Alice` 
-   - only the leading digits (the actual Discord user ID) are used for 
-   filtering, the rest is just a human-readable label. It's pre-filled with 
-   whatever was used last run; individual entries you've typed before are also
+   to be OCR'd again. An "Approved users" multi-line box lists which
+   Discord users' messages get kept, one per line in the form
+   `123456789012345678 - Alice`. Only the leading digits (the actual
+   Discord user ID) are used for filtering; the rest is just a
+   human-readable label. It's pre-filled with whatever was used last run; individual entries you've typed before are also
    remembered and can be re-added via the "Known users" dropdown next to it
    without retyping the ID. A "Transcribe messages from all users" checkbox
    bypasses the filter entirely (and greys out the users box, since it's
@@ -138,22 +138,19 @@ What's in scope for v1:
    its own independently-editable OCR box, stacked in attachment order, the
    same way a caption and an image each get their own box rather than one
    covering both. Copy, paste, and arbitrary edits are all allowed in every
-   text box, nothing is parsed or restricted. Only a bounded window of rows
-   (12 by default) is
-   ever built as actual widgets at once; scrolling near either edge of that
-   window pages the next/previous half-window in and tears the opposite
-   half down, so scrolling stays responsive no matter how long the
-   transcript is. Each page transition pins a surviving row's on-screen
-   position and compensates the scroll offset for whatever was
-   added/removed above it ("scroll anchoring") — without that compensation,
-   paging in more rows above the viewport made the next page-load trigger
-   *more* likely rather than less, causing a runaway cascade of transitions
-   back toward the start of the transcript. Edits survive a row being paged
-   out and back in, and the focused text box keeps focus across a transition
-   if it's still in the new window - and even if it isn't (e.g. a fast
-   Page Up/Page Down burst that skips straight past the buffered range),
-   focus and the exact cursor position are restored once that row is paged
-   back in, rather than just staying lost for the rest of the session.
+   text box, nothing is parsed or restricted. Only the rows on screen, plus
+   about one screen's worth on either side, are ever built as actual
+   widgets at once, so scrolling stays responsive no matter how long the
+   transcript is. Shortly after scrolling pauses, the app works out from
+   scratch which rows should be built for the current scroll position,
+   builds the missing ones and tears down the rest, then measures the new
+   rows and corrects the scroll position for any difference from their
+   estimated height, so the content on screen doesn't jump. Edits survive a
+   row being torn down and rebuilt, and the focused text box keeps focus
+   if its row is still built - and even if it isn't (e.g. a fast Page
+   Up/Page Down burst that skips straight past the built range), focus and
+   the exact cursor position are restored once that row is built again,
+   rather than just staying lost for the rest of the session.
    Typing into a box that's still focused
    but has been scrolled off-screen (the mouse wheel/scrollbar can move the
    viewport without touching focus at all) scrolls its row back into view
@@ -171,7 +168,8 @@ What's in scope for v1:
    *height* is its own aspect-preserving fit within that width — a wide
    (landscape) image, the common case, ends up much shorter than a tall
    (portrait) one, rather than every image being letterboxed inside a
-   single fixed box-shaped slot. The immutable original-text label uses
+   single fixed box-shaped slot. Photos carrying an EXIF rotation tag
+   (common from phones) are shown the right way up. The immutable original-text label uses
    the same font/size as the editable boxes (it used to be smaller, before
    every message got an editable copy of its own text) — its background is
    left at the plain default, matching the image column's own background,
@@ -188,17 +186,20 @@ What's in scope for v1:
    wheel while hovering over a text box that has its own scrollbar scrolls
    *that box* until it hits the end of its content, then further scrolling
    in the same direction falls through to scrolling the whole review
-   window, same as if the box weren't there.
+   window, same as if the box weren't there. Horizontal scrolling (Shift +
+   wheel, or a touchpad's sideways movement during a two-finger scroll) is
+   ignored, since nothing on the review screen scrolls sideways.
 
    Right-clicking an image (loaded or not yet scrolled into view) pops up a
    standard context menu with five actions: **Open Image** (opens the image
    file with the system's default *image viewer*, the same program a
-   double-click in Explorer would use), **Open Image in Browser** (opens it
-   with the system's default *browser* specifically - Firefox/Chrome/Edge/
-   etc., looked up from the same place Windows itself resolves "open with
-   default browser", independently of whatever program is the default image
-   viewer), **Open Image Location** (opens its containing folder in
-   Explorer with the file pre-selected), **Open Chatlog at Message** (opens
+   double-click in the file manager would use), **Open Image in Browser**
+   (opens it with the system's default *browser* specifically -
+   Firefox/Chrome/Edge/etc., looked up the same way the OS itself resolves
+   "open with default browser", independently of whatever program is the
+   default image viewer), **Open Image Location** (opens its containing
+   folder in the file manager with the file pre-selected), **Open Chatlog
+   at Message** (opens
    the original chatlog HTML export, in the same default browser as "Open
    Image in Browser", scrolled straight to that image's message - handy for
    checking the surrounding conversation for context an OCR'd image alone
@@ -216,9 +217,15 @@ What's in scope for v1:
    close, and action click is logged, along with whether the action itself
    succeeded or failed.
 
-   The five actions are currently Windows-only. On Linux the menu still
-   opens, but every action fails (logged as a failure in `app.log`, without
-   crashing the app) - see "Known gaps" below.
+   On Windows these use the registry (default browser), Explorer and the
+   Win32 clipboard. On Linux they use freedesktop.org standards instead
+   (`app/gui/desktop_linux.py`): `xdg-open` for Open Image, the browser
+   `xdg-settings` reports as default (launched from its `.desktop` entry)
+   for the two browser actions, the `org.freedesktop.FileManager1` D-Bus
+   interface for Open Image Location (falling back to opening the folder
+   without a selection if no file manager provides it), and `xclip` (X11)
+   or `wl-copy` (Wayland) for Copy Image. A failed action is logged in
+   `app.log` rather than crashing the app.
 
    Each "ocr" box additionally has a checkbox in an otherwise-invisible
    column at its own top-right corner - inside the box, compressing its text
@@ -258,8 +265,10 @@ What's in scope for v1:
    same one-word-per-line format) does the opposite - it flags a word even
    though the dictionary considers it a real word, for real English words
    that keep turning out to be OCR misreads or typos for something else in
-   this transcript's context. A word listed in both files is never flagged
-   - the whitelist wins.
+   this transcript's context. A word listed in both files is never
+   flagged: the whitelist wins.
+   Edits to either file take effect on the next spellcheck, without
+   restarting the app.
    It's a plain dictionary lookup, not a language model, so it's meant to
    catch obvious OCR garbling rather than to be a correctness oracle for
    informal chat text - and it never applies to a spacer box (see below),
@@ -269,9 +278,8 @@ What's in scope for v1:
    and the next, and the gap before the next message - there's also a
    **spacer box**: a one-line-tall, editable box holding nothing but
    literal `\n` characters (typed as backslash-n, not real line breaks),
-   pre-filled with a default count that you can freely add to, remove from, 
-   or otherwise edit -
-   anything else typed into one is ignored. This replaces the original
+   pre-filled with a default count that you can freely add to, remove
+   from, or otherwise edit. Anything else typed into one is ignored. This replaces the original
    script's fixed regex-based spacing, which couldn't express anything
    finer than its own hardcoded rules. See `docs/ARCHITECTURE_SPACER_SLOTS.md`
    for the full default-spacing table and exactly how a spacer's content is
@@ -291,7 +299,8 @@ What's in scope for v1:
    **Down** at the bottom of a box's own view aligns that box's bottom edge
    with the bottom of the window (and **Up** the top edge with the top),
    rather than only the cursor's own line peeking into view;
-   **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo within a single text box - history
+   **Ctrl+Z**/**Ctrl+Shift+Z** undo/redo within a single text box (Caps
+   Lock doesn't swap them) - history
    is kept separately per box and survives that box's row being paged out
    and back in, though (like everything else not written to the output
    file) not a full app restart.
@@ -307,10 +316,13 @@ What's in scope for v1:
    run through the remaining post-run cleanup (leftover literal `\n`s and
    trailing `[BREAK]` markers - blank-line spacing is no longer touched
    here, since spacer boxes already wrote exactly what you left in them;
-   common OCR misreads are now fixed earlier, before you ever see the text
-   - see "OCR corrections" below), plus a fresh `[BREAK]` marker as a
-   bookmark for the next run. That is written to the output file in one
-   atomic replace, so a failure never leaves it half-written. If the write
+   common OCR misreads are now fixed earlier, before you ever see the
+   text; see "OCR corrections" below), plus a fresh `[BREAK]` marker as a
+   bookmark for the next run. The previous version of the output file is
+   first copied to `<output name>.bak` beside it (e.g. `transcript.txt.bak`),
+   then the new output is written in one atomic replace, so a failure never
+   leaves it half-written. Only this run's new text is cleaned up; text
+   from earlier runs is never rewritten. If the write
    fails, nothing has changed on disk and you stay on the review screen to
    fix the problem and try again. Once it succeeds, the run counts as
    finalized: it records the new run-end date, copies the newly-added text
@@ -412,7 +424,7 @@ gui_transcription/
       review_view.py       # the review screen's windowing core (reconcile/
                           # paging/scroll-correction) + Finalize button -
                           # delegates row construction, images, and
-                          # keyboard nav to the five modules below
+                          # keyboard nav to the modules below
       row_building.py      # builds a single row's widgets (labels, image
                           # placeholders, editable text boxes/scrollbars)
       layout_constants.py  # row/text-box sizing constants shared by
@@ -425,9 +437,12 @@ gui_transcription/
                           # (open in browser/location, open chatlog at
                           # message, copy to clipboard) - freezes scrolling
                           # (mousewheel/Page Up-Down/scrollbar) while open
+      desktop_linux.py     # Linux side of those actions: default browser,
+                          # file manager, clipboard (freedesktop standards)
       keyboard_nav.py      # Tab/Page Up-Down/undo keyboard shortcuts
       wheel.py             # mouse wheel/touchpad events across platforms
-                          # (<MouseWheel> vs X11's <Button-4>/<Button-5>)
+                          # (<MouseWheel> vs X11's <Button-4>/<Button-5>;
+                          # horizontal/Shift scrolls ignored)
       text_undo.py          # per-box undo/redo history that survives a
                           # row being paged out and rebuilt (in-memory only)
       theme.py             # dark theme colors/fonts + ttk Style setup
@@ -455,7 +470,9 @@ gui_transcription/
     there directly, since the installer doesn't add it to PATH.
   - Linux: `sudo apt install tesseract-ocr`. It only needs to be on PATH.
 - **Linux only: a clipboard tool** for finalize's copy-to-clipboard step
-  (pyperclip uses it): `sudo apt install xclip` (or `xsel`) on X11.
+  (pyperclip uses it) and the image menu's Copy Image: `sudo apt install
+  xclip` on X11 (`xsel` also works for finalize, but not Copy Image), or
+  `wl-clipboard` on Wayland.
 
 ## Running it
 
@@ -517,13 +534,33 @@ py -3 -m pip install -r requirements.txt
 py -3 -m app.main
 ```
 
+Only one copy of the app can run at a time (it holds a lock on
+`app.lock` in its data folder), since two copies would overwrite each
+other's saved sessions and settings; starting a second one just shows an
+"Already running" message.
+
+### Logs
+
+The app writes `app.log` and `scroll_trace.log` to its data folder
+(`~/.discord_transcription_gui/`; see `docs/ARCHITECTURE_LOGGING.md`).
+`app.log`'s level is `config.LOG_LEVEL` (DEBUG by default), and can be
+changed for a single launch with an environment variable, e.g.
+`DISCORD_TRANSCRIPTION_LOG_LEVEL=INFO discord-transcription-gui`. The
+scroll trace's size budget, and a switch to turn it off entirely, are the
+`SCROLL_TRACE_*` settings in `app/config.py`.
+
 ## Testing
 
 The tests import the package as `gui_transcription.app`, so run them from
 the directory that *contains* `gui_transcription/`, not from inside it. Use
-whichever Python environment has the requirements plus `pytest` installed
-(on Linux, e.g. the `.venv` above; pipx's app environment doesn't include
-pytest).
+whichever Python environment has the requirements plus the `dev` extras
+(`pytest`, `ruff`) installed, e.g. `python -m pip install -e ".[dev]"` in
+the `.venv` above. pipx's app environment doesn't include them; to use it
+anyway, run pytest from a Python that has it, with the app environment's
+site-packages on `PYTHONPATH`.
+
+Lint with `python -m ruff check gui_transcription` (configured in
+`pyproject.toml`).
 
 Run the default suite:
 
@@ -537,11 +574,12 @@ python -m pytest gui_transcription/app_tests -v
 py -3 -m pytest gui_transcription\app_tests -v
 ```
 
-On Linux, expect the tests for the Windows-only image context-menu actions
-in `test_image_context_menu.py` to fail (they exercise `winreg`,
-`win32clipboard`, and Explorer directly). One test in `test_chatlog.py` also
-reads a private sample export from `example_inputs/`, which is gitignored,
-so it fails on any checkout that doesn't have that file.
+The tests for the Windows-only image context-menu actions in
+`test_image_context_menu.py` (which exercise `winreg`, `win32clipboard`,
+and Explorer directly) are skipped on other platforms. One test in
+`test_chatlog.py` reads a private sample export from `example_inputs/`,
+which is gitignored, so it fails on any checkout that doesn't have that
+file.
 
 ### The `gui` marker
 
@@ -553,11 +591,12 @@ in a process (which also runs Tcl/Tk's one-time subsystem init), so these
 are marked `gui` in `pyproject.toml` and excluded by default:
 
 `test_review_view.py` can't withdraw its window at all (see the module
-docstring on its `root` fixture) - its ~70 tests need real pixel geometry
+docstring on its `root` fixture) - its ~80 tests (counting parametrized
+cases) need real pixel geometry
 to verify actual row layout, and a withdrawn/never-mapped window never
 gets that. That file's `root` fixture is module-scoped and reused across
 all of its tests rather than opened and closed per test, which is what
-keeps running it from being a rapid-fire flash of ~70 separate windows;
+keeps running it from being a rapid-fire flash of ~80 separate windows;
 each test still tears its own widgets down afterward (an autouse fixture)
 so state can't leak between tests the way it would if the shared root were
 never cleaned up.
@@ -582,30 +621,19 @@ gets the most detailed treatment there.
 
 ## Known gaps / next steps
 
-- The image right-click menu actions are Windows-only. On Linux: **Open
-  Image** uses `os.startfile`, which doesn't exist there; **Open Image in
-  Browser** and **Open Chatlog at Message** look the default browser up in
-  the Windows registry; **Open Image Location** relies on Explorer's
-  `/select` flag, which has no common equivalent across Linux file managers;
-  and **Copy Image** uses the Win32 clipboard API. Each one fails and logs
-  the failure instead of crashing. Likely Linux replacements: `xdg-open` for
-  the first three, and `xclip -selection clipboard -t image/png` (X11) or
-  `wl-copy` (Wayland) for Copy Image.
 - The dark title bar is Windows-only (it uses DWM). On Linux, the title bar
   follows the window manager's theme.
-- Other `config.py` constants (Tesseract path, skip-types, etc.) are still
+- Other `config.py` constants (Tesseract path, etc.) are still
   not editable from the UI (deferred, not an immediate priority) - only the
   approved-users list has been moved out of config.py so far.
 - Paging back up to revisit an earlier page re-decodes its images from disk
   (no cross-page image cache); only the edited text itself is cached across
   a page being torn down and rebuilt.
-- Scrolling quickly shows occasional partial "ghost" image frames and brief
-  flickering at text box/image boundaries while rows are being paged in -
-  cosmetic only (confirmed not to affect edits, focus, or scroll position
-  accuracy, unlike the scroll-jump bugs `docs/ARCHITECTURE_REVIEW_SCREEN.md`
-  documents fixes for), not yet root-caused, deferred as low priority.
-- Only one generation of backup is kept per state file (`*.bak`), not a
-  full history - a crash can still lose up to one autosave interval's
+- Images load a moment after their row appears while scrolling, so an
+  image area can briefly show empty (lazy loading, by design).
+- Only one generation of backup is kept per state file (`*.bak`), apart
+  from sessions, whose last 3 end-of-session states are also kept in
+  `session_backups.json`. A crash can still lose up to one autosave interval's
   worth of review edits (5 seconds, `AUTOSAVE_INTERVAL_MS`) if it happens
   between two autosaves, since the .bak only protects the *previous*
   successful write, not the in-memory edits since then (low priority).

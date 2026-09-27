@@ -40,6 +40,8 @@ class _MenuActionStub(ImageContextMenuMixin):
 # These exercise code that only works on Windows: the real winreg module,
 # or actions that deliberately raise NotImplementedError elsewhere.
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows-only action")
+# The Linux implementations of the same actions (via desktop_linux.py).
+not_windows = pytest.mark.skipif(sys.platform == "win32", reason="non-Windows action")
 
 def test_run_image_menu_action_logs_success_when_func_does_not_raise():
     stub = _MenuActionStub()
@@ -132,6 +134,7 @@ def test_default_browser_command_returns_none_for_a_stale_progid():
 # -- the five actions themselves ----------------------------------------------
 
 
+@windows_only
 def test_open_image_uses_os_startfile(tmp_path):
     stub = _MenuActionStub()
     image_path = tmp_path / "shot.png"
@@ -142,6 +145,7 @@ def test_open_image_uses_os_startfile(tmp_path):
     assert str(image_path.resolve()) == path_arg
 
 
+@windows_only
 def test_open_image_in_browser_launches_the_registry_default_browser_with_the_file_uri(tmp_path):
     """Guards against the real, reported regression this replaced: an
     earlier version used webbrowser.open()/os.startfile() on a file:// URI,
@@ -168,6 +172,7 @@ def test_open_image_in_browser_launches_the_registry_default_browser_with_the_fi
     assert "%1" not in command  # the placeholder must be substituted, not passed through literally
 
 
+@windows_only
 def test_open_image_in_browser_raises_when_default_browser_cannot_be_determined(tmp_path):
     stub = _MenuActionStub()
     image_path = tmp_path / "shot.png"
@@ -194,6 +199,7 @@ def test_open_image_location_selects_the_file_in_explorer(tmp_path):
     assert str(image_path.resolve()) in command[2]
 
 
+@windows_only
 def test_open_chatlog_at_message_launches_default_browser_with_message_anchor(tmp_path):
     stub = _MenuActionStub()
     html_path = tmp_path / "chatlog.html"
@@ -216,6 +222,7 @@ def test_open_chatlog_at_message_launches_default_browser_with_message_anchor(tm
     assert url.endswith("#chatlog__message-container-1519374940359360783")
 
 
+@windows_only
 def test_open_chatlog_at_message_raises_when_default_browser_cannot_be_determined(tmp_path):
     stub = _MenuActionStub()
     html_path = tmp_path / "chatlog.html"
@@ -228,6 +235,64 @@ def test_open_chatlog_at_message_raises_when_default_browser_cannot_be_determine
         with pytest.raises(RuntimeError):
             stub._open_chatlog_at_message("1519374940359360783")
 
+
+_MODULE = "gui_transcription.app.gui.image_context_menu"
+
+
+@not_windows
+def test_open_image_uses_xdg_open(tmp_path):
+    stub = _MenuActionStub()
+    image_path = tmp_path / "shot.png"
+    Image.new("RGB", (10, 10), color="blue").save(image_path)
+    with patch(f"{_MODULE}.subprocess") as mock_subprocess:
+        stub._open_image(image_path)
+    (command,), _ = mock_subprocess.Popen.call_args
+    assert command == ["xdg-open", str(image_path.resolve())]
+
+
+@not_windows
+def test_open_chatlog_at_message_uses_the_xdg_default_browser(tmp_path):
+    stub = _MenuActionStub()
+    html_path = tmp_path / "chatlog.html"
+    html_path.write_text("<html></html>", encoding="utf8")
+    stub._html_path = html_path
+    with (
+        patch(f"{_MODULE}.desktop_linux.default_browser_exec_line", return_value="firefox %u"),
+        patch(f"{_MODULE}.subprocess") as mock_subprocess,
+    ):
+        stub._open_chatlog_at_message("123")
+    (command,), _ = mock_subprocess.Popen.call_args
+    assert command[0] == "firefox"
+    assert command[1].startswith("file:")
+    assert command[1].endswith("#chatlog__message-container-123")
+
+
+@not_windows
+def test_open_image_in_browser_raises_when_xdg_default_browser_unknown(tmp_path):
+    stub = _MenuActionStub()
+    with patch(f"{_MODULE}.desktop_linux.default_browser_exec_line", return_value=None):
+        with pytest.raises(RuntimeError):
+            stub._open_image_in_browser(tmp_path / "shot.png")
+
+
+@not_windows
+def test_open_image_location_uses_the_file_manager_interface(tmp_path):
+    stub = _MenuActionStub()
+    image_path = tmp_path / "shot.png"
+    with patch(f"{_MODULE}.desktop_linux.show_in_file_manager") as show:
+        stub._open_image_location(image_path)
+    show.assert_called_once_with(image_path)
+
+
+@not_windows
+def test_copy_image_to_clipboard_sends_png_bytes(tmp_path):
+    stub = _MenuActionStub()
+    image_path = tmp_path / "shot.png"
+    Image.new("RGB", (10, 10), color="blue").save(image_path)
+    with patch(f"{_MODULE}.desktop_linux.copy_png_to_clipboard") as copy:
+        stub._copy_image_to_clipboard(image_path)
+    (png_bytes,), _ = copy.call_args
+    assert png_bytes.startswith(b"\x89PNG")
 
 @windows_only
 def test_copy_image_to_clipboard_writes_cf_dib_via_win32clipboard(tmp_path):

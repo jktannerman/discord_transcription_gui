@@ -75,7 +75,8 @@ def estimate_row_height(item: ReviewItem, max_text_box_height_px: Optional[int] 
     height/gap is computed in one of these, change it in the other too:
     drift between them is exactly what previously surfaced as a scroll-
     position jump once ReviewFrame._remeasure_built_rows corrected the
-    estimate away after the row was actually built (see ARCHITECTURE.md).
+    estimate away after the row was actually built (see
+    docs/ARCHITECTURE_REVIEW_SCREEN.md).
 
     Walks item.slot_roles - the same ordering _build_row uses - estimating
     both of the row's columns (the immutable left column: label and/or

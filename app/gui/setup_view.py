@@ -21,7 +21,7 @@ class SetupFrame(ttk.Frame):
         master: tk.Widget,
         on_start: Callable[[], None],
         initial_image_folder: Optional[str] = None,
-    ):
+    ) -> None:
         super().__init__(master)
 
         def _most_recent(field: str) -> str:

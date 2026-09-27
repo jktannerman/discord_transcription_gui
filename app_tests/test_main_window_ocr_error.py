@@ -7,6 +7,8 @@ inside a root.after() callback, so anything it doesn't catch itself would
 only reach Tk's report_callback_exception, leaving the user stuck on the
 progress screen - these cover that it reports errors through
 _on_run_error instead, and warns about missing images before continuing."""
+import queue
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -82,6 +84,26 @@ def test_prepare_run_ocrs_the_images_the_kept_messages_reference(tmp_path):
     assert result_entries == entries
     assert calls == [(str(tmp_path), ["a.png"], True)]
 
+
+def test_poll_worker_events_runs_queued_callbacks_until_the_final_one():
+    events = queue.Queue()
+    ran = []
+    rescheduled = []
+    stub = SimpleNamespace(
+        root=SimpleNamespace(after=lambda ms, func, *args: rescheduled.append(args)),
+        _poll_worker_events=None,  # only passed to after(), never called here
+    )
+    events.put((ran.append, ("progress",), False))
+
+    App._poll_worker_events(stub, events)
+    assert ran == ["progress"]
+    assert len(rescheduled) == 1  # worker not finished yet: poll again
+
+    events.put((ran.append, ("done",), True))
+    events.put((ran.append, ("never",), False))
+    App._poll_worker_events(stub, events)
+    assert ran == ["progress", "done"]
+    assert len(rescheduled) == 1  # final callback ran: polling stops
 
 @pytest.mark.gui
 class TestOnOcrDone:

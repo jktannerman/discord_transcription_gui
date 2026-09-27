@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from gui_transcription.app.chatlog import MessageEntry
 from gui_transcription.app.gui.keyboard_nav import KeyboardNavMixin
@@ -200,3 +201,35 @@ def test_move_focus_skips_over_nothing_specially_but_does_not_crash_on_a_missing
     nav._move_focus(1)  # must not raise KeyError
 
     assert nav.focus_get() is None
+
+
+class _UndoKeyStub(KeyboardNavMixin):
+    """Records which of undo/redo _on_undo_key dispatches to."""
+
+    def __init__(self):
+        self.calls = []
+
+    def _undo_text(self, event):
+        self.calls.append("undo")
+        return "break"
+
+    def _redo_text(self, event):
+        self.calls.append("redo")
+        return "break"
+
+
+def _key_event(state):
+    return SimpleNamespace(state=state, widget=None)
+
+
+SHIFT, CAPS_LOCK, CONTROL = 0x1, 0x2, 0x4
+
+
+def test_undo_key_dispatch_depends_on_shift_not_caps_lock():
+    stub = _UndoKeyStub()
+    stub._on_undo_key(_key_event(CONTROL))
+    stub._on_undo_key(_key_event(CONTROL | CAPS_LOCK))
+    stub._on_undo_key(_key_event(CONTROL | SHIFT))
+    stub._on_undo_key(_key_event(CONTROL | SHIFT | CAPS_LOCK))
+
+    assert stub.calls == ["undo", "undo", "redo", "redo"]
