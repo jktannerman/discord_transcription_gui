@@ -344,11 +344,11 @@ plus the scroll/debounce/Finalize-button machinery:
   `discord_transcription/gui/image_loading.py`), since a row can likewise now load/unload more
   than one image.
 - **Per-row left-column sizing.** (`row_building.RowBuildingMixin`.) Every
-  row's left column is the same fixed width (`THUMBNAIL_SIZE[0]` in
-  `discord_transcription/gui/image_loading.py`), whether it holds an image, the immutable
+  row's left column is the same width (`ReviewFrame._image_column_width_px`,
+  set by the column divider - see below), whether it holds an image, the immutable
   original-text label, or both stacked text-above-image - so every row's
   column pairs line up neatly across the whole transcript. An image's height
-  is its own aspect-preserving fit within `THUMBNAIL_SIZE`
+  is its own aspect-preserving fit within `image_bounding_box(width)`
   (`fitted_image_size`), not the full bounding box - otherwise a landscape
   image (the common case) gets letterboxed inside a box-shaped slot; this
   only reads the image file's header (cheap), separately from the actual
@@ -358,6 +358,42 @@ plus the scroll/debounce/Finalize-button machinery:
   `winfo_reqheight()` (valid as soon as it's configured) before pinning
   both dimensions, rather than computing it upfront the way
   `fitted_image_size` does for images.
+- **The column divider re-lays out through the rebuild path.**
+  (`column_divider.py`'s `ColumnDividerMixin`.) The image column's width
+  sets every row's height (images are fitted to it, and the original-text
+  label wraps at it), so changing it can't be patched onto the built rows
+  alone - rows that aren't built have estimated heights that depend on it
+  too. `_set_image_column_width` treats it like a far scroll jump: it
+  records an anchor (the focused box's top edge if it's in view, otherwise
+  the top row's), tears down every built row, re-estimates every row's
+  height at the new width, scrolls so the anchor's *estimated* position is
+  back at the same screen offset, reconciles, and then repeats that scroll
+  against the rebuilt rows' *real* geometry and reconciles again. It adds
+  no second sizing path: `_build_row` and `estimate_row_height` both just
+  take the width, and the per-box model carries edits, cursor, undo
+  history and focus across the rebuild the same way it does for scrolling.
+  Recomputing every row's estimate stays cheap because
+  `image_loading._natural_size` caches each image's header size, so a new
+  width is plain arithmetic per image.
+
+  The divider is a `tk.Frame` `place()`d over the canvas (`in_=canvas`, so
+  its x is in the rows' own coordinates) at `divider_x_for_width`, centered
+  in the `2 * COLUMN_PADX_PX` gap between the columns. That position is
+  derived from the same layout constants `_build_row` packs with
+  (`ROW_PACK_PADX_PX`, the row Frame's border/padding, `COLUMN_PADX_PX` -
+  combined as `IMAGE_COLUMN_LEFT_PX`), and
+  `test_column_divider_sits_in_the_gap_between_the_columns` checks it
+  against the real widgets. Dragging only moves the divider; the relayout
+  runs on release. The width is stored as a fraction of the canvas width,
+  so a window resize (debounced `<Configure>`, `RESIZE_DEBOUNCE_MS`) keeps
+  the proportion, and `ReviewFrame`'s caller saves it per chatlog
+  (`state.save_image_column_fraction`). Clamping
+  (`virtualization.clamp_image_column_width`) keeps both columns above
+  their minimums, the image column's winning if the window is too narrow
+  for both. A relayout costs about the same as a far scroll jump (roughly
+  half a second at 1900x1000 in a profile, nearly all of it Tk laying out
+  and painting the new rows), which is why a live-while-dragging relayout
+  would need a cheaper path than a full rebuild.
 - **Per-box text box sizing.** (`row_building.RowBuildingMixin`.) Each
   editable text box lives in its own fixed-height container
   (`pack_propagate(False)`, same trick as the left column's placeholders) so

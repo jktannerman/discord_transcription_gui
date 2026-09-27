@@ -396,6 +396,46 @@ def load_session_backups(html_path: str) -> list:
     return backups.get(match, []) if match is not None else []
 
 
+def load_image_column_fraction(html_path: str) -> Optional[float]:
+    """The review screen's image column width for html_path, as a share of
+    the review area's width, or None if it was never dragged for that
+    chatlog (or the stored value is unusable).
+
+    Args:
+        html_path: The chatlog export.
+
+    Returns:
+        A fraction strictly between 0 and 1, or None.
+    """
+    widths = _read_json_with_backup(config.IMAGE_COLUMN_WIDTHS_FILE)
+    if not isinstance(widths, dict):
+        return None
+    match = _matching_key(widths, html_path)
+    value = widths.get(match) if match is not None else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.0 < value < 1.0:
+        return None
+    return float(value)
+
+
+def save_image_column_fraction(html_path: str, fraction: float) -> None:
+    """Remember the review screen's image column width for html_path.
+
+    Args:
+        html_path: The chatlog export.
+        fraction: The image column's share of the review area's width.
+    """
+    widths = _read_json_with_backup(config.IMAGE_COLUMN_WIDTHS_FILE)
+    if not isinstance(widths, dict):
+        widths = {}
+    _pop_matching(widths, html_path)
+    widths[path_key(html_path)] = round(fraction, 4)
+    _atomic_write_json(config.IMAGE_COLUMN_WIDTHS_FILE, widths)
+    logger.info(
+        "saved image column width",
+        extra=logging_config.extra(html_path=html_path, fraction=round(fraction, 4)),
+    )
+
+
 def load_finalized_edits(html_path: str) -> Optional[dict]:
     """Return the stored finalized edits for html_path as
     {message_id: {role: text}}, or None if there are no stored edits for

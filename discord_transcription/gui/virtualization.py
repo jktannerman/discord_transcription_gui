@@ -10,17 +10,16 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from ..review_item import ReviewItem
-from .image_loading import THUMBNAIL_SIZE, fitted_image_size
+from .image_loading import DEFAULT_IMAGE_COLUMN_WIDTH_PX, fitted_image_size, image_bounding_box
 from .layout_constants import (
     GAP_BETWEEN_STACKED_PX,
+    MIN_IMAGE_COLUMN_WIDTH_PX,
+    MIN_TEXT_COLUMN_WIDTH_PX,
     ROW_FRAME_OVERHEAD_PX,
+    ROW_HORIZONTAL_OVERHEAD_PX,
     ROW_PACK_PADY_PX,
     TEXT_BOX_MARGIN_PX,
 )
-
-# Wrap width (px) of a row's immutable original-text label - the same fixed
-# left-column width an image row uses (see row_building's label builder).
-_TEXT_ROW_WRAPLENGTH = THUMBNAIL_SIZE[0]
 
 
 @dataclass(frozen=True)
@@ -77,9 +76,43 @@ def wrapped_line_count(text: str, chars_per_line: int) -> int:
     return line_count
 
 
-def _estimate_message_text_height(item: ReviewItem, metrics: TextMetrics) -> int:
+def clamp_image_column_width(width_px: int, canvas_width_px: int) -> int:
+    """Keep the image column within its limits for a given canvas width.
+
+    The text column keeps at least MIN_TEXT_COLUMN_WIDTH_PX and the image
+    column at least MIN_IMAGE_COLUMN_WIDTH_PX; if the canvas is too narrow
+    for both, the image column's minimum wins.
+
+    Args:
+        width_px: The requested image column width.
+        canvas_width_px: The review canvas's width.
+
+    Returns:
+        The width to use.
+    """
+    max_width = canvas_width_px - ROW_HORIZONTAL_OVERHEAD_PX - MIN_TEXT_COLUMN_WIDTH_PX
+    return max(MIN_IMAGE_COLUMN_WIDTH_PX, min(width_px, max_width))
+
+
+def image_column_width_for_fraction(fraction: float, canvas_width_px: int) -> int:
+    """The image column width that keeps it `fraction` of the canvas width.
+
+    Args:
+        fraction: The image column's share of the canvas width.
+        canvas_width_px: The review canvas's width.
+
+    Returns:
+        The width, clamped by clamp_image_column_width.
+    """
+    return clamp_image_column_width(round(fraction * canvas_width_px), canvas_width_px)
+
+
+def _estimate_message_text_height(
+    item: ReviewItem, metrics: TextMetrics, image_column_width_px: int = DEFAULT_IMAGE_COLUMN_WIDTH_PX
+) -> int:
+    # The original-text label wraps at the image column's width.
     text = item.initial_message_text or "(no text)"
-    chars_per_line = max(1, _TEXT_ROW_WRAPLENGTH // max(1, metrics.char_width_px))
+    chars_per_line = max(1, image_column_width_px // max(1, metrics.char_width_px))
     line_count = wrapped_line_count(text, chars_per_line)
     return line_count * metrics.line_height_px + metrics.label_padding_px
 
@@ -88,6 +121,7 @@ def estimate_row_height(
     item: ReviewItem,
     max_text_box_height_px: Optional[int] = None,
     metrics: TextMetrics = DEFAULT_TEXT_METRICS,
+    image_column_width_px: int = DEFAULT_IMAGE_COLUMN_WIDTH_PX,
 ) -> int:
     """Cheap, approximate height (px) for an item's row before it's ever
     been built as real widgets - good enough for scrollbar proportion and
@@ -142,7 +176,10 @@ def estimate_row_height(
 
     `metrics` is the text font's measured pixel sizes (TextMetrics) -
     ReviewFrame passes ones measured on the running display; the default
-    is only a rough stand-in for display-free unit tests."""
+    is only a rough stand-in for display-free unit tests.
+
+    `image_column_width_px` is the left column's width: the original-text
+    label wraps at it, and images are fitted to it (image_bounding_box)."""
     roles = item.slot_roles
     left = 0
     right = 0
@@ -150,7 +187,7 @@ def estimate_row_height(
         gap = GAP_BETWEEN_STACKED_PX if position < len(roles) - 1 else 0
 
         if role == "message":
-            label_h = _estimate_message_text_height(item, metrics)
+            label_h = _estimate_message_text_height(item, metrics, image_column_width_px)
             box_h = label_h + TEXT_BOX_MARGIN_PX
             if max_text_box_height_px is not None:
                 box_h = min(box_h, max_text_box_height_px)
@@ -158,7 +195,9 @@ def estimate_row_height(
             right += box_h + gap
         elif role.startswith("ocr"):
             image_index = int(role[len("ocr"):])
-            _, image_h = fitted_image_size(item.image_paths[image_index])
+            _, image_h = fitted_image_size(
+                item.image_paths[image_index], image_bounding_box(image_column_width_px)
+            )
             box_h = image_h + TEXT_BOX_MARGIN_PX
             if max_text_box_height_px is not None:
                 box_h = min(box_h, max_text_box_height_px)

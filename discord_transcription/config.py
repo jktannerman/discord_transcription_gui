@@ -96,6 +96,10 @@ FINALIZED_EDITS_FILE = APP_DATA_DIR / "finalized_edits.json"
 # replaced or removed (see state.save_finalized_edits), so an edit is never
 # lost for good even if it was removed by mistake.
 FINALIZED_EDITS_HISTORY_FILE = APP_DATA_DIR / "finalized_edits_history.json"
+# {html_path: fraction} - the review screen's image column width as a share
+# of the review area's width, as last dragged for each chatlog (see
+# gui/column_divider.py).
+IMAGE_COLUMN_WIDTHS_FILE = APP_DATA_DIR / "image_column_widths.json"
 LOG_FILE = APP_DATA_DIR / "app.log"
 # Separate, much higher-frequency stream for the review screen's per-scroll-
 # tick tracing (reconcile/debounce/remeasure/image-load events) - kept out of

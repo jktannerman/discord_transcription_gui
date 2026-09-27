@@ -67,6 +67,19 @@ deepest coverage:
 - Image preview sizing/visibility (`discord_transcription/gui/image_loading.py`'s aspect-fit
   math and its load/unload viewport-boundary decision, plus real
   load/failure/unload behavior against actual Tk widgets).
+- The image/text column divider: width clamping, fraction-to-width and
+  width-dependent row estimates (`test_virtualization.py`), divider position
+  math (`test_column_divider.py`), per-chatlog persistence
+  (`test_state.py`), and in `test_review_view.py`'s GUI tests: rows rebuilt
+  at the new width with heights matching their real ones, the divider sitting
+  in the real gap between the columns, the focused box or top row staying
+  put on screen, an edit and its undo surviving a resize *then* a scroll
+  teardown/rebuild, a drag applying only on release and reporting the new
+  fraction, a saved fraction applied at startup, and a width change keeping
+  the proportion. Not covered: a real mouse drag or a real window resize
+  (the tests call the handlers directly), and the second, exact anchoring
+  pass - the test rows' estimates are exact, so it never has anything to
+  correct there.
 - The right-click image context menu (`discord_transcription/gui/image_context_menu.py`,
   `test_image_context_menu.py`): each action's success/failure logging;
   `_open_image`/`_open_image_in_browser`/`_open_image_location`/

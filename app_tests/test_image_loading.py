@@ -12,9 +12,11 @@ import tkinter as tk
 from PIL import Image
 
 from discord_transcription.gui.image_loading import (
+    MAX_IMAGE_HEIGHT_PX,
     THUMBNAIL_SIZE,
     ImageLoader,
     fitted_image_size,
+    image_bounding_box,
     load_display_image,
 )
 
@@ -232,3 +234,17 @@ def test_load_display_image_applies_exif_rotation_and_matches_fitted_size(rotate
 def test_load_display_image_leaves_unrotated_images_alone(landscape_image):
     image = load_display_image(landscape_image)
     assert image.size == fitted_image_size(landscape_image)
+
+
+def test_image_bounding_box_uses_column_width_and_fixed_max_height():
+    assert image_bounding_box(1200) == (1200, MAX_IMAGE_HEIGHT_PX)
+
+
+def test_fitted_image_size_follows_bounding_box_width(landscape_image):
+    assert fitted_image_size(landscape_image, image_bounding_box(1500)) == (1500, 750)
+    assert fitted_image_size(landscape_image, image_bounding_box(600)) == (600, 300)
+
+
+def test_load_display_image_fits_to_given_bounding_box(landscape_image):
+    image = load_display_image(landscape_image, image_bounding_box(1500))
+    assert image.size == fitted_image_size(landscape_image, image_bounding_box(1500))

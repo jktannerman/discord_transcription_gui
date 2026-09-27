@@ -1,9 +1,14 @@
 from pathlib import Path
 
+from PIL import Image
+
 from discord_transcription.chatlog import MessageEntry
 from discord_transcription.gui.layout_constants import (
     GAP_BETWEEN_STACKED_PX,
+    MIN_IMAGE_COLUMN_WIDTH_PX,
+    MIN_TEXT_COLUMN_WIDTH_PX,
     ROW_FRAME_OVERHEAD_PX,
+    ROW_HORIZONTAL_OVERHEAD_PX,
     ROW_PACK_PADY_PX,
     TEXT_BOX_MARGIN_PX,
 )
@@ -11,7 +16,9 @@ from discord_transcription.gui.virtualization import (
     DEFAULT_TEXT_METRICS,
     TextMetrics,
     _estimate_message_text_height,
+    clamp_image_column_width,
     compute_visible_range,
+    image_column_width_for_fraction,
     estimate_row_height,
 )
 from discord_transcription.review_item import ReviewItem
@@ -163,3 +170,56 @@ def test_compute_visible_range_is_idempotent():
     heights = [100, 250, 80, 400, 120]
     args = (heights, 137.0, 300.0, 50.0)
     assert compute_visible_range(*args) == compute_visible_range(*args)
+
+
+# -- image column width -------------------------------------------------------
+
+
+def test_clamp_image_column_width_keeps_both_columns_above_their_minimums():
+    canvas_width = 1200
+    max_width = canvas_width - ROW_HORIZONTAL_OVERHEAD_PX - MIN_TEXT_COLUMN_WIDTH_PX
+    assert clamp_image_column_width(700, canvas_width) == 700
+    assert clamp_image_column_width(50, canvas_width) == MIN_IMAGE_COLUMN_WIDTH_PX
+    assert clamp_image_column_width(5000, canvas_width) == max_width
+
+
+def test_clamp_image_column_width_prefers_image_minimum_when_canvas_too_narrow():
+    assert clamp_image_column_width(400, 300) == MIN_IMAGE_COLUMN_WIDTH_PX
+
+
+def test_image_column_width_for_fraction_scales_with_canvas_width():
+    assert image_column_width_for_fraction(0.5, 1000) == 500
+    assert image_column_width_for_fraction(0.5, 1600) == 800
+
+
+def _wide_image_item(path):
+    return ReviewItem(
+        entry=MessageEntry(message_id="m", text_lines=[], image_names=[path.name]),
+        image_paths=[path], initial_message_text=None, initial_ocr_texts=[""],
+    )
+
+
+def test_estimate_row_height_grows_with_image_column_width_for_a_wide_image(tmp_path):
+    path = tmp_path / "wide.png"
+    Image.new("RGB", (2000, 500), color="blue").save(path)
+    item = _wide_image_item(path)
+    assert estimate_row_height(item, image_column_width_px=1200) > estimate_row_height(
+        item, image_column_width_px=600
+    )
+
+
+def test_estimate_row_height_does_not_upscale_a_small_image(tmp_path):
+    path = tmp_path / "small.png"
+    Image.new("RGB", (300, 100), color="blue").save(path)
+    item = _wide_image_item(path)
+    assert estimate_row_height(item, image_column_width_px=1200) == estimate_row_height(
+        item, image_column_width_px=600
+    )
+
+
+def test_estimate_message_text_height_wraps_at_image_column_width():
+    metrics = TextMetrics(char_width_px=10, line_height_px=20, label_padding_px=0, spacer_box_height_px=30)
+    item = _text_item("x" * 120)
+    # 120 chars: 3 lines at 400px (40 chars/line), 2 lines at 600px (60 chars/line).
+    assert _estimate_message_text_height(item, metrics, image_column_width_px=400) == 60
+    assert _estimate_message_text_height(item, metrics, image_column_width_px=600) == 40

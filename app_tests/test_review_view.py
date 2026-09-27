@@ -13,6 +13,7 @@ import random
 import time
 import tkinter as tk
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -20,7 +21,14 @@ from PIL import Image
 from discord_transcription.chatlog import MessageEntry
 from discord_transcription.gui.layout_constants import ROW_PACK_PADY_PX
 from discord_transcription.gui.review_view import ReviewFrame
-from discord_transcription.gui.virtualization import estimate_row_height
+from discord_transcription.gui.column_divider import divider_x_for_width
+from discord_transcription.gui.image_loading import fitted_image_size, image_bounding_box
+from discord_transcription.gui.layout_constants import COLUMN_DIVIDER_WIDTH_PX
+from discord_transcription.gui.virtualization import (
+    clamp_image_column_width,
+    estimate_row_height,
+    image_column_width_for_fraction,
+)
 from discord_transcription.review_item import ReviewItem, build_review_items
 
 # Unlike the other GUI-backed test files, this one can't withdraw() its
@@ -1788,3 +1796,181 @@ def test_shift_tab_key_moves_focus_back_and_scrolls_it_into_view(root, sample_im
     container = frame._slot_views[first_key].container
     box_top = container.winfo_rooty() - frame._canvas.winfo_rooty()
     assert 0 <= box_top < frame._canvas.winfo_height()
+
+
+
+# -- adjustable image column width (column_divider.py) ----------------------
+
+
+@pytest.fixture
+def wide_image(tmp_path):
+    """Much wider than tall and larger than any column width used here, so
+    its displayed height follows the column width."""
+    path = tmp_path / "wide.png"
+    Image.new("RGB", (2400, 600), color="blue").save(path)
+    return path
+
+
+def _wide_items(wide_image, count=12):
+    entries = []
+    for i in range(count):
+        if i % 2 == 0:
+            entries.append(MessageEntry(message_id=str(i), text_lines=[f"caption {i} " * 20], image_names=["wide.png"]))
+        else:
+            entries.append(MessageEntry(message_id=str(i), text_lines=[f"text only {i} " * 30], image_names=[]))
+    return build_review_items(entries, {"wide.png": ["ocr text"]}, image_folder=wide_image.parent)
+
+
+def _image_container(frame, index):
+    """The fixed-size placeholder frame holding row `index`'s first image."""
+    return frame._images._slots[(index, 0)].label.master
+
+
+def _resize(frame, root, width):
+    new_width = clamp_image_column_width(width, frame._canvas_width())
+    # The test window is narrow, so a large width can clamp to the current
+    # one - which would make the resize (and the test) a no-op.
+    assert new_width != frame._image_column_width_px
+    frame._set_image_column_width(new_width)
+    root.update()
+
+
+def test_resizing_image_column_rebuilds_rows_at_the_new_width(root, wide_image):
+    items = _wide_items(wide_image)
+    frame, _ = _build_frame(root, items)
+    new_width = clamp_image_column_width(500, frame._canvas_width())
+
+    _resize(frame, root, new_width)
+
+    assert frame._image_column_width_px == new_width
+    container = _image_container(frame, 0)
+    expected = fitted_image_size(wide_image, image_bounding_box(new_width))
+    assert (container.winfo_width(), container.winfo_height()) == expected
+    for index in frame._row_frames:
+        real = frame._row_frames[index].winfo_height() + 2 * ROW_PACK_PADY_PX
+        assert frame._row_heights[index] == real
+
+
+def test_column_divider_sits_in_the_gap_between_the_columns(root, wide_image):
+    items = _wide_items(wide_image)
+    frame, _ = _build_frame(root, items)
+
+    for width in (None, 450):
+        if width is not None:
+            _resize(frame, root, width)
+        image_container = _image_container(frame, 0)
+        text_container = frame._slot_views[(0, "message")].container
+        image_column_right = image_container.winfo_rootx() + image_container.winfo_width()
+        text_column_left = text_container.winfo_rootx()
+        divider = frame._column_divider
+        divider_center = divider.winfo_rootx() + divider.winfo_width() / 2
+        assert image_column_right <= divider.winfo_rootx()
+        assert divider.winfo_rootx() + divider.winfo_width() <= text_column_left
+        assert abs(divider_center - (image_column_right + text_column_left) / 2) <= 1
+
+
+def test_resize_keeps_the_top_row_in_place_when_nothing_is_focused(root, wide_image):
+    items = _wide_items(wide_image, count=20)
+    frame, _ = _build_frame(root, items)
+    canvas = frame._canvas
+    # Scroll so row 6 starts 40px below the top of the view.
+    frame._canvas.yview_moveto((frame._offset_of(6) - 40) / sum(frame._row_heights))
+    frame._reconcile()
+    root.update()
+    anchor_kind, anchor_index, screen_offset = frame._capture_view_anchor()
+    assert anchor_kind == "row"
+    row_screen_top = frame._row_frames[anchor_index].winfo_rooty()
+
+    _resize(frame, root, 480)
+
+    assert frame._row_frames[anchor_index].winfo_rooty() == pytest.approx(row_screen_top, abs=2)
+    assert frame._offset_of(anchor_index) - canvas.canvasy(0) == pytest.approx(screen_offset, abs=2)
+
+
+def test_resize_keeps_the_focused_box_in_place(root, wide_image):
+    items = _wide_items(wide_image, count=20)
+    frame, _ = _build_frame(root, items)
+    key = (4, "ocr0")
+    frame._goto_slot(key)  # builds its row and aligns it to the top
+    root.update()
+    # Put the box 60px below the top of the view.
+    box_top, _ = _container_bounds(frame, *key)
+    frame._canvas.yview_moveto((box_top - 60) / sum(frame._row_heights))
+    frame._reconcile()
+    frame._slot_views[key].text_widget.focus_force()
+    root.update()
+    box_screen_top = frame._slot_views[key].container.winfo_rooty()
+    assert frame._capture_view_anchor()[0] == "box"
+
+    _resize(frame, root, 300)
+
+    assert frame._slot_views[key].container.winfo_rooty() == pytest.approx(box_screen_top, abs=2)
+    assert frame.focus_get() is frame._slot_views[key].text_widget
+
+
+def test_edit_and_undo_survive_a_resize_and_a_later_scroll_teardown(root, wide_image):
+    """The resize rebuild and an ordinary scroll-driven rebuild, in the
+    order a user would hit them: edit, resize, scroll far away and back."""
+    items = _wide_items(wide_image, count=40)
+    frame, _ = _build_frame(root, items)
+    key = (0, "message")
+    widget = frame._slot_views[key].text_widget
+    original = widget.get("1.0", "end-1c")
+    widget.insert("1.0", "edited ")
+    root.update()
+
+    _resize(frame, root, 520)
+    assert frame._slot_views[key].text_widget.get("1.0", "end-1c") == "edited " + original
+
+    frame._canvas.yview_moveto(1.0)
+    frame._reconcile()
+    root.update()
+    assert key not in frame._slot_views
+    frame._canvas.yview_moveto(0.0)
+    frame._reconcile()
+    root.update()
+
+    widget = frame._slot_views[key].text_widget
+    assert widget.get("1.0", "end-1c") == "edited " + original
+    frame._undo_text(type("Event", (), {"widget": widget})())
+    assert widget.get("1.0", "end-1c") == original
+
+
+def test_divider_drag_applies_the_width_on_release_and_reports_the_fraction(root, wide_image):
+    items = _wide_items(wide_image)
+    reported = []
+    frame, _ = _build_frame(root, items, on_image_column_fraction_changed=reported.append)
+    canvas = frame._canvas
+    old_width = frame._image_column_width_px
+    target_width = clamp_image_column_width(600, frame._canvas_width())
+    target_center = divider_x_for_width(target_width) + COLUMN_DIVIDER_WIDTH_PX / 2
+    pointer = SimpleNamespace(x_root=canvas.winfo_rootx() + target_center)
+
+    frame._on_divider_press(pointer)
+    frame._on_divider_drag(pointer)
+    assert frame._image_column_width_px == old_width  # only the divider moves while dragging
+    frame._on_divider_release(pointer)
+    root.update()
+
+    assert frame._image_column_width_px == target_width
+    assert reported == [pytest.approx(target_width / frame._canvas_width())]
+
+
+def test_saved_fraction_sets_the_initial_width(root, wide_image):
+    items = _wide_items(wide_image)
+    frame, _ = _build_frame(root, items, initial_image_column_fraction=0.3)
+
+    expected = image_column_width_for_fraction(0.3, frame._canvas_width())
+    assert frame._image_column_width_px == expected
+    assert _image_container(frame, 0).winfo_width() == expected
+
+
+def test_canvas_width_change_keeps_the_column_proportion(root, wide_image):
+    items = _wide_items(wide_image)
+    frame, _ = _build_frame(root, items)
+    frame._image_column_fraction = 0.4
+
+    frame._run_width_sync()
+    root.update()
+
+    assert frame._image_column_width_px == image_column_width_for_fraction(0.4, frame._canvas_width())

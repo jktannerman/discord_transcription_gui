@@ -5,6 +5,7 @@ review_view.py's module docstring for why rows themselves are virtualized
 the same way.
 """
 
+import functools
 import tkinter as tk
 from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence, Tuple, Union
@@ -15,10 +16,27 @@ from .. import logging_config
 
 logger = logging_config.get_logger(__name__)
 
-# Bounding box for the image preview - roughly two-thirds of a 1200px-wide
-# review window, per the project owner's request that images be large
-# enough to actually read while transcribing.
-THUMBNAIL_SIZE = (760, 950)
+# Default width (px) of the review screen's image column - roughly two-thirds
+# of a 1200px-wide review window, per the project owner's request that images
+# be large enough to actually read while transcribing. The user can drag the
+# column divider to change it (see column_divider.py).
+DEFAULT_IMAGE_COLUMN_WIDTH_PX = 760
+# Tallest an image preview is ever shown, whatever the column width.
+MAX_IMAGE_HEIGHT_PX = 950
+# Bounding box for an image preview at the default column width.
+THUMBNAIL_SIZE = (DEFAULT_IMAGE_COLUMN_WIDTH_PX, MAX_IMAGE_HEIGHT_PX)
+
+
+def image_bounding_box(column_width_px: int) -> Tuple[int, int]:
+    """The box an image preview is fitted into for a given column width.
+
+    Args:
+        column_width_px: The image column's width.
+
+    Returns:
+        (width, height) of the bounding box.
+    """
+    return (column_width_px, MAX_IMAGE_HEIGHT_PX)
 
 ImagePath = Union[str, Path]
 
@@ -48,19 +66,44 @@ def _displayed_size(img: Image.Image) -> Tuple[int, int]:
     return width, height
 
 
-def load_display_image(image_path: ImagePath) -> Image.Image:
-    """Decode an image for the review screen: EXIF-rotated, fitted to THUMBNAIL_SIZE.
+def load_display_image(
+    image_path: ImagePath, bounding_box: Tuple[int, int] = THUMBNAIL_SIZE
+) -> Image.Image:
+    """Decode an image for the review screen: EXIF-rotated, fitted to bounding_box.
 
     Args:
         image_path: The image file.
+        bounding_box: The (width, height) to fit within. Never upscaled.
 
     Returns:
         The decoded image, the size fitted_image_size predicts.
     """
     with Image.open(image_path) as opened:
         image = ImageOps.exif_transpose(opened)
-        image.thumbnail(THUMBNAIL_SIZE)
+        image.thumbnail(bounding_box)
     return image
+
+
+@functools.lru_cache(maxsize=None)
+def _natural_size(image_path: str) -> Optional[Tuple[int, int]]:
+    """An image's displayed (EXIF-rotated) size, read from its header once.
+
+    Cached per path, so recomputing every row's height for a new column
+    width (see ReviewFrame._set_image_column_width) is plain arithmetic
+    rather than a file read per image.
+
+    Args:
+        image_path: The image file, as a string (the cache key).
+
+    Returns:
+        (width, height), or None if the file can't be read.
+    """
+    try:
+        with Image.open(image_path) as img:
+            return _displayed_size(img)
+    except Exception:
+        logger.warning("could not read image size", extra=logging_config.extra(image_path=image_path))
+        return None
 
 
 def fitted_image_size(image_path: ImagePath, bounding_box: Tuple[int, int] = THUMBNAIL_SIZE) -> Tuple[int, int]:
@@ -76,13 +119,8 @@ def fitted_image_size(image_path: ImagePath, bounding_box: Tuple[int, int] = THU
     are landscape (wider than tall), so sizing the placeholder to the full
     box would letterbox them, leaving large empty bands above and below
     the actual photo."""
-    try:
-        with Image.open(image_path) as img:
-            original_size = _displayed_size(img)
-    except Exception:
-        logger.warning(
-            "could not read image size", extra=logging_config.extra(image_path=str(image_path))
-        )
+    original_size = _natural_size(str(image_path))
+    if original_size is None:
         return bounding_box
 
     ow, oh = original_size
@@ -102,11 +140,14 @@ class ImageSlot:
     the repositioned scroll frame block rather than the canvas's coordinate
     space."""
 
-    __slots__ = ("image_path", "label", "loaded", "photo")
+    __slots__ = ("image_path", "label", "bounding_box", "loaded", "photo")
 
-    def __init__(self, image_path: ImagePath, label: tk.Widget) -> None:
+    def __init__(
+        self, image_path: ImagePath, label: tk.Widget, bounding_box: Tuple[int, int] = THUMBNAIL_SIZE
+    ) -> None:
         self.image_path = image_path
         self.label = label
+        self.bounding_box = bounding_box
         self.loaded = False
         self.photo: Optional[ImageTk.PhotoImage] = None
 
@@ -124,8 +165,17 @@ class ImageLoader:
     def __init__(self) -> None:
         self._slots: Dict[Tuple[int, int], ImageSlot] = {}
 
-    def register(self, index: int, image_index: int, image_path: ImagePath, label: tk.Widget) -> None:
-        self._slots[(index, image_index)] = ImageSlot(image_path=image_path, label=label)
+    def register(
+        self,
+        index: int,
+        image_index: int,
+        image_path: ImagePath,
+        label: tk.Widget,
+        bounding_box: Tuple[int, int] = THUMBNAIL_SIZE,
+    ) -> None:
+        self._slots[(index, image_index)] = ImageSlot(
+            image_path=image_path, label=label, bounding_box=bounding_box
+        )
 
     def unregister_row(self, index: int) -> None:
         for key in [k for k in self._slots if k[0] == index]:
@@ -171,7 +221,7 @@ class ImageLoader:
 
     def _load_image(self, slot: ImageSlot) -> None:
         try:
-            photo = ImageTk.PhotoImage(load_display_image(slot.image_path))
+            photo = ImageTk.PhotoImage(load_display_image(slot.image_path, slot.bounding_box))
         except Exception:
             logger.warning(
                 "could not load image preview",

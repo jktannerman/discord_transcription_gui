@@ -119,8 +119,9 @@ from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 from .. import logging_config
 from ..review_item import ReviewItem
 from . import theme
+from .column_divider import ColumnDividerMixin
 from .image_context_menu import ImageContextMenuMixin
-from .image_loading import ImageLoader
+from .image_loading import DEFAULT_IMAGE_COLUMN_WIDTH_PX, ImageLoader
 from .keyboard_nav import KeyboardNavMixin
 from .layout_constants import ROW_PACK_PADY_PX
 from .row_building import RowBuildingMixin, measure_text_metrics
@@ -153,7 +154,9 @@ SCROLL_BUFFER_VIEWPORTS = 1
 DEBOUNCE_MS = 80
 
 
-class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk.Frame):
+class ReviewFrame(
+    KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ColumnDividerMixin, ttk.Frame
+):
     def __init__(
         self,
         master: tk.Widget,
@@ -165,6 +168,8 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         initial_scroll_fraction: Optional[float] = None,
         initial_finalized_texts: Optional[List[Dict[str, Optional[str]]]] = None,
         initial_touched_slots: Optional[Iterable[Tuple[int, str]]] = None,
+        initial_image_column_fraction: Optional[float] = None,
+        on_image_column_fraction_changed: Optional[Callable[[float], None]] = None,
     ) -> None:
         super().__init__(master)
         logger.info(
@@ -185,6 +190,15 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         self._html_path = html_path
         self._initial_focus_slot = initial_focus_slot
         self._initial_scroll_fraction = initial_scroll_fraction
+        # The image column's width, and its share of the canvas width (kept
+        # when the window is resized) - see column_divider.py. The width
+        # starts at the default; _apply_initial_position applies the saved
+        # fraction once the canvas has a real width.
+        self._image_column_width_px = DEFAULT_IMAGE_COLUMN_WIDTH_PX
+        self._image_column_fraction: Optional[float] = None
+        if initial_image_column_fraction is not None and 0.0 < initial_image_column_fraction < 1.0:
+            self._image_column_fraction = initial_image_column_fraction
+        self._on_image_column_fraction_changed = on_image_column_fraction_changed
         # Flat, transcript-ordered list of every editable box this item
         # list has, as (item_index, role) pairs - one entry per
         # item.slot_roles (see review_item.ReviewItem), in order: "message" (a
@@ -286,13 +300,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         # row_building.measure_text_metrics) - used both for these
         # estimates and to size every spacer box, so the two agree.
         self._text_metrics = measure_text_metrics(self)
-        max_box_px = self._max_text_box_height_px()
-        self._row_heights: List[int] = [
-            estimate_row_height(
-                item, max_text_box_height_px=max_box_px, metrics=self._text_metrics,
-            )
-            for item in items
-        ]
+        self._row_heights: List[int] = self._estimate_row_heights()
 
         def _on_scrollbar(*args: str) -> None:
             if self._scroll_frozen:
@@ -319,6 +327,7 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
             canvas.itemconfig(self._canvas_window, width=e.width)
             self._log_event("input_canvas_configure", width=e.width, height=e.height)
             self._schedule_reconcile()
+            self._schedule_width_sync()
 
         canvas.bind("<Configure>", _on_canvas_configure)
 
@@ -343,6 +352,9 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
             if self._initial_position_job is not None:
                 self.after_cancel(self._initial_position_job)
                 self._initial_position_job = None
+            if self._resize_job is not None:
+                self.after_cancel(self._resize_job)
+                self._resize_job = None
             # Rows still materialized when the whole frame goes away (screen
             # switch, app close, or - in tests - the root window being torn
             # down) never go through _destroy_row, so any of their pending
@@ -363,6 +375,9 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
                 view.cancel_spellcheck()
 
         self.bind("<Destroy>", _on_destroy)
+
+        # Built before the Finalize button, so the button stays on top of it.
+        self._build_column_divider()
 
         # Floating Finalize button - place()'d (not packed/gridded) so it
         # overlays the canvas rather than claiming a permanent slice of the
@@ -386,6 +401,20 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         self._finalize_button_visible = False
 
         self.after_idle(self._apply_initial_position)
+
+    def _estimate_row_heights(self) -> List[int]:
+        """Pre-build height estimates for every row at the current image
+        column width - see virtualization.estimate_row_height."""
+        max_box_px = self._max_text_box_height_px()
+        return [
+            estimate_row_height(
+                item,
+                max_text_box_height_px=max_box_px,
+                metrics=self._text_metrics,
+                image_column_width_px=self._image_column_width_px,
+            )
+            for item in self._items
+        ]
 
     @staticmethod
     def _initial_slot_states(
@@ -454,6 +483,15 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         if self._canvas.winfo_height() <= 1:
             self._initial_position_job = self.after(20, self._apply_initial_position)
             return
+        width = self._width_for_current_canvas()
+        if self._row_frames:
+            # A debounced reconcile got here first and built rows at the
+            # default width - re-lay them out.
+            self._set_image_column_width(width)
+        elif width != self._image_column_width_px:
+            self._image_column_width_px = width
+            self._row_heights = self._estimate_row_heights()
+        self._position_column_divider()
         if self._initial_focus_slot is not None and self._initial_focus_slot in self._slot_positions:
             index, role = self._initial_focus_slot
             self._ensure_materialized(index)

@@ -163,13 +163,28 @@ What's in scope for v1:
    mid-review leaves a session that can be resumed from the setup screen's
    prompt next launch (see "Setup screen" above).
 
-   Every left column is the same fixed width (so the image/label and
+   Every left column is the same width (so the image/label and
    text-box columns line up neatly across every row), but each image's
    *height* is its own aspect-preserving fit within that width — a wide
    (landscape) image, the common case, ends up much shorter than a tall
    (portrait) one, rather than every image being letterboxed inside a
    single fixed box-shaped slot. Photos carrying an EXIF rotation tag
-   (common from phones) are shown the right way up. The immutable original-text label uses
+   (common from phones) are shown the right way up.
+
+   A thin vertical divider between the two columns sets that width: drag
+   it left or right and, when you let go, every image is refitted to the
+   new width (never enlarged past its own size, and never taller than
+   950px) and the original-text labels rewrap, with the text boxes beside
+   them resizing to match. What you were looking at stays put on screen:
+   the focused text box if it's in view, otherwise the row at the top. The
+   width is kept as a proportion of the window, so it scales when the
+   window is resized, and is remembered per chatlog
+   (`image_column_widths.json` in the data folder). Each column has a
+   minimum width (200px for images, 250px for text). Re-laying out takes
+   roughly half a second, about the same as jumping far through the
+   transcript with the scrollbar.
+
+   The immutable original-text label uses
    the same font/size as the editable boxes (it used to be smaller, before
    every message got an editable copy of its own text) — its background is
    left at the plain default, matching the image column's own background,
@@ -447,6 +462,9 @@ gui_transcription/
       desktop_linux.py     # Linux side of those actions: default browser,
                           # file manager, clipboard (freedesktop standards)
       keyboard_nav.py      # Tab/Page Up-Down/undo keyboard shortcuts
+      column_divider.py    # draggable image/text column divider: drag
+                          # handling, re-layout at the new width, keeping
+                          # the view anchored
       wheel.py             # mouse wheel/touchpad events across platforms
                           # (<MouseWheel> vs X11's <Button-4>/<Button-5>;
                           # horizontal/Shift scrolls ignored)

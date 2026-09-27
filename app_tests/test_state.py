@@ -674,3 +674,36 @@ def test_state_files_are_written_with_a_format_version():
 def test_unversioned_state_files_are_still_read():
     config.RUN_DATE_FILE.write_text(json.dumps(["2024-01-01-00-00-00"]), encoding="utf8")
     assert state.read_last_run_date() == "2024-01-01-00-00-00"
+
+
+# -- image column width (per chatlog) -----------------------------------------
+
+
+def test_image_column_fraction_is_none_when_never_saved():
+    assert state.load_image_column_fraction("chat.html") is None
+
+
+def test_image_column_fraction_round_trips_per_chatlog():
+    state.save_image_column_fraction("chat_a.html", 0.6)
+    state.save_image_column_fraction("chat_b.html", 0.35)
+
+    assert state.load_image_column_fraction("chat_a.html") == 0.6
+    assert state.load_image_column_fraction("chat_b.html") == 0.35
+
+
+def test_image_column_fraction_save_overwrites_only_that_chatlog():
+    state.save_image_column_fraction("chat_a.html", 0.6)
+    state.save_image_column_fraction("chat_b.html", 0.35)
+    state.save_image_column_fraction("chat_a.html", 0.5)
+
+    assert state.load_image_column_fraction("chat_a.html") == 0.5
+    assert state.load_image_column_fraction("chat_b.html") == 0.35
+
+
+@pytest.mark.parametrize("stored", [0, 1, 1.5, -0.2, "0.5", None, True])
+def test_image_column_fraction_ignores_unusable_stored_values(stored):
+    config.IMAGE_COLUMN_WIDTHS_FILE.write_text(
+        json.dumps({"format_version": 1, "data": {state.path_key("chat.html"): stored}}),
+        encoding="utf8",
+    )
+    assert state.load_image_column_fraction("chat.html") is None

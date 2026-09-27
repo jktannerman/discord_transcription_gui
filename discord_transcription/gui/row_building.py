@@ -25,11 +25,13 @@ from typing import Optional, Tuple
 from .. import logging_config, spellcheck
 from ..review_item import ReviewItem
 from . import theme
-from .image_loading import THUMBNAIL_SIZE, fitted_image_size
+from .image_loading import fitted_image_size, image_bounding_box
 from .layout_constants import (
+    COLUMN_PADX_PX,
     GAP_BETWEEN_STACKED_PX,
     ROW_FRAME_BORDERWIDTH_PX,
     ROW_FRAME_PADDING_PX,
+    ROW_PACK_PADX_PX,
     ROW_PACK_PADY_PX,
     TEXT_BOX_MARGIN_PX,
 )
@@ -65,14 +67,19 @@ SPELLCHECK_DEBOUNCE_MS = 300
 SPELLCHECK_TAG = "misspelled"
 
 
-def _make_original_text_label(parent: tk.Widget, text: str) -> ttk.Label:
+def _make_original_text_label(parent: tk.Widget, text: str, wraplength: int) -> ttk.Label:
     """Create (but don't pack) a row's immutable original-text label.
 
     Shared by the real row build and measure_text_metrics, so the label
     that's measured is exactly the one that's built.
+
+    Args:
+        parent: The widget to create it in.
+        text: The label's text.
+        wraplength: Width (px) to wrap at - the image column's width.
     """
     return ttk.Label(
-        parent, text=text, wraplength=THUMBNAIL_SIZE[0], justify="left",
+        parent, text=text, wraplength=wraplength, justify="left",
         font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE),
     )
 
@@ -114,7 +121,7 @@ def measure_text_metrics(parent: tk.Widget) -> TextMetrics:
     )
     line_height = font.metrics("linespace")
 
-    label = _make_original_text_label(parent, "x")
+    label = _make_original_text_label(parent, "x", wraplength=100)
     label_height = label.winfo_reqheight()
     label.destroy()
 
@@ -151,7 +158,7 @@ class RowBuildingMixin:
         it there too, or the pre-build estimate drifts from the real
         layout (see that function's docstring)."""
         item = self._items[index]
-        pack_kwargs = {"fill": "x", "pady": ROW_PACK_PADY_PX, "padx": 4}
+        pack_kwargs = {"fill": "x", "pady": ROW_PACK_PADY_PX, "padx": ROW_PACK_PADX_PX}
         if before is not None:
             pack_kwargs["before"] = before
 
@@ -163,9 +170,9 @@ class RowBuildingMixin:
         self._row_frames[index] = row
 
         left = ttk.Frame(row)
-        left.pack(side="left", padx=6, fill="y")
+        left.pack(side="left", padx=COLUMN_PADX_PX, fill="y")
         right = ttk.Frame(row)
-        right.pack(side="left", fill="x", expand=True, padx=6)
+        right.pack(side="left", fill="x", expand=True, padx=COLUMN_PADX_PX)
 
         # One stacked sub-element per slot role (message/ocrN paired with
         # their left-column counterpart, plus a left-column-less spacer
@@ -239,14 +246,14 @@ class RowBuildingMixin:
         preview = "\n".join(item.entry.text_lines).strip() or "(no text)"
         container = ttk.Frame(parent)
         container.pack(pady=(0, pady_bottom))
-        label = _make_original_text_label(container, preview)
+        label = _make_original_text_label(container, preview, self._image_column_width_px)
         label.pack(anchor="w", fill="x")
         # The label's requested height is known as soon as it's configured,
         # and the unpadded container sizes to exactly that. Don't flush the
         # idle queue to measure the container instead: that repaints the
         # whole review screen mid-reconcile, showing it half-rebuilt.
         floor_px = max(label.winfo_reqheight(), 1)
-        container.configure(width=THUMBNAIL_SIZE[0], height=floor_px)
+        container.configure(width=self._image_column_width_px, height=floor_px)
         container.pack_propagate(False)
         return floor_px
 
@@ -260,7 +267,8 @@ class RowBuildingMixin:
         image's on-screen height in px, used as its paired editable OCR
         box's height floor.
 
-        Width is the global THUMBNAIL_SIZE[0] constant, same for every row,
+        Width is the image column's current width
+        (self._image_column_width_px), the same for every row,
         so images/text boxes still line up into two neat columns - only
         height is sized per image (to its actual aspect-preserving fit
         height, not the full bounding box) since most images here are
@@ -269,13 +277,14 @@ class RowBuildingMixin:
         than left to the real loaded photo's size) so loading/unloading the
         image on scroll doesn't change the row's layout (which would jump
         the scroll position)."""
-        _, image_h = fitted_image_size(image_path)
-        container = ttk.Frame(parent, width=THUMBNAIL_SIZE[0], height=image_h)
+        bounding_box = image_bounding_box(self._image_column_width_px)
+        _, image_h = fitted_image_size(image_path, bounding_box)
+        container = ttk.Frame(parent, width=self._image_column_width_px, height=image_h)
         container.pack_propagate(False)
         container.pack(pady=(0, pady_bottom))
         image_label = ttk.Label(container, text="(scroll to load image)", anchor="center")
         image_label.pack(fill="both", expand=True)
-        self._images.register(index, image_index, image_path, image_label)
+        self._images.register(index, image_index, image_path, image_label, bounding_box)
         self._bind_image_context_menu(image_label, image_path, self._items[index].message_id)
         return image_h
 

@@ -742,6 +742,7 @@ class App:
         if finalized_raw:
             initial_finalized_texts = _match_finalized_edits(self._review_items, finalized_raw)
 
+        html_path = str(self._run.html_path)
         frame = ReviewFrame(
             self.container,
             self._review_items,
@@ -752,10 +753,27 @@ class App:
             initial_scroll_fraction=initial_scroll_fraction,
             initial_finalized_texts=initial_finalized_texts,
             initial_touched_slots=initial_touched_slots,
+            initial_image_column_fraction=state.load_image_column_fraction(html_path),
+            on_image_column_fraction_changed=self._save_image_column_fraction,
         )
         self._set_frame(frame)
         self._review_frame = frame
         self._start_autosave()
+
+    def _save_image_column_fraction(self, fraction: float) -> None:
+        """Remember a dragged image column width for this run's chatlog.
+
+        A failed write is only logged: losing the width is harmless.
+
+        Args:
+            fraction: The image column's share of the review area's width.
+        """
+        if self._run is None:
+            return
+        try:
+            state.save_image_column_fraction(str(self._run.html_path), fraction)
+        except OSError:
+            logger.exception("could not save image column width")
 
     def _on_finalize_clicked(self, edited_texts: list[dict[str, str | None]]) -> None:
         """Confirm, save the session, then append this run to the output file.

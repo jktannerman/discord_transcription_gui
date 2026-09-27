@@ -40,3 +40,35 @@ ROW_FRAME_OVERHEAD_PX = ROW_FRAME_PADDING_PX * 2 + 2
 # silently breaking keyboard_nav.py's scroll-into-view math the more boxes a
 # Tab/Shift-Tab session crossed.
 ROW_PACK_PADY_PX = 4
+
+# Horizontal gap (px) pack() leaves outside a row's own Frame, on its left
+# and right - row_building.RowBuildingMixin._build_row's pack(padx=...).
+ROW_PACK_PADX_PX = 4
+
+# Horizontal padding (px) pack() leaves on each side of a row's image column
+# and text column (_build_row's left/right frames), so the two columns are
+# 2 * COLUMN_PADX_PX apart.
+COLUMN_PADX_PX = 6
+
+# x position (px, from the canvas's left edge) where every row's image column
+# starts: the row's outer pack gap, its Frame's border and padding, then the
+# image column's own left padding.
+IMAGE_COLUMN_LEFT_PX = (
+    ROW_PACK_PADX_PX + ROW_FRAME_BORDERWIDTH_PX + ROW_FRAME_PADDING_PX + COLUMN_PADX_PX
+)
+
+# Horizontal space (px) a row uses besides its two columns' contents: the
+# chrome on both sides of the row plus both columns' padding on both sides.
+ROW_HORIZONTAL_OVERHEAD_PX = (
+    2 * (ROW_PACK_PADX_PX + ROW_FRAME_BORDERWIDTH_PX + ROW_FRAME_PADDING_PX) + 4 * COLUMN_PADX_PX
+)
+
+# Narrowest the image column and the text column can be dragged to (see
+# column_divider.py). If the window is too narrow for both, the image
+# column's minimum wins.
+MIN_IMAGE_COLUMN_WIDTH_PX = 200
+MIN_TEXT_COLUMN_WIDTH_PX = 250
+
+# Width (px) of the draggable divider between the two columns - it sits in
+# the 2 * COLUMN_PADX_PX gap between them.
+COLUMN_DIVIDER_WIDTH_PX = 6
