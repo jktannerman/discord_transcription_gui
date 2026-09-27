@@ -103,15 +103,18 @@ LOG_FILE = APP_DATA_DIR / "app.log"
 # readable on their own, and so this stream can rotate independently without
 # evicting those - see logging_config.setup_logging.
 SCROLL_TRACE_LOG_FILE = APP_DATA_DIR / "scroll_trace.log"
-# Rotation budget for SCROLL_TRACE_LOG_FILE (sized generously - see
-# logging_config.setup_logging), and a switch to turn it off entirely.
+# Rotation budget for SCROLL_TRACE_LOG_FILE (10MB x 3 backups, about 40MB
+# in all - several busy review sessions), and a switch to turn it off
+# entirely.
 SCROLL_TRACE_ENABLED = True
-SCROLL_TRACE_MAX_BYTES = 40_000_000
-SCROLL_TRACE_BACKUP_COUNT = 6
-# Level for LOG_FILE and the console ("DEBUG", "INFO", "WARNING", ...).
-# Overridable for a single launch via the LOG_LEVEL_ENV_VAR environment
-# variable, e.g. DISCORD_TRANSCRIPTION_LOG_LEVEL=INFO.
-LOG_LEVEL = "DEBUG"
+SCROLL_TRACE_MAX_BYTES = 10_000_000
+SCROLL_TRACE_BACKUP_COUNT = 3
+# Level for LOG_FILE ("DEBUG", "INFO", "WARNING", ...). Overridable for a
+# single launch via the LOG_LEVEL_ENV_VAR environment variable, e.g.
+# DISCORD_TRANSCRIPTION_LOG_LEVEL=DEBUG for per-image OCR detail.
+LOG_LEVEL = "INFO"
+# The console only shows problems; everything else is in LOG_FILE.
+CONSOLE_LOG_LEVEL = "WARNING"
 LOG_LEVEL_ENV_VAR = "DISCORD_TRANSCRIPTION_LOG_LEVEL"
 # Held (OS-level file lock) for as long as the app runs, so a second copy
 # can't start and silently overwrite the first one's saved state.

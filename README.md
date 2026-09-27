@@ -550,11 +550,12 @@ other's saved sessions and settings; starting a second one just shows an
 
 The app writes `app.log` and `scroll_trace.log` to its data folder
 (`~/.discord_transcription_gui/`; see `docs/ARCHITECTURE_LOGGING.md`).
-`app.log`'s level is `config.LOG_LEVEL` (DEBUG by default), and can be
+`app.log`'s level is `config.LOG_LEVEL` (INFO by default), and can be
 changed for a single launch with an environment variable, e.g.
-`DISCORD_TRANSCRIPTION_LOG_LEVEL=INFO discord-transcription-gui`. The
-scroll trace's size budget, and a switch to turn it off entirely, are the
-`SCROLL_TRACE_*` settings in `app/config.py`.
+`DISCORD_TRANSCRIPTION_LOG_LEVEL=DEBUG discord-transcription-gui` for
+per-image OCR detail. Only warnings and errors are printed to the terminal.
+The scroll trace's size budget (10MB x 3 backups), and a switch to turn it
+off entirely, are the `SCROLL_TRACE_*` settings in `app/config.py`.
 
 ## Testing
 

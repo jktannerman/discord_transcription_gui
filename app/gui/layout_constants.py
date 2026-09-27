@@ -40,13 +40,3 @@ ROW_FRAME_OVERHEAD_PX = ROW_FRAME_PADDING_PX * 2 + 2
 # silently breaking keyboard_nav.py's scroll-into-view math the more boxes a
 # Tab/Shift-Tab session crossed.
 ROW_PACK_PADY_PX = 4
-
-# Height (px) of a spacer slot's text box - exactly one line of
-# theme.TEXT_FONT_SIZE plus its own internal pady/border chrome, fixed via
-# `height=1` on the real tk.Text widget rather than computed from a paired
-# immutable element's height the way _fixed_text_box_height sizes a
-# "message"/"ocr" box - a spacer box has no left-column counterpart to pair
-# against. Approximate (the real height still comes from Tk once the row is
-# built, same reconciliation every other row already gets) - see
-# row_building.RowBuildingMixin._build_row and virtualization.estimate_row_height.
-SPACER_BOX_HEIGHT_PX = 30

@@ -33,7 +33,9 @@ of images (omitted after the last one); `"spacer_end"` (the gap before the
 next message) always appears, even for an item with no images at all. A
 spacer role has no left-column counterpart - row building puts nothing in
 the left column for it, and it's sized to exactly one Tk text line
-(`SPACER_BOX_HEIGHT_PX`/`height=1`, see
+(the height a `height=1` Text widget requests on this display, measured
+once as `TextMetrics.spacer_box_height_px` - see
+`row_building.measure_text_metrics` and
 `row_building.RowBuildingMixin._build_spacer_text_box`) rather than via
 `_fixed_text_box_height`'s paired-height rule.
 

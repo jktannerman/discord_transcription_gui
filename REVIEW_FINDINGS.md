@@ -331,7 +331,7 @@ How sure each finding is:
 
 ## F. Minor / polish
 
-- [ ] **F1. Logging defaults** - partly done: level is `config.LOG_LEVEL` or the `DISCORD_TRANSCRIPTION_LOG_LEVEL` env var; scroll-trace size/on-off are `config.SCROLL_TRACE_*`. Defaults deliberately unchanged until B1 (now done, so this can go ahead)
+- [x] **F1. Logging defaults** - fixed: level is `config.LOG_LEVEL` (now INFO) or the `DISCORD_TRANSCRIPTION_LOG_LEVEL` env var; the console only shows warnings and errors (`config.CONSOLE_LOG_LEVEL`); scroll trace cut from 40MB x 7 to 10MB x 4 (`config.SCROLL_TRACE_*`)
   Logging is hardcoded to `DEBUG`, and JSON goes to stdout. The scroll-trace
   log can reach 40MB x 7, about 280MB. Make the level configurable and
   shrink the defaults once B1 removes the need for forensic logging.
@@ -358,12 +358,26 @@ How sure each finding is:
 
 ## Suggested order
 
-1. A1: test isolation, and clean the polluted backup file.
-2. A2: make Finalize safe to retry (save first, atomic write, confirmation).
-3. A4 + A9 + E2/E3: only store real edits; decide how unchecked edits should
-   behave.
-4. A3 + B4: build the image list from the chatlog, with an incremental cache.
-5. A5: Linux mouse wheel.
-6. D1: make the suite green on Linux (skip markers).
-7. E1-E5: README and comment fixes.
-8. B1 + B2: snapshot-based undo and a per-slot state object (the big one).
+Everything in A, and B1/B2, is done. What's left, quick wins first:
+
+1. D1: skip the `example_inputs/` test when the file is missing, so the
+   suite is fully green on Linux.
+2. D3: make `pyproject.toml` the only place dependencies are listed.
+3. B3: base row-height estimates on real font metrics, with a font that
+   exists on each platform (`Consolas` isn't on Linux).
+4. E6 + D5 together: trim change-history out of comments and move
+   docstrings to Google style, one module at a time. Needs a decision on
+   how far to go.
+5. D2: CI, coverage, and actually running ruff. Needs a decision on where
+   CI runs.
+6. D4: rename the `app` package and sort out the `.txt` data files (the
+   biggest remaining change; touches every import).
+7. C3: split the state files per chatlog/folder, or move to SQLite. Only
+   worth it if saves start to feel slow.
+
+Needs checking or a decision first, no fixed slot:
+
+- B8: check timestamps against an export that spans a DST change.
+- D6: run the GUI tests on a virtual display (Xvfb) so they stop taking
+  keyboard focus.
+- F6: decide whether the `|` -> `I` correction should stay as it is.

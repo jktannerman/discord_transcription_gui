@@ -6,6 +6,7 @@ from scratch, rather than incremental step-forward/step-backward) matters.
 
 import bisect
 import textwrap
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from ..review_item import ReviewItem
@@ -14,20 +15,42 @@ from .layout_constants import (
     GAP_BETWEEN_STACKED_PX,
     ROW_FRAME_OVERHEAD_PX,
     ROW_PACK_PADY_PX,
-    SPACER_BOX_HEIGHT_PX,
     TEXT_BOX_MARGIN_PX,
 )
 
-# Used to turn a text-only row's character count into an estimated wrapped
-# line count, matching _build_row's wraplength for that row's immutable-
-# original label - THUMBNAIL_SIZE[0], the same fixed column width used for
-# an image row's left column, since text-only rows now use the same
-# two-column layout (immutable original on the left, editable copy on the
-# right) rather than a single full-width label.
+# Wrap width (px) of a row's immutable original-text label - the same fixed
+# left-column width an image row uses (see row_building's label builder).
 _TEXT_ROW_WRAPLENGTH = THUMBNAIL_SIZE[0]
-_TEXT_ROW_CHARS_PER_LINE = _TEXT_ROW_WRAPLENGTH // 7  # ~7px/char at this font size
-_TEXT_ROW_LINE_HEIGHT = 18
-_TEXT_ROW_PADDING = 24
+
+
+@dataclass(frozen=True)
+class TextMetrics:
+    """Pixel sizes of the review screen's text, measured from the real
+    font and widgets on the running display (see
+    row_building.measure_text_metrics) rather than hardcoded, since they
+    vary with the font Tk actually resolves and the display's DPI scaling.
+
+    Attributes:
+        char_width_px: Advance width of one character of the (monospace)
+            text font.
+        line_height_px: Height of one wrapped line in the original-text
+            label.
+        label_padding_px: The label's height beyond its lines' own height.
+        spacer_box_height_px: Height a one-line spacer text box needs,
+            including its internal padding, border and focus highlight.
+    """
+
+    char_width_px: int
+    line_height_px: int
+    label_padding_px: int
+    spacer_box_height_px: int
+
+
+# Fallback for callers with no display to measure against (unit tests):
+# roughly Consolas 14 at 96 DPI.
+DEFAULT_TEXT_METRICS = TextMetrics(
+    char_width_px=10, line_height_px=22, label_padding_px=4, spacer_box_height_px=34,
+)
 
 # An editable box's height is its paired immutable element's own on-screen
 # height (the label's estimate below, for a "message" box; the image's, for
@@ -54,13 +77,18 @@ def wrapped_line_count(text: str, chars_per_line: int) -> int:
     return line_count
 
 
-def _estimate_message_text_height(item: ReviewItem) -> int:
+def _estimate_message_text_height(item: ReviewItem, metrics: TextMetrics) -> int:
     text = item.initial_message_text or "(no text)"
-    line_count = wrapped_line_count(text, _TEXT_ROW_CHARS_PER_LINE)
-    return line_count * _TEXT_ROW_LINE_HEIGHT + _TEXT_ROW_PADDING
+    chars_per_line = max(1, _TEXT_ROW_WRAPLENGTH // max(1, metrics.char_width_px))
+    line_count = wrapped_line_count(text, chars_per_line)
+    return line_count * metrics.line_height_px + metrics.label_padding_px
 
 
-def estimate_row_height(item: ReviewItem, max_text_box_height_px: Optional[int] = None) -> int:
+def estimate_row_height(
+    item: ReviewItem,
+    max_text_box_height_px: Optional[int] = None,
+    metrics: TextMetrics = DEFAULT_TEXT_METRICS,
+) -> int:
     """Cheap, approximate height (px) for an item's row before it's ever
     been built as real widgets - good enough for scrollbar proportion and
     decoding which rows are near the viewport, not for actual layout. Once
@@ -92,7 +120,7 @@ def estimate_row_height(item: ReviewItem, max_text_box_height_px: Optional[int] 
     element but the last gets GAP_BETWEEN_STACKED_PX added to whichever
     column total includes it, same as the real layout. A spacer role has
     no left-column counterpart at all (only the right column gets
-    SPACER_BOX_HEIGHT_PX), unlike a content role whose right-column box is
+    metrics.spacer_box_height_px), unlike a content role whose right-column box is
     always its left counterpart plus TEXT_BOX_MARGIN_PX - the max() is kept
     anyway so this stays correct regardless of how those two compare for
     any given item.
@@ -110,7 +138,11 @@ def estimate_row_height(item: ReviewItem, max_text_box_height_px: Optional[int] 
     not a one-off glitch, since a never-built row (skipped by a far
     Tab/resume-focus jump or a scrollbar drag) keeps that overestimate
     baked into every later row's document-space offset until it's actually
-    built and remeasured."""
+    built and remeasured.
+
+    `metrics` is the text font's measured pixel sizes (TextMetrics) -
+    ReviewFrame passes ones measured on the running display; the default
+    is only a rough stand-in for display-free unit tests."""
     roles = item.slot_roles
     left = 0
     right = 0
@@ -118,7 +150,7 @@ def estimate_row_height(item: ReviewItem, max_text_box_height_px: Optional[int] 
         gap = GAP_BETWEEN_STACKED_PX if position < len(roles) - 1 else 0
 
         if role == "message":
-            label_h = _estimate_message_text_height(item)
+            label_h = _estimate_message_text_height(item, metrics)
             box_h = label_h + TEXT_BOX_MARGIN_PX
             if max_text_box_height_px is not None:
                 box_h = min(box_h, max_text_box_height_px)
@@ -133,7 +165,7 @@ def estimate_row_height(item: ReviewItem, max_text_box_height_px: Optional[int] 
             left += image_h + gap
             right += box_h + gap
         else:
-            right += SPACER_BOX_HEIGHT_PX + gap
+            right += metrics.spacer_box_height_px + gap
 
     return max(left, right) + ROW_FRAME_OVERHEAD_PX + 2 * ROW_PACK_PADY_PX
 

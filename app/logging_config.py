@@ -1,8 +1,9 @@
 """Centralized logging setup.
 
 Logs are emitted as single-line JSON (per CLAUDE.md's logging convention) to
-both a rotating file under ``config.APP_DATA_DIR`` and the console, so a run
-can be replayed/grepped afterwards without re-running the GUI.
+a rotating file under ``config.APP_DATA_DIR``, so a run can be replayed/
+grepped afterwards without re-running the GUI. Warnings and errors also go
+to the console.
 """
 
 import hashlib
@@ -79,6 +80,7 @@ def setup_logging(level: int = logging.INFO) -> None:
 
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
+    console_handler.setLevel(config.CONSOLE_LOG_LEVEL)
 
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(level)
@@ -92,14 +94,8 @@ def setup_logging(level: int = logging.INFO) -> None:
     # lifecycle events. Not attached to the console handler: this volume of
     # output would drown out everything else printed there.
     #
-    # maxBytes/backupCount sized generously (rather than just "big enough for
-    # a typical session") specifically so that debugging a rare, hard-to-
-    # reproduce bug isn't also a race against this file rotating the
-    # relevant window away before anyone thinks to look - a single busy
-    # review session can log deep into six figures of trace events, and
-    # 10MB x 3 backups worked out to only a session or two of headroom in
-    # practice. The budget and an on/off
-    # switch live in config (SCROLL_TRACE_*).
+    # The rotation budget and an on/off switch live in config
+    # (SCROLL_TRACE_*).
     trace_logger = logging.getLogger(TRACE_LOGGER_NAME)
     trace_logger.propagate = False
     if not config.SCROLL_TRACE_ENABLED:
@@ -117,16 +113,16 @@ def setup_logging(level: int = logging.INFO) -> None:
 
 
 def resolve_log_level() -> int:
-    """The level setup_logging should use for LOG_FILE and the console.
+    """The level setup_logging should use for LOG_FILE.
 
     Returns:
         The level named by the config.LOG_LEVEL_ENV_VAR environment
         variable if set, else config.LOG_LEVEL. An unrecognised name falls
-        back to DEBUG rather than stopping the app from starting.
+        back to INFO rather than stopping the app from starting.
     """
     name = (os.environ.get(config.LOG_LEVEL_ENV_VAR) or config.LOG_LEVEL).strip().upper()
     level = logging.getLevelName(name)
-    return level if isinstance(level, int) else logging.DEBUG
+    return level if isinstance(level, int) else logging.INFO
 
 
 def get_trace_logger() -> logging.Logger:

@@ -78,6 +78,20 @@ plus the scroll/debounce/Finalize-button machinery:
   is now built *after* `self._canvas` exists, not before, so that call's own
   not-yet-laid-out/`winfo_screenheight()` fallback applies the same way it
   would for any other premature call to it.
+- **Text sizes are measured, not hardcoded.** How big the text font really
+  draws depends on which font Tk resolves (Consolas is substituted on most
+  Linux systems) and on the display's DPI scaling, so fixed pixel values
+  can be off by 2x or more. `ReviewFrame.__init__` calls
+  `row_building.measure_text_metrics` once, which reads the font's
+  character width and line height and the requested heights of a
+  throwaway original-text label and spacer box, built by the same helpers
+  (`_make_original_text_label`, `_make_spacer_text_widget`) the real rows
+  use. The resulting `TextMetrics` feeds `estimate_row_height` and sets
+  every spacer box's fixed height, so a spacer box can't clip its own text
+  (it did while that height was a hardcoded 30px). Measure with
+  `tkfont.Font(family=..., size=...)`, not `tkfont.Font(font=(family,
+  size))`: the latter over-scales on some displays and reports a larger font
+  than the widgets draw.
   `test_jumping_focus_past_a_capped_long_message_row_lands_target_fully_in_view`
   (`app_tests/test_review_view.py`) is the regression test - it puts one
   long, capped-height row outside the window built at startup and jumps

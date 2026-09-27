@@ -78,7 +78,7 @@ def test_extra_wraps_fields_under_extra_fields_key():
         (None, "DEBUG", logging.DEBUG),
         (None, "info", logging.INFO),
         ("WARNING", "DEBUG", logging.WARNING),
-        ("not-a-level", "INFO", logging.DEBUG),
+        ("not-a-level", "DEBUG", logging.INFO),
     ],
 )
 def test_resolve_log_level(monkeypatch, env_value, config_value, expected):

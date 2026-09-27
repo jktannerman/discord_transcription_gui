@@ -20,6 +20,7 @@ from PIL import Image
 from gui_transcription.app.chatlog import MessageEntry
 from gui_transcription.app.gui.layout_constants import ROW_PACK_PADY_PX
 from gui_transcription.app.gui.review_view import ReviewFrame
+from gui_transcription.app.gui.virtualization import estimate_row_height
 from gui_transcription.app.review_item import ReviewItem, build_review_items
 
 # Unlike the other GUI-backed test files, this one can't withdraw() its
@@ -638,6 +639,35 @@ def test_spacer_slot_boxes_are_one_line_tall_and_hold_their_own_text(root, sampl
     end_widget = frame._slot_views[(0, "spacer_end")].text_widget
     assert int(end_widget.cget("height")) == 1
     assert end_widget.get("1.0", "end-1c") == "\\n\\n\\n\\n"
+
+
+def test_spacer_box_is_tall_enough_for_its_text_line(root, sample_image):
+    """Regression test: the spacer box's fixed-height container used to be
+    a hardcoded 30px, shorter than a one-line Text widget needs at the
+    app's font size on a scaled display, clipping the bottom of its text.
+    Its height now comes from measuring that widget."""
+    items = _items(sample_image, count=3)
+    frame, _ = _build_frame(root, items)
+
+    view = frame._slot_views[(0, "spacer_end")]
+    assert view.container.winfo_height() >= view.text_widget.winfo_reqheight()
+
+
+def test_text_only_row_estimate_matches_its_built_height(root, sample_image):
+    """With text sizes measured from the real font (measure_text_metrics),
+    a short text-only row's pre-build estimate should match its real,
+    built height - the scroll correction after building has nothing left
+    to correct."""
+    items = _items(sample_image, count=3)
+    frame, _ = _build_frame(root, items)
+
+    estimate = estimate_row_height(
+        items[0],
+        max_text_box_height_px=frame._max_text_box_height_px(),
+        metrics=frame._text_metrics,
+    )
+    real = frame._row_frames[0].winfo_height() + 2 * ROW_PACK_PADY_PX
+    assert abs(estimate - real) <= 2
 
 
 def test_resuming_session_restores_saved_edit_and_focus(root, sample_image):

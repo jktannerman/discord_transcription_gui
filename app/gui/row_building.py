@@ -17,6 +17,7 @@ image_loading.py and keyboard_nav.py already do.
 """
 
 import tkinter as tk
+import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import ttk
 from typing import Optional, Tuple
@@ -30,10 +31,10 @@ from .layout_constants import (
     ROW_FRAME_BORDERWIDTH_PX,
     ROW_FRAME_PADDING_PX,
     ROW_PACK_PADY_PX,
-    SPACER_BOX_HEIGHT_PX,
     TEXT_BOX_MARGIN_PX,
 )
 from .slot_view import SlotView
+from .virtualization import TextMetrics
 from .wheel import WHEEL_EVENT_SEQUENCES
 
 logger = logging_config.get_logger(__name__)
@@ -62,6 +63,71 @@ SPELLCHECK_DEBOUNCE_MS = 300
 # RowBuildingMixin._run_spellcheck) - never applied to a spacer box, only to
 # "message"/"ocr{N}" content boxes.
 SPELLCHECK_TAG = "misspelled"
+
+
+def _make_original_text_label(parent: tk.Widget, text: str) -> ttk.Label:
+    """Create (but don't pack) a row's immutable original-text label.
+
+    Shared by the real row build and measure_text_metrics, so the label
+    that's measured is exactly the one that's built.
+    """
+    return ttk.Label(
+        parent, text=text, wraplength=THUMBNAIL_SIZE[0], justify="left",
+        font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE),
+    )
+
+
+def _make_spacer_text_widget(parent: tk.Widget) -> tk.Text:
+    """Create (but don't pack) a spacer slot's one-line text box.
+
+    Shared by the real row build and measure_text_metrics, so the box
+    that's measured is exactly the one that's built.
+    """
+    return tk.Text(
+        parent, height=1, wrap="none", relief="flat", undo=False,
+        **theme.dark_text_kwargs(),
+        padx=TEXT_BOX_INNER_PADX, pady=4,
+    )
+
+
+def measure_text_metrics(parent: tk.Widget) -> TextMetrics:
+    """Measure the review screen's text sizes on the running display.
+
+    Builds a throwaway original-text label and spacer box (never packed or
+    shown) and reads their requested heights, plus the text font's own
+    metrics. These depend on which font Tk actually resolves (Consolas
+    isn't installed on most Linux systems, so a substitute is used) and on
+    the display's DPI scaling, so hardcoded pixel values can't match them.
+
+    Args:
+        parent: Any widget on the review screen's display.
+
+    Returns:
+        The measured sizes, for virtualization.estimate_row_height and the
+        spacer box's fixed height.
+    """
+    # Built from family/size rather than tkfont.Font(font=(family, size)):
+    # the latter double-applies the display's scaling on some systems and
+    # reports a font larger than the one the widgets actually draw with.
+    font = tkfont.Font(
+        root=parent, family=theme.TEXT_FONT_FAMILY, size=theme.TEXT_FONT_SIZE,
+    )
+    line_height = font.metrics("linespace")
+
+    label = _make_original_text_label(parent, "x")
+    label_height = label.winfo_reqheight()
+    label.destroy()
+
+    spacer = _make_spacer_text_widget(parent)
+    spacer_height = spacer.winfo_reqheight()
+    spacer.destroy()
+
+    return TextMetrics(
+        char_width_px=max(1, font.measure("0")),
+        line_height_px=max(1, line_height),
+        label_padding_px=max(0, label_height - line_height),
+        spacer_box_height_px=max(1, spacer_height),
+    )
 
 
 class RowBuildingMixin:
@@ -173,10 +239,7 @@ class RowBuildingMixin:
         preview = "\n".join(item.entry.text_lines).strip() or "(no text)"
         container = ttk.Frame(parent)
         container.pack(pady=(0, pady_bottom))
-        label = ttk.Label(
-            container, text=preview, wraplength=THUMBNAIL_SIZE[0], justify="left",
-            font=(theme.TEXT_FONT_FAMILY, theme.TEXT_FONT_SIZE),
-        )
+        label = _make_original_text_label(container, preview)
         label.pack(anchor="w", fill="x")
         # The label's requested height is known as soon as it's configured,
         # and the unpadded container sizes to exactly that. Don't flush the
@@ -365,8 +428,9 @@ class RowBuildingMixin:
         "spacer_end" (the gap before the next message) - see
         review_item.ReviewItem.slot_roles. Unlike _build_editable_text_box,
         there is no left-column counterpart to pair against: the box is fixed at
-        exactly one Tk text line tall (SPACER_BOX_HEIGHT_PX, via `height=1`
-        on the real Text widget) regardless of content, with no internal
+        exactly one Tk text line tall (the measured
+        TextMetrics.spacer_box_height_px, what a `height=1` Text widget
+        requests on this display) regardless of content, with no internal
         scrollbar - it's meant to hold only a handful of literal "\\n"
         tokens, not wrapped prose. Registered in the same (index, role)-keyed
         bookkeeping dicts as a content box, so it's just as reachable by
@@ -374,15 +438,11 @@ class RowBuildingMixin:
         persistence."""
         key = (index, role)
         self._reclaim_widget_if_present(key)
-        text_container = ttk.Frame(parent, height=SPACER_BOX_HEIGHT_PX)
+        text_container = ttk.Frame(parent, height=self._text_metrics.spacer_box_height_px)
         text_container.pack(side="top", fill="x", pady=(0, pady_bottom))
         text_container.pack_propagate(False)
 
-        text_widget = tk.Text(
-            text_container, height=1, wrap="none", relief="flat", undo=False,
-            **theme.dark_text_kwargs(),
-            padx=TEXT_BOX_INNER_PADX, pady=4,
-        )
+        text_widget = _make_spacer_text_widget(text_container)
         text_widget.pack(side="left", fill="both", expand=True)
 
         self._populate_text_box(key, text_widget)

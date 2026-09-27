@@ -5,10 +5,11 @@ from gui_transcription.app.gui.layout_constants import (
     GAP_BETWEEN_STACKED_PX,
     ROW_FRAME_OVERHEAD_PX,
     ROW_PACK_PADY_PX,
-    SPACER_BOX_HEIGHT_PX,
     TEXT_BOX_MARGIN_PX,
 )
 from gui_transcription.app.gui.virtualization import (
+    DEFAULT_TEXT_METRICS,
+    TextMetrics,
     _estimate_message_text_height,
     compute_visible_range,
     estimate_row_height,
@@ -73,17 +74,46 @@ def test_estimate_row_height_two_images_taller_than_one():
 
 def test_estimate_row_height_text_only_includes_spacer_end_height():
     # A text-only item's slot_roles is ["message", "spacer_end"] - the
-    # spacer contributes SPACER_BOX_HEIGHT_PX to the right column only
-    # (it has no left-column counterpart at all).
+    # spacer contributes the measured spacer box height to the right column
+    # only (it has no left-column counterpart at all).
     item = ReviewItem(
         entry=MessageEntry(message_id="m", text_lines=["hi"], image_names=[]),
         image_paths=[], initial_message_text="hi", initial_ocr_texts=[],
     )
-    label_h = _estimate_message_text_height(item)
+    metrics = DEFAULT_TEXT_METRICS
+    label_h = _estimate_message_text_height(item, metrics)
     expected_left = label_h + GAP_BETWEEN_STACKED_PX
-    expected_right = label_h + TEXT_BOX_MARGIN_PX + GAP_BETWEEN_STACKED_PX + SPACER_BOX_HEIGHT_PX
+    expected_right = (
+        label_h + TEXT_BOX_MARGIN_PX + GAP_BETWEEN_STACKED_PX + metrics.spacer_box_height_px
+    )
     expected = max(expected_left, expected_right) + ROW_FRAME_OVERHEAD_PX + 2 * ROW_PACK_PADY_PX
-    assert estimate_row_height(item) == expected
+    assert estimate_row_height(item, metrics=metrics) == expected
+
+
+def _text_item(text: str) -> ReviewItem:
+    return ReviewItem(
+        entry=MessageEntry(message_id="m", text_lines=[text], image_names=[]),
+        image_paths=[], initial_message_text=text, initial_ocr_texts=[],
+    )
+
+
+def test_estimate_message_text_height_uses_measured_metrics():
+    # 760px wrap width / 20px chars = 38 chars per line; 100 chars of
+    # unbroken text wraps to 3 lines of 30px, plus 5px label padding.
+    metrics = TextMetrics(
+        char_width_px=20, line_height_px=30, label_padding_px=5, spacer_box_height_px=40,
+    )
+    assert _estimate_message_text_height(_text_item("x" * 100), metrics) == 3 * 30 + 5
+
+
+def test_estimate_row_height_grows_with_larger_measured_font():
+    # The same text is taller in a bigger font: fewer characters fit on a
+    # line, and each line is taller.
+    text = "word " * 100
+    small = TextMetrics(char_width_px=7, line_height_px=18, label_padding_px=4, spacer_box_height_px=30)
+    large = TextMetrics(char_width_px=14, line_height_px=28, label_padding_px=4, spacer_box_height_px=40)
+    item = _text_item(text)
+    assert estimate_row_height(item, metrics=large) > estimate_row_height(item, metrics=small)
 
 
 def test_compute_visible_range_empty_list_returns_empty_range():

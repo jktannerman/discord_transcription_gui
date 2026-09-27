@@ -123,7 +123,7 @@ from .image_context_menu import ImageContextMenuMixin
 from .image_loading import ImageLoader
 from .keyboard_nav import KeyboardNavMixin
 from .layout_constants import ROW_PACK_PADY_PX
-from .row_building import RowBuildingMixin
+from .row_building import RowBuildingMixin, measure_text_metrics
 from .slot_state import SlotState
 from .slot_view import SlotView
 from .virtualization import compute_visible_range, estimate_row_height
@@ -282,8 +282,15 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         # not-yet-laid-out call. Without this cap, a long message/OCR text's
         # estimated row height ran far past what its real, capped box would
         # ever be - see estimate_row_height's docstring.
+        # Measured from the real font/widgets on this display (see
+        # row_building.measure_text_metrics) - used both for these
+        # estimates and to size every spacer box, so the two agree.
+        self._text_metrics = measure_text_metrics(self)
+        max_box_px = self._max_text_box_height_px()
         self._row_heights: List[int] = [
-            estimate_row_height(item, max_text_box_height_px=self._max_text_box_height_px())
+            estimate_row_height(
+                item, max_text_box_height_px=max_box_px, metrics=self._text_metrics,
+            )
             for item in items
         ]
 
