@@ -37,6 +37,10 @@ class _MenuActionStub(ImageContextMenuMixin):
     pass
 
 
+# These exercise code that only works on Windows: the real winreg module,
+# or actions that deliberately raise NotImplementedError elsewhere.
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows-only action")
+
 def test_run_image_menu_action_logs_success_when_func_does_not_raise():
     stub = _MenuActionStub()
     calls = []
@@ -85,6 +89,7 @@ def _mock_winreg_returning(prog_id_result, command_result):
     return mock_open_key, _query_value_ex
 
 
+@windows_only
 def test_default_browser_command_reads_userchoice_then_progid_command():
     mock_open_key, query_value_ex = _mock_winreg_returning(
         "FirefoxURL-308046B0AF4A39CB", r'"C:\Firefox\firefox.exe" -osint -url "%1"'
@@ -102,6 +107,7 @@ def test_default_browser_command_reads_userchoice_then_progid_command():
     assert opened_paths[1] == r"FirefoxURL-308046B0AF4A39CB\shell\open\command"
 
 
+@windows_only
 def test_default_browser_command_returns_none_when_userchoice_is_unset():
     mock_open_key, query_value_ex = _mock_winreg_returning(FileNotFoundError(), "unused")
     with (
@@ -111,6 +117,7 @@ def test_default_browser_command_returns_none_when_userchoice_is_unset():
         assert _default_browser_command() is None
 
 
+@windows_only
 def test_default_browser_command_returns_none_for_a_stale_progid():
     # e.g. the registered browser was since uninstalled - UserChoice still
     # names it, but its own ProgId key no longer exists.
@@ -173,6 +180,7 @@ def test_open_image_in_browser_raises_when_default_browser_cannot_be_determined(
             stub._open_image_in_browser(image_path)
 
 
+@windows_only
 def test_open_image_location_selects_the_file_in_explorer(tmp_path):
     stub = _MenuActionStub()
     image_path = tmp_path / "shot.png"
@@ -221,6 +229,7 @@ def test_open_chatlog_at_message_raises_when_default_browser_cannot_be_determine
             stub._open_chatlog_at_message("1519374940359360783")
 
 
+@windows_only
 def test_copy_image_to_clipboard_writes_cf_dib_via_win32clipboard(tmp_path):
     stub = _MenuActionStub()
     image_path = tmp_path / "shot.png"
@@ -240,6 +249,7 @@ def test_copy_image_to_clipboard_writes_cf_dib_via_win32clipboard(tmp_path):
     mock_win32clipboard.CloseClipboard.assert_called_once()
 
 
+@windows_only
 def test_copy_image_to_clipboard_closes_clipboard_even_if_set_data_fails(tmp_path):
     stub = _MenuActionStub()
     image_path = tmp_path / "shot.png"

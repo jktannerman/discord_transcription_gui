@@ -505,9 +505,12 @@ class ReviewFrame(KeyboardNavMixin, RowBuildingMixin, ImageContextMenuMixin, ttk
         if self._scroll_frozen:
             return "break"
         delta = wheel_delta(event)
+        self._log_event(
+            "input_mousewheel", delta=delta, num=event.num, state=event.state,
+            widget=str(event.widget),
+        )
         if not delta:
             return "break"
-        self._log_event("input_mousewheel", delta=delta, widget=str(event.widget))
         if isinstance(event.widget, tk.Text) and self._scroll_text_widget(event.widget, delta):
             return "break"
         # At least one unit: macOS reports small deltas that would round to 0.

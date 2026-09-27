@@ -68,7 +68,7 @@ How sure each finding is:
   *Fix:* only report or save a value when it differs from the default, or
   when the box really was edited.
 
-- [x] **A5. Mouse wheel over the review canvas probably does nothing on Linux** [confirmed by user] - fixed: one handler for `<MouseWheel>` and `<Button-4>`/`<Button-5>` (`app/gui/wheel.py`), also bound on each text box so Tk's own Text wheel scrolling doesn't also run
+- [x] **A5. Mouse wheel over the review canvas probably does nothing on Linux** [confirmed by user] - fixed: one handler for `<MouseWheel>` and `<Button-4>`/`<Button-5>` (`app/gui/wheel.py`), also bound on each text box so Tk's own Text wheel scrolling doesn't also run. Follow-up: Shift+Button-4/5 (how Tk 8.6 on X11 delivers horizontal scroll, e.g. touchpad sideways drift) was being treated as vertical, cancelling out downward scrolling; now ignored, and the trace logs each event's raw `num`/`state`
   `review_view.py` only binds `<MouseWheel>`. Tk 8.6 on X11 (the installed
   version is 8.6) sends `<Button-4>`/`<Button-5>` for the wheel; the two were
   only unified in Tk 8.7. So the wheel probably only scrolls inside
@@ -228,7 +228,7 @@ How sure each finding is:
 
 ## D. Tests / tooling / packaging
 
-- [ ] **D1. The suite is never green on Linux**
+- [ ] **D1. The suite is never green on Linux** - partly done: the 6 Windows-only tests are skipped off Windows; the `example_inputs/` test still fails when the file is missing (the A1 state failures were already fixed)
   - 213 pass, 9 fail.
   - 6 of the failures are Windows-only tests in `test_image_context_menu.py`,
     which should have `skipif(sys.platform != "win32")`.
