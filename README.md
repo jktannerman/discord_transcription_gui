@@ -454,7 +454,7 @@ gui_transcription/
                           # grouping (in-memory only)
       theme.py             # dark theme colors/fonts + ttk Style setup
   app_tests/              # pytest unit tests for all the non-GUI logic
-  requirements.txt
+  pyproject.toml          # dependencies (the only list of them), entry point, pytest/ruff config
   original_transcription_program/   # the original CLI script, kept as reference
   docs/
     original_transcription_notes.md   # analysis + decisions behind this rewrite
@@ -508,13 +508,13 @@ files inside pipx's environment, so edits in the repo wouldn't reach it.
 Don't `pip install` it into the system Python: most current distros mark it
 as externally managed (PEP 668).
 
-To run it without installing, use a virtual environment inside
-`gui_transcription/`:
+To run it from a virtual environment inside `gui_transcription/` instead
+of pipx (dependencies are listed only in `pyproject.toml`):
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install -e .
 python -m discord_transcription.main
 ```
 
@@ -533,12 +533,8 @@ Then, from any directory:
 discord-transcription-gui
 ```
 
-Without installing, it can also be run directly from inside `gui_transcription/`:
-
-```powershell
-py -3 -m pip install -r requirements.txt
-py -3 -m discord_transcription.main
-```
+Or run it directly from inside `gui_transcription/` with
+`py -3 -m discord_transcription.main`.
 
 Only one copy of the app can run at a time (it holds a lock on
 `app.lock` in its data folder), since two copies would overwrite each
@@ -561,8 +557,8 @@ off entirely, are the `SCROLL_TRACE_*` settings in `discord_transcription/config
 Run the tests from inside `gui_transcription/` (running them from the folder
 above also works). `pyproject.toml` puts `gui_transcription/` on the path,
 so the tests import the package as `discord_transcription`, the same name
-the installed app uses. Use whichever Python environment has the requirements plus the `dev` extras
-(`pytest`, `ruff`) installed, e.g. `python -m pip install -e ".[dev]"` in
+the installed app uses. Use whichever Python environment has the app's dependencies plus the `dev`
+extras (`pytest`, `ruff`) installed, e.g. `python -m pip install -e ".[dev]"` in
 the `.venv` above. pipx's app environment doesn't include them; to use it
 anyway, run pytest from a Python that has it, with the app environment's
 site-packages on `PYTHONPATH`.

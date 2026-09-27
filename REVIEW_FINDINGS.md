@@ -242,7 +242,7 @@ How sure each finding is:
   reports style drift (`List` mixed with `list`, `Optional` mixed with `|`),
   plus a few unused variables in the tests.
 
-- [ ] **D3. Dependencies are pinned in two places**
+- [x] **D3. Dependencies are pinned in two places** - fixed: `requirements.txt` removed (it matched `pyproject.toml` exactly); README install steps use `pip install -e .`
   `requirements.txt` repeats `pyproject.toml` and can drift from it. Keep
   `pyproject.toml` as the single source, with a `[project.optional-dependencies] dev`
   group.
@@ -362,13 +362,12 @@ Everything in A, and B1/B2/B3, is done. What's left, quick wins first:
 
 1. D1: skip the `example_inputs/` test when the file is missing, so the
    suite is fully green on Linux.
-2. D3: make `pyproject.toml` the only place dependencies are listed.
-3. E6 + D5 together: trim change-history out of comments and move
+2. E6 + D5 together: trim change-history out of comments and move
    docstrings to Google style, one module at a time. Needs a decision on
    how far to go.
-4. D2: CI, coverage, and actually running ruff. Needs a decision on where
+3. D2: CI, coverage, and actually running ruff. Needs a decision on where
    CI runs.
-5. C3: split the state files per chatlog/folder, or move to SQLite. Only
+4. C3: split the state files per chatlog/folder, or move to SQLite. Only
    worth it if saves start to feel slow.
 
 Needs checking or a decision first, no fixed slot:

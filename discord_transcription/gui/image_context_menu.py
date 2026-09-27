@@ -233,7 +233,7 @@ class ImageContextMenuMixin:
                 image.save(buffer, "PNG")
             desktop_linux.copy_png_to_clipboard(buffer.getvalue())
             return
-        # Local import: win32clipboard is Windows-only (see requirements.txt)
+        # Local import: win32clipboard is Windows-only (see pyproject.toml)
         # and this is the only place in the app that needs it.
         import win32clipboard
 
